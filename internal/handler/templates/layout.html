@@ -1,0 +1,37 @@
+{{/*
+  The default templates are deliberately plain and unstyled: they are meant to
+  be readable, correct, and replaced. Point TEMPLATE_DIR at a directory with a
+  file of the same name to override any of them without forking.
+*/}}
+
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — {{.StoreName}}</title>
+</head>
+<body>
+<header>
+  <strong>{{.StoreName}}</strong>
+  <nav><a href="/admin/products">Products</a></nav>
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{/*
+  adminnav is included by the pages behind RequireAdmin, not by "head", so the
+  login page does not offer to sign out of a session it does not have.
+*/}}
+{{define "adminnav"}}
+<form method="post" action="/admin/logout"><button type="submit">Sign out</button></form>
+{{end}}
+
+{{/* err renders the message for one field, if the form recorded one. */}}
+{{define "err"}}{{with .}}<p><small><strong>{{.}}</strong></small></p>{{end}}{{end}}

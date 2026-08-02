@@ -1,0 +1,481 @@
+package handler
+
+import (
+	"bytes"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/catalog"
+	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/gostore/internal/middleware"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// testPassword is the admin password every test in this package signs in with.
+const testPassword = "correct horse battery staple"
+
+// testHash is bcrypt at its cheapest: these tests assert on authentication
+// behaviour, not on how expensive the hash is, and the production cost would add
+// a quarter of a second to every sign-in here.
+var testHash = sync.OnceValue(func() string {
+	h, err := auth.HashPassword(testPassword, bcrypt.MinCost)
+	if err != nil {
+		panic(err)
+	}
+	return h
+})
+
+func testConfig() config.Config {
+	return config.Config{
+		StoreName:         "Test Store",
+		Currency:          "ZAR",
+		AdminPasswordHash: testHash(),
+		SessionSecret:     bytes.Repeat([]byte("s"), auth.MinSecretLen),
+		SessionTTL:        time.Hour,
+	}
+}
+
+// newServer returns the admin routes, protected exactly as main.go protects
+// them, with a cookie jar but no session yet.
+func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
+	t.Helper()
+
+	pool := dbtest.Pool(t)
+	store := catalog.NewStore(pool)
+
+	tmpl, err := ParseTemplates("")
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+	cfg := testConfig()
+	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store)
+
+	mux := http.NewServeMux()
+	h.RegisterAdmin(mux, middleware.RequireAdmin(cfg.SessionSecret, slog.New(slog.DiscardHandler)))
+
+	srv := httptest.NewServer(mux)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	srv.Client().Jar = jar
+	// Redirects are the assertion in several tests, so they must not be
+	// followed away.
+	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	t.Cleanup(srv.Close)
+	return srv, store
+}
+
+// setup returns a signed-in server for the admin routes plus the catalog store
+// behind it, so a test can assert on both the response and what actually landed
+// in the database.
+func setup(t *testing.T) (*httptest.Server, *catalog.Store) {
+	t.Helper()
+
+	srv, store := newServer(t)
+	signIn(t, srv)
+	return srv, store
+}
+
+func signIn(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+
+	res, body := post(t, srv, "/admin/login", url.Values{"password": {testPassword}})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("sign in = %d %s", res.StatusCode, body)
+	}
+	if len(res.Cookies()) == 0 {
+		t.Fatal("sign in set no cookie")
+	}
+}
+
+func TestAdmin_RedirectsToProducts(t *testing.T) {
+	srv, _ := setup(t)
+
+	res, body := get(t, srv, "/admin/")
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("GET /admin/ = %d %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get("Location"); got != "/admin/products" {
+		t.Errorf("Location = %q", got)
+	}
+}
+
+func TestAdminProducts_ListsProductsAndStock(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	res, body := get(t, srv, "/admin/products")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin/products = %d", res.StatusCode)
+	}
+	if !strings.Contains(body, "No products yet") {
+		t.Error("an empty catalog does not say so")
+	}
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Sample Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, v := range []catalog.Variant{
+		{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 4, Active: true},
+		{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 3, Active: true},
+	} {
+		if _, err := store.CreateVariant(ctx, v); err != nil {
+			t.Fatalf("CreateVariant: %v", err)
+		}
+	}
+
+	_, body = get(t, srv, "/admin/products")
+	for _, want := range []string{"Sample Tee", "apparel", "tee", ">7<", "/admin/products/" + p.ID + "/edit"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the list is missing %q", want)
+		}
+	}
+}
+
+func TestAdminProducts_CreateDerivesSlugAndRedirectsToEdit(t *testing.T) {
+	srv, store := setup(t)
+
+	res, body := post(t, srv, "/admin/products", url.Values{
+		"title":       {"The Quiet Machine"},
+		"kind":        {"book"},
+		"description": {"A demo book."},
+		"active":      {"1"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST /admin/products = %d %s", res.StatusCode, body)
+	}
+
+	p, err := store.GetBySlug(t.Context(), "the-quiet-machine")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	if !p.Active || p.Kind != "book" {
+		t.Errorf("stored product is %+v", p)
+	}
+	// Straight to the edit page, because a product with no variants cannot be
+	// bought yet.
+	if got, want := res.Header.Get("Location"), "/admin/products/"+p.ID+"/edit"; got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestAdminProducts_RejectsInvalidFormWithoutWriting(t *testing.T) {
+	srv, store := setup(t)
+
+	res, body := post(t, srv, "/admin/products", url.Values{
+		"title": {""},
+		"kind":  {"book"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("POST with no title = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Required.") {
+		t.Error("the re-rendered form does not show the error")
+	}
+
+	products, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(products) != 0 {
+		t.Errorf("%d products were written by a rejected form", len(products))
+	}
+}
+
+func TestAdminProducts_DuplicateSlugIsAFieldError(t *testing.T) {
+	srv, store := setup(t)
+
+	form := url.Values{"title": {"A Book"}, "slug": {"a-book"}, "kind": {"book"}, "active": {"1"}}
+	if res, body := post(t, srv, "/admin/products", form); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("first create = %d %s", res.StatusCode, body)
+	}
+
+	res, body := post(t, srv, "/admin/products", form)
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("second create = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Already used by another product.") {
+		t.Error("the duplicate slug is not reported on the form")
+	}
+
+	products, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(products) != 1 {
+		t.Errorf("%d products exist, want 1", len(products))
+	}
+}
+
+func TestAdminProducts_Update(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "a-book", Title: "A Book", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, body := post(t, srv, "/admin/products/"+p.ID, url.Values{
+		"title": {"A Better Book"},
+		"slug":  {"a-better-book"},
+		"kind":  {"book"},
+		// "active" omitted: an unchecked checkbox sends nothing, which must
+		// deactivate the product rather than leaving it as it was.
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update = %d %s", res.StatusCode, body)
+	}
+
+	got, err := store.Get(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Title != "A Better Book" || got.Slug != "a-better-book" || got.Active {
+		t.Errorf("stored product is %+v", got)
+	}
+}
+
+func TestAdminProducts_UnknownIDIs404(t *testing.T) {
+	srv, _ := setup(t)
+
+	for _, path := range []string{
+		"/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/edit",
+		"/admin/products/not-a-uuid/edit",
+	} {
+		if res, _ := get(t, srv, path); res.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, res.StatusCode)
+		}
+	}
+}
+
+func TestAdminVariants_AddParsesPriceAsCents(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, body := post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
+		"sku":       {"TEE-M-BLK"},
+		"size":      {"M"},
+		"color":     {"Black"},
+		"price":     {"299.99"},
+		"stock_qty": {"7"},
+		"active":    {"1"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add variant = %d %s", res.StatusCode, body)
+	}
+
+	variants, err := store.Variants(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Variants: %v", err)
+	}
+	if len(variants) != 1 {
+		t.Fatalf("%d variants, want 1", len(variants))
+	}
+	v := variants[0]
+	if v.PriceCents != 29999 {
+		t.Errorf("price = %d cents, want 29999", v.PriceCents)
+	}
+	if v.StockQty != 7 || v.SKU != "TEE-M-BLK" || !v.Active {
+		t.Errorf("stored variant is %+v", v)
+	}
+
+	// The edit page shows the price back as an amount, not as cents.
+	_, body = get(t, srv, "/admin/products/"+p.ID+"/edit")
+	if !strings.Contains(body, `value="299.99"`) {
+		t.Error("the variant price is not rendered as a decimal amount")
+	}
+}
+
+func TestAdminVariants_RejectsBadPriceAndKeepsInput(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, body := post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
+		"sku":       {"TEE-M-BLK"},
+		"price":     {"R 299,999"},
+		"stock_qty": {"seven"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("bad variant = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Enter an amount like 149.99.") {
+		t.Error("the price error is not shown")
+	}
+	if !strings.Contains(body, "Enter a whole number of items") {
+		t.Error("the stock error is not shown")
+	}
+	// The form comes back with what was typed, so it can be corrected rather
+	// than re-entered.
+	if !strings.Contains(body, `value="R 299,999"`) {
+		t.Error("the rejected price was not returned to the form")
+	}
+
+	if variants, err := store.Variants(ctx, p.ID); err != nil || len(variants) != 0 {
+		t.Errorf("Variants = %v, %v; a rejected form wrote a variant", variants, err)
+	}
+}
+
+func TestAdminVariants_UpdateAndDelete(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	v, err := store.CreateVariant(ctx, catalog.Variant{
+		ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 7, Active: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+
+	base := "/admin/products/" + p.ID + "/variants/" + v.ID
+	res, body := post(t, srv, base, url.Values{
+		"sku":       {"TEE-M"},
+		"size":      {"M"},
+		"price":     {"319.00"},
+		"stock_qty": {"2"},
+		// "active" omitted, so the variant comes off sale.
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update variant = %d %s", res.StatusCode, body)
+	}
+
+	variants, err := store.Variants(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Variants: %v", err)
+	}
+	if len(variants) != 1 {
+		t.Fatalf("%d variants, want 1", len(variants))
+	}
+	if got := variants[0]; got.PriceCents != 31900 || got.StockQty != 2 || got.Active {
+		t.Errorf("updated variant is %+v", got)
+	}
+
+	if res, body := post(t, srv, base+"/delete", nil); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("delete variant = %d %s", res.StatusCode, body)
+	}
+	if variants, err := store.Variants(ctx, p.ID); err != nil || len(variants) != 0 {
+		t.Errorf("Variants after delete = %v, %v", variants, err)
+	}
+}
+
+func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.CreateVariant(ctx, catalog.Variant{
+		ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 1, Active: true,
+	}); err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+
+	res, body := post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
+		"sku":       {"TEE-M"},
+		"size":      {"L"},
+		"price":     {"299.00"},
+		"stock_qty": {"1"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("duplicate SKU = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Already used by another variant.") {
+		t.Error("the duplicate SKU is not reported on the form")
+	}
+
+	// Same SKU rejected, and the same size/colour pair reported differently.
+	res, body = post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
+		"sku":       {"TEE-M-2"},
+		"size":      {"M"},
+		"price":     {"299.00"},
+		"stock_qty": {"1"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("duplicate options = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "already has that size and colour") {
+		t.Error("the duplicate size/colour pair is not reported on the form")
+	}
+}
+
+func TestAdminProducts_Delete(t *testing.T) {
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	p, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "doomed", Title: "Doomed", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, body := post(t, srv, "/admin/products/"+p.ID+"/delete", nil)
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("delete = %d %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get("Location"); got != "/admin/products" {
+		t.Errorf("Location = %q", got)
+	}
+	if products, err := store.List(ctx); err != nil || len(products) != 0 {
+		t.Errorf("List = %v, %v after delete", products, err)
+	}
+}
+
+func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	return do(t, srv, req)
+}
+
+func post(t *testing.T, srv *httptest.Server, path string, form url.Values) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return do(t, srv, req)
+}
+
+func do(t *testing.T, srv *httptest.Server, req *http.Request) (*http.Response, string) {
+	t.Helper()
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return res, string(body)
+}

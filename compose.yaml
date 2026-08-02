@@ -53,6 +53,11 @@ services:
       STORE_NAME: gostore
       CURRENCY: ZAR
       LOG_LEVEL: debug
+      # Development credentials, published on purpose so `make up` yields a
+      # working admin: the password is "gostore". Both values MUST be replaced
+      # for any deployment anyone else can reach — see the README.
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$2a$$12$$R7qEibIvKX01iVw8B/NaSeb2f5ZiAjrY5/5/622QP.kdHnUL3XbNK}
+      SESSION_SECRET: ${SESSION_SECRET:-ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=}
     ports:
       - "8080:8080"
     depends_on:

@@ -1,0 +1,51 @@
+[
+  {
+    "kind": "book",
+    "slug": "the-quiet-machine",
+    "title": "The Quiet Machine",
+    "description": "A demo book. Paperback, 248 pages. Everything in this file is fictional sample data.",
+    "image_url": "",
+    "active": true,
+    "variants": [
+      { "sku": "BOOK-TQM-PB", "size": "", "color": "", "price_cents": 24900, "stock_qty": 12, "active": true }
+    ]
+  },
+  {
+    "kind": "book",
+    "slug": "field-notes-on-nothing",
+    "title": "Field Notes on Nothing",
+    "description": "A demo book available in two editions, to show a product whose variants differ by format.",
+    "image_url": "",
+    "active": true,
+    "variants": [
+      { "sku": "BOOK-FNN-PB", "size": "Paperback", "color": "", "price_cents": 19900, "stock_qty": 8, "active": true },
+      { "sku": "BOOK-FNN-HC", "size": "Hardcover", "color": "", "price_cents": 34900, "stock_qty": 3, "active": true }
+    ]
+  },
+  {
+    "kind": "apparel",
+    "slug": "sample-t-shirt",
+    "title": "Sample T-Shirt",
+    "description": "A demo garment, to show variants across two option dimensions and a sold-out combination.",
+    "image_url": "",
+    "active": true,
+    "variants": [
+      { "sku": "TEE-S-BLK", "size": "S", "color": "Black", "price_cents": 29900, "stock_qty": 5, "active": true },
+      { "sku": "TEE-M-BLK", "size": "M", "color": "Black", "price_cents": 29900, "stock_qty": 7, "active": true },
+      { "sku": "TEE-L-BLK", "size": "L", "color": "Black", "price_cents": 29900, "stock_qty": 0, "active": true },
+      { "sku": "TEE-M-NVY", "size": "M", "color": "Navy", "price_cents": 31900, "stock_qty": 4, "active": true }
+    ]
+  },
+  {
+    "kind": "apparel",
+    "slug": "canvas-tote",
+    "title": "Canvas Tote",
+    "description": "A demo tote bag with a single variant, and an inactive one to show a hidden row.",
+    "image_url": "",
+    "active": true,
+    "variants": [
+      { "sku": "TOTE-STD", "size": "", "color": "Natural", "price_cents": 14900, "stock_qty": 20, "active": true },
+      { "sku": "TOTE-LTD", "size": "", "color": "Olive", "price_cents": 16900, "stock_qty": 0, "active": false }
+    ]
+  }
+]

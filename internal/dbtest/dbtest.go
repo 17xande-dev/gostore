@@ -1,0 +1,87 @@
+// Package dbtest gives database-backed tests a migrated, private schema.
+//
+// Postgres has no t.TempDir() equivalent, so isolation is a schema per test:
+// create one, point search_path at it, migrate into it, drop it on cleanup.
+// When TEST_DATABASE_URL is unset the test skips, so `go test ./...` works for
+// a drive-by contributor with no infrastructure running.
+package dbtest
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"testing"
+
+	"github.com/17xande-dev/gostore/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Pool returns a pool whose search_path is a schema unique to this test, with
+// every migration already applied.
+func Pool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping database tests")
+	}
+
+	ctx := t.Context()
+	schema := "test_" + sanitize(t.Name())
+
+	admin, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+	if _, err := admin.Exec(ctx, fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE; CREATE SCHEMA %s", schema, schema)); err != nil {
+		t.Fatalf("create schema %s: %v", schema, err)
+	}
+
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect with search_path: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		// The test's context is already cancelled by now, so cleanup gets its
+		// own — otherwise the schema leaks and the next run collides with it.
+		ctx := context.WithoutCancel(ctx)
+		cleanup, err := pgxpool.New(ctx, url)
+		if err != nil {
+			t.Logf("cleanup connect: %v", err)
+			return
+		}
+		defer cleanup.Close()
+		if _, err := cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
+			t.Logf("drop schema %s: %v", schema, err)
+		}
+	})
+
+	if err := db.Migrate(ctx, pool, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
+}
+
+func sanitize(name string) string {
+	out := make([]rune, 0, len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out = append(out, r)
+		case r >= 'A' && r <= 'Z':
+			out = append(out, r+('a'-'A'))
+		default:
+			out = append(out, '_')
+		}
+	}
+	return string(out)
+}

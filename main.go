@@ -15,8 +15,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
+	"github.com/17xande-dev/gostore/internal/handler"
+	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,9 +70,17 @@ func run() error {
 		return nil
 	}
 
+	// Templates are parsed once at startup, so a broken override fails the boot
+	// rather than the first request that happens to hit it.
+	tmpl, err := handler.ParseTemplates(cfg.TemplateDir)
+	if err != nil {
+		return err
+	}
+	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool))
+
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(pool, log),
+		Handler:           routes(cfg, h, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -109,9 +120,10 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 	return nil
 }
 
-func routes(pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
+	h.RegisterAdmin(mux, middleware.RequireAdmin(cfg.SessionSecret, log))
 	return mux
 }
 

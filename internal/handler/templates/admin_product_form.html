@@ -1,0 +1,106 @@
+{{define "admin_product_form"}}
+{{template "head" .}}
+{{template "adminnav" .}}
+
+<h1>{{if .IsNew}}New product{{else}}Edit product{{end}}</h1>
+
+<form method="post" action="{{if .IsNew}}/admin/products{{else}}/admin/products/{{.Product.ID}}{{end}}">
+  <p>
+    <label>Title<br>
+      <input name="title" value="{{.Product.Title}}" required>
+    </label>
+    {{template "err" index .Errors "title"}}
+  </p>
+  <p>
+    <label>Slug<br>
+      <input name="slug" value="{{.Product.Slug}}" placeholder="derived from the title when left blank">
+    </label>
+    {{template "err" index .Errors "slug"}}
+  </p>
+  <p>
+    <label>Kind<br>
+      <input name="kind" value="{{.Product.Kind}}" placeholder="book, apparel, …" required>
+    </label>
+    {{template "err" index .Errors "kind"}}
+  </p>
+  <p>
+    <label>Description<br>
+      <textarea name="description" rows="6" cols="60">{{.Product.Description}}</textarea>
+    </label>
+    {{template "err" index .Errors "description"}}
+  </p>
+  <p>
+    <label>Image URL<br>
+      <input name="image_url" value="{{.Product.ImageURL}}" size="60">
+    </label>
+    {{template "err" index .Errors "image_url"}}
+  </p>
+  <p>
+    <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
+  </p>
+  <p><button type="submit">Save product</button> <a href="/admin/products">Back</a></p>
+</form>
+
+{{if .IsNew}}
+  <p><small>Variants can be added once the product is saved.</small></p>
+{{else}}
+  <h2>Variants</h2>
+  <p><small>The variant is what a customer buys. A product with no options still
+  needs exactly one variant, with size and colour left blank.</small></p>
+
+  {{if not .Product.Variants}}<p>No variants yet — this product cannot be bought.</p>{{end}}
+
+  {{range .Product.Variants}}
+  <div>
+    <form method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}">
+      <label>SKU <input name="sku" value="{{.SKU}}" required></label>
+      <label>Size <input name="size" value="{{.Size}}" size="8"></label>
+      <label>Colour <input name="color" value="{{.Color}}" size="8"></label>
+      <label>Price ({{$.Currency}}) <input name="price" value="{{money .PriceCents}}" size="8" required></label>
+      <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
+      <label><input type="checkbox" name="active" value="1" {{if .Active}}checked{{end}}> Active</label>
+      <button type="submit">Save</button>
+    </form>
+    <form method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}/delete">
+      <button type="submit">Delete variant</button>
+    </form>
+    {{if eq $.VariantErrorID .ID}}{{template "variant_errors" $.VariantErrors}}{{end}}
+  </div>
+  {{end}}
+
+  <h3>Add a variant</h3>
+  <form method="post" action="/admin/products/{{.Product.ID}}/variants">
+    <label>SKU <input name="sku" value="{{.VariantForm.SKU}}" required></label>
+    <label>Size <input name="size" value="{{.VariantForm.Size}}" size="8"></label>
+    <label>Colour <input name="color" value="{{.VariantForm.Color}}" size="8"></label>
+    <label>Price ({{.Currency}}) <input name="price" value="{{.VariantForm.Price}}" size="8" required></label>
+    <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
+    <label><input type="checkbox" name="active" value="1" {{if .VariantForm.Active}}checked{{end}}> Active</label>
+    <button type="submit">Add variant</button>
+  </form>
+  {{if not .VariantErrorID}}{{template "variant_errors" .VariantErrors}}{{end}}
+
+  <h2>Delete</h2>
+  <form method="post" action="/admin/products/{{.Product.ID}}/delete">
+    <button type="submit">Delete product</button>
+    <small>Refused once the product has been ordered — deactivate it instead.</small>
+  </form>
+  {{template "err" index .Errors "delete"}}
+{{end}}
+
+{{template "foot" .}}
+{{end}}
+
+{{/*
+  Every message a variant form can produce, in one place. "options" is the
+  size-and-colour pair, which is unique per product and so belongs to no single
+  input.
+*/}}
+{{define "variant_errors"}}
+{{template "err" index . "sku"}}
+{{template "err" index . "size"}}
+{{template "err" index . "color"}}
+{{template "err" index . "options"}}
+{{template "err" index . "price"}}
+{{template "err" index . "stock_qty"}}
+{{end}}

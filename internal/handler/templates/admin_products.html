@@ -1,0 +1,34 @@
+{{define "admin_products"}}
+{{template "head" .}}
+{{template "adminnav" .}}
+
+<h1>Products</h1>
+<p><a href="/admin/products/new">New product</a></p>
+
+{{if not .Products}}
+  <p>No products yet.</p>
+{{else}}
+<table border="1" cellpadding="4">
+  <thead>
+    <tr>
+      <th>Title</th><th>Kind</th><th>Slug</th><th>Variants</th><th>Stock</th><th>Active</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Products}}
+    <tr>
+      <td>{{.Title}}</td>
+      <td>{{.Kind}}</td>
+      <td>{{.Slug}}</td>
+      <td>{{len .Variants}}</td>
+      <td>{{.TotalStock}}</td>
+      <td>{{if .Active}}yes{{else}}no{{end}}</td>
+      <td><a href="/admin/products/{{.ID}}/edit">Edit</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{template "foot" .}}
+{{end}}
