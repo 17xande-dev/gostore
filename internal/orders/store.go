@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,15 +56,17 @@ type PaidResult struct {
 	Oversold []string
 }
 
-// Store is the orders' persistence.
-type Store struct{ pool *pgxpool.Pool }
+// Store is the orders' persistence. The SQL lives in
+// internal/db/queries/orders.sql; what remains here is the transaction
+// orchestration, which is the part that is genuinely this package's own.
+type Store struct {
+	pool *pgxpool.Pool
+	q    *gen.Queries
+}
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
-
-const orderColumns = `id::text, coalesce(cart_id, ''), customer_name, customer_email,
-	customer_phone, shipping_address, total_cents, currency, status, gateway,
-	coalesce(gateway_ref, ''), gateway_status, gateway_amount, gateway_payload,
-	emailed, created_at, paid_at`
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool, q: gen.New(pool)}
+}
 
 // CreateFromCart snapshots a cart into a pending order, in one transaction.
 //
@@ -83,13 +85,33 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		return Order{}, fmt.Errorf("orders: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
 
-	items, problems, err := readCart(ctx, tx, cartID)
+	lines, err := q.ListCartLinesForOrder(ctx, cartID)
 	if err != nil {
-		return Order{}, err
+		return Order{}, fmt.Errorf("orders: read cart: %w", err)
 	}
-	if len(items) == 0 {
+	if len(lines) == 0 {
 		return Order{}, ErrEmptyCart
+	}
+
+	items := make([]Item, 0, len(lines))
+	var problems []string
+	for _, l := range lines {
+		items = append(items, Item{
+			VariantID:      l.VariantID,
+			Title:          l.Title,
+			Size:           l.Size,
+			Color:          l.Color,
+			UnitPriceCents: l.PriceCents,
+			Quantity:       l.Quantity,
+		})
+		switch {
+		case !l.Purchasable:
+			problems = append(problems, l.Title+" is no longer for sale.")
+		case l.StockQty < l.Quantity:
+			problems = append(problems, fmt.Sprintf("%s only has %d left.", l.Title, l.StockQty))
+		}
 	}
 	// Refusing here is the last line of defence, not the first: the cart page
 	// already blocks checkout on these. It exists because between rendering that
@@ -103,30 +125,31 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		total += i.LineTotalCents()
 	}
 
-	o := Order{
-		CartID:     cartID,
-		Customer:   c,
-		TotalCents: total,
-		Currency:   currency,
-		Status:     StatusPending,
-		Gateway:    gateway,
-		Items:      items,
-	}
-	row := tx.QueryRow(ctx,
-		`INSERT INTO orders (id, cart_id, customer_name, customer_email, customer_phone,
-		                     shipping_address, total_cents, currency, status, gateway)
-		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING id::text, created_at`,
-		cartID, c.Name, c.Email, c.Phone, c.Address, total, currency, StatusPending, gateway)
-	if err := row.Scan(&o.ID, &o.CreatedAt); err != nil {
+	row, err := q.CreateOrder(ctx, gen.CreateOrderParams{
+		CartID:          &cartID,
+		CustomerName:    c.Name,
+		CustomerEmail:   c.Email,
+		CustomerPhone:   c.Phone,
+		ShippingAddress: c.Address,
+		TotalCents:      total,
+		Currency:        currency,
+		Status:          string(StatusPending),
+		Gateway:         gateway,
+	})
+	if err != nil {
 		return Order{}, translate(fmt.Errorf("orders: create: %w", err))
 	}
 
 	for _, i := range items {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO order_items (order_id, variant_id, title, size, color, unit_price_cents, quantity)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			o.ID, i.VariantID, i.Title, i.Size, i.Color, i.UnitPriceCents, i.Quantity)
+		err := q.CreateOrderItem(ctx, gen.CreateOrderItemParams{
+			OrderID:        row.ID,
+			VariantID:      i.VariantID,
+			Title:          i.Title,
+			Size:           i.Size,
+			Color:          i.Color,
+			UnitPriceCents: i.UnitPriceCents,
+			Quantity:       i.Quantity,
+		})
 		if err != nil {
 			return Order{}, fmt.Errorf("orders: create item: %w", err)
 		}
@@ -135,60 +158,26 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 	if err := tx.Commit(ctx); err != nil {
 		return Order{}, fmt.Errorf("orders: commit: %w", err)
 	}
-	return o, nil
-}
-
-// readCart returns the cart's lines priced as order items, plus any reasons they
-// cannot be bought.
-func readCart(ctx context.Context, tx pgx.Tx, cartID string) ([]Item, []string, error) {
-	rows, err := tx.Query(ctx,
-		`SELECT i.variant_id::text, i.quantity, p.title, v.size, v.color,
-		        v.price_cents, v.stock_qty, (v.active AND p.active) AS purchasable
-		 FROM cart_items i
-		 JOIN product_variants v ON v.id = i.variant_id
-		 JOIN products p ON p.id = v.product_id
-		 WHERE i.cart_id = $1
-		 ORDER BY p.title, v.size, v.color, v.sku`, cartID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("orders: read cart: %w", err)
-	}
-	defer rows.Close()
-
-	var (
-		items    []Item
-		problems []string
-	)
-	for rows.Next() {
-		var (
-			i           Item
-			stock       int
-			purchasable bool
-		)
-		if err := rows.Scan(&i.VariantID, &i.Quantity, &i.Title, &i.Size, &i.Color,
-			&i.UnitPriceCents, &stock, &purchasable); err != nil {
-			return nil, nil, fmt.Errorf("orders: scan cart line: %w", err)
-		}
-		switch {
-		case !purchasable:
-			problems = append(problems, i.Title+" is no longer for sale.")
-		case stock < i.Quantity:
-			problems = append(problems, fmt.Sprintf("%s only has %d left.", i.Title, stock))
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("orders: read cart: %w", err)
-	}
-	return items, problems, nil
+	return Order{
+		ID:         row.ID,
+		CartID:     cartID,
+		Customer:   c,
+		TotalCents: total,
+		Currency:   currency,
+		Status:     StatusPending,
+		Gateway:    gateway,
+		CreatedAt:  row.CreatedAt,
+		Items:      items,
+	}, nil
 }
 
 // Get returns one order with its items.
 func (s *Store) Get(ctx context.Context, id string) (Order, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+orderColumns+` FROM orders WHERE id = $1`, id)
-	o, err := scanOrder(row)
+	row, err := s.q.GetOrder(ctx, id)
 	if err != nil {
-		return Order{}, err
+		return Order{}, translate(fmt.Errorf("orders: order: %w", err))
 	}
+	o := order(row)
 	if o.Items, err = s.items(ctx, o.ID); err != nil {
 		return Order{}, err
 	}
@@ -197,18 +186,17 @@ func (s *Store) Get(ctx context.Context, id string) (Order, error) {
 
 // LatestForCart returns the most recent order placed from a cart, which is how the
 // page a shopper lands on after paying knows which order to name. The cart token
-// is the only credential involved, and it grants access to nothing but its own
-// basket and the orders placed from it.
+// is the only credential involved, and it is enough: it names their own basket and
+// the orders placed from it, and nothing else.
 func (s *Store) LatestForCart(ctx context.Context, cartID string) (Order, error) {
 	if cartID == "" {
 		return Order{}, ErrNotFound
 	}
-	row := s.pool.QueryRow(ctx,
-		`SELECT `+orderColumns+` FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1`, cartID)
-	o, err := scanOrder(row)
+	row, err := s.q.GetLatestOrderForCart(ctx, &cartID)
 	if err != nil {
-		return Order{}, err
+		return Order{}, translate(fmt.Errorf("orders: order: %w", err))
 	}
+	o := order(row)
 	if o.Items, err = s.items(ctx, o.ID); err != nil {
 		return Order{}, err
 	}
@@ -216,23 +204,22 @@ func (s *Store) LatestForCart(ctx context.Context, cartID string) (Order, error)
 }
 
 func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT variant_id::text, title, size, color, unit_price_cents, quantity
-		 FROM order_items WHERE order_id = $1 ORDER BY id`, orderID)
+	rows, err := s.q.ListOrderItems(ctx, orderID)
 	if err != nil {
 		return nil, fmt.Errorf("orders: items: %w", err)
 	}
-	defer rows.Close()
-
-	items := []Item{}
-	for rows.Next() {
-		var i Item
-		if err := rows.Scan(&i.VariantID, &i.Title, &i.Size, &i.Color, &i.UnitPriceCents, &i.Quantity); err != nil {
-			return nil, fmt.Errorf("orders: scan item: %w", err)
-		}
-		items = append(items, i)
+	items := make([]Item, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, Item{
+			VariantID:      r.VariantID,
+			Title:          r.Title,
+			Size:           r.Size,
+			Color:          r.Color,
+			UnitPriceCents: r.UnitPriceCents,
+			Quantity:       r.Quantity,
+		})
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // MarkPaid records a payment and decrements stock, in one transaction.
@@ -255,13 +242,13 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 		return PaidResult{}, fmt.Errorf("orders: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
 
-	var status Status
-	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 FOR UPDATE`, id).Scan(&status)
+	status, err := q.LockOrderStatus(ctx, id)
 	if err != nil {
 		return PaidResult{}, translate(fmt.Errorf("orders: lock order: %w", err))
 	}
-	if status == StatusPaid {
+	if Status(status) == StatusPaid {
 		// Nothing to do, and nothing to roll back either — but commit rather than
 		// rollback so the lock is released cleanly.
 		if err := tx.Commit(ctx); err != nil {
@@ -270,61 +257,41 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 		return PaidResult{AlreadyPaid: true}, nil
 	}
 
-	_, err = tx.Exec(ctx,
-		`UPDATE orders
-		 SET status = $2, paid_at = now(), gateway = $3, gateway_ref = $4,
-		     gateway_status = $5, gateway_amount = $6, gateway_payload = $7
-		 WHERE id = $1`,
-		id, StatusPaid, p.Gateway, nullable(p.Ref), p.Status, p.Amount, p.Raw)
+	err = q.MarkOrderPaid(ctx, gen.MarkOrderPaidParams{
+		ID:             id,
+		Status:         string(StatusPaid),
+		Gateway:        p.Gateway,
+		GatewayRef:     nullable(p.Ref),
+		GatewayStatus:  p.Status,
+		GatewayAmount:  p.Amount,
+		GatewayPayload: p.Raw,
+	})
 	if err != nil {
 		return PaidResult{}, fmt.Errorf("orders: mark paid: %w", err)
 	}
 
-	rows, err := tx.Query(ctx,
-		`SELECT variant_id::text, title, quantity FROM order_items WHERE order_id = $1 ORDER BY id`, id)
+	lines, err := q.ListOrderItems(ctx, id)
 	if err != nil {
-		return PaidResult{}, fmt.Errorf("orders: read items: %w", err)
-	}
-	type line struct {
-		variantID string
-		title     string
-		quantity  int
-	}
-	var lines []line
-	for rows.Next() {
-		var l line
-		if err := rows.Scan(&l.variantID, &l.title, &l.quantity); err != nil {
-			rows.Close()
-			return PaidResult{}, fmt.Errorf("orders: scan item: %w", err)
-		}
-		lines = append(lines, l)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return PaidResult{}, fmt.Errorf("orders: read items: %w", err)
 	}
 
 	var result PaidResult
 	for _, l := range lines {
-		// The stock_qty >= $1 guard is what makes this safe rather than the
-		// transaction alone: it turns "would go negative" into zero rows affected,
-		// which is a fact the caller can act on, instead of a constraint violation
-		// that would abort a transaction that has already taken money.
-		tag, err := tx.Exec(ctx,
-			`UPDATE product_variants SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1`,
-			l.quantity, l.variantID)
+		affected, err := q.DecrementVariantStock(ctx, gen.DecrementVariantStockParams{
+			StockQty: l.Quantity,
+			ID:       l.VariantID,
+		})
 		if err != nil {
 			return PaidResult{}, fmt.Errorf("orders: decrement stock: %w", err)
 		}
-		if tag.RowsAffected() == 0 {
-			result.Oversold = append(result.Oversold, l.title)
+		if affected == 0 {
+			result.Oversold = append(result.Oversold, l.Title)
 		}
 	}
 
 	// The basket has become an order, so empty it. The cart row itself stays, so
 	// the shopper's cookie keeps working for their next visit.
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM cart_items WHERE cart_id = (SELECT cart_id FROM orders WHERE id = $1)`, id); err != nil {
+	if err := q.ClearCartForOrder(ctx, id); err != nil {
 		return PaidResult{}, fmt.Errorf("orders: clear cart: %w", err)
 	}
 
@@ -345,20 +312,23 @@ func (s *Store) RecordUnpaid(ctx context.Context, id string, status Status, p Pa
 		return fmt.Errorf("orders: RecordUnpaid called with status %q; use MarkPaid", status)
 	}
 
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE orders
-		 SET status = $2, gateway = $3, gateway_ref = $4, gateway_status = $5,
-		     gateway_amount = $6, gateway_payload = $7
-		 WHERE id = $1 AND status <> $8`,
-		id, status, p.Gateway, nullable(p.Ref), p.Status, p.Amount, p.Raw, StatusPaid)
+	affected, err := s.q.RecordUnpaidOrder(ctx, gen.RecordUnpaidOrderParams{
+		ID:             id,
+		Status:         string(status),
+		Gateway:        p.Gateway,
+		GatewayRef:     nullable(p.Ref),
+		GatewayStatus:  p.Status,
+		GatewayAmount:  p.Amount,
+		GatewayPayload: p.Raw,
+		Status_2:       string(StatusPaid),
+	})
 	if err != nil {
 		return translate(fmt.Errorf("orders: record unpaid: %w", err))
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		// Either there is no such order, or it is paid and was deliberately left
 		// alone. Only the first is an error, and the two are worth telling apart.
-		var existing Status
-		if err := s.pool.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, id).Scan(&existing); err != nil {
+		if _, err := s.q.GetOrderStatus(ctx, id); err != nil {
 			return translate(fmt.Errorf("orders: record unpaid: %w", err))
 		}
 	}
@@ -374,15 +344,18 @@ func (s *Store) RecordUnpaid(ctx context.Context, id string, status Status, p Pa
 // figure this store never quoted, so the payload is filed for whoever reconciles
 // it and the status stays where it was.
 func (s *Store) RecordNotification(ctx context.Context, id string, p Payment) error {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE orders
-		 SET gateway = $2, gateway_ref = $3, gateway_status = $4, gateway_amount = $5, gateway_payload = $6
-		 WHERE id = $1`,
-		id, p.Gateway, nullable(p.Ref), p.Status, p.Amount, p.Raw)
+	affected, err := s.q.RecordOrderNotification(ctx, gen.RecordOrderNotificationParams{
+		ID:             id,
+		Gateway:        p.Gateway,
+		GatewayRef:     nullable(p.Ref),
+		GatewayStatus:  p.Status,
+		GatewayAmount:  p.Amount,
+		GatewayPayload: p.Raw,
+	})
 	if err != nil {
 		return translate(fmt.Errorf("orders: record notification: %w", err))
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -391,27 +364,45 @@ func (s *Store) RecordNotification(ctx context.Context, id string, p Payment) er
 // MarkEmailed records that the confirmation email went out, so a retry does not
 // send a second one.
 func (s *Store) MarkEmailed(ctx context.Context, id string) error {
-	if _, err := s.pool.Exec(ctx, `UPDATE orders SET emailed = TRUE WHERE id = $1`, id); err != nil {
+	if err := s.q.MarkOrderEmailed(ctx, id); err != nil {
 		return translate(fmt.Errorf("orders: mark emailed: %w", err))
 	}
 	return nil
 }
 
-func scanOrder(row pgx.Row) (Order, error) {
-	var (
-		o      Order
-		paidAt *time.Time
-	)
-	err := row.Scan(&o.ID, &o.CartID, &o.Customer.Name, &o.Customer.Email, &o.Customer.Phone,
-		&o.Customer.Address, &o.TotalCents, &o.Currency, &o.Status, &o.Gateway, &o.GatewayRef,
-		&o.GatewayStatus, &o.GatewayAmount, &o.GatewayPayload, &o.Emailed, &o.CreatedAt, &paidAt)
-	if err != nil {
-		return Order{}, translate(fmt.Errorf("orders: order: %w", err))
+// order maps a row onto the domain value. The two nullable columns are the only
+// interesting part: an absent cart is "" because the order does not need it, and
+// an absent paid_at is the zero time because "not paid" and "paid at the zero
+// instant" are not going to be confused.
+func order(r gen.Order) Order {
+	o := Order{
+		ID: r.ID,
+		Customer: Customer{
+			Name:    r.CustomerName,
+			Email:   r.CustomerEmail,
+			Phone:   r.CustomerPhone,
+			Address: r.ShippingAddress,
+		},
+		TotalCents:     r.TotalCents,
+		Currency:       r.Currency,
+		Status:         Status(r.Status),
+		Gateway:        r.Gateway,
+		GatewayStatus:  r.GatewayStatus,
+		GatewayAmount:  r.GatewayAmount,
+		GatewayPayload: r.GatewayPayload,
+		Emailed:        r.Emailed,
+		CreatedAt:      r.CreatedAt,
 	}
-	if paidAt != nil {
-		o.PaidAt = *paidAt
+	if r.CartID != nil {
+		o.CartID = *r.CartID
 	}
-	return o, nil
+	if r.GatewayRef != nil {
+		o.GatewayRef = *r.GatewayRef
+	}
+	if r.PaidAt != nil {
+		o.PaidAt = *r.PaidAt
+	}
+	return o
 }
 
 // nullable keeps an empty gateway reference out of the partial unique index on

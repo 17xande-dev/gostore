@@ -14,7 +14,15 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 
 SEED_FILE ?= testdata/products.json
 
-.PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw
+# sqlc generates the row structs and scan code for the stores. It is pinned here
+# rather than as a `go tool` directive in go.mod, so that go.mod keeps stating the
+# dependencies of the *binary* — sqlc adds about forty indirect modules and never
+# links into it. See the README's dependency section.
+SQLC_VERSION ?= v1.31.1
+SQLC ?= sqlc
+
+.PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
+	sqlc sqlc-check sqlc-install
 
 ## up: build and start the whole local stack
 up:
@@ -55,6 +63,21 @@ migrate-status:
 # stays out of shell history and out of `ps`.
 hashpw:
 	@read -rs -p "Admin password: " P; echo; printf %s "$$P" | go run ./cmd/hashpw
+
+## sqlc: regenerate internal/db/gen from the queries and the migrations
+sqlc:
+	$(SQLC) generate
+
+## sqlc-check: fail if the checked-in generated code is stale
+# What CI runs. `sqlc diff` compares what would be generated against what is on
+# disk, so a query edited without regenerating is caught on the PR rather than by
+# a reviewer noticing the SQL and the Go disagree.
+sqlc-check:
+	$(SQLC) diff
+
+## sqlc-install: install the pinned sqlc
+sqlc-install:
+	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
 build:
 	go build ./...

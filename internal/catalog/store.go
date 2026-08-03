@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,25 +33,29 @@ func (e *ConflictError) Error() string {
 
 // Store is the catalog's persistence. Every method takes a context so a
 // cancelled request stops work in the database too.
-type Store struct{ pool *pgxpool.Pool }
+//
+// The SQL lives in internal/db/queries/catalog.sql and the scanning is generated
+// from it by sqlc; what remains here is the part that is genuinely this package's
+// own — turning the driver's vocabulary into the domain's, and arranging rows the
+// way the domain sees them.
+type Store struct {
+	pool *pgxpool.Pool
+	q    *gen.Queries
+}
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
-
-const productColumns = `id::text, kind, slug, title, description, image_url, active, created_at, updated_at`
-const variantColumns = `id::text, product_id::text, sku, size, color, price_cents, stock_qty, active`
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool, q: gen.New(pool)}
+}
 
 // List returns every product with its variants attached, ordered by title. The
 // admin list is the caller; it is deliberately unpaginated, because the scope
 // this project is honest about is a small catalog.
 func (s *Store) List(ctx context.Context) ([]Product, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+productColumns+` FROM products ORDER BY title`)
+	rows, err := s.q.ListProducts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list products: %w", err)
 	}
-	products, err := collectProducts(rows)
-	if err != nil {
-		return nil, err
-	}
+	products := products(rows)
 	if len(products) == 0 {
 		return products, nil
 	}
@@ -58,32 +63,11 @@ func (s *Store) List(ctx context.Context) ([]Product, error) {
 	// One query for every variant, then attach in memory: a join would fan the
 	// product columns out per variant, and the catalog is small enough that two
 	// round trips are cheaper than deduplicating rows.
-	vrows, err := s.pool.Query(ctx, `SELECT `+variantColumns+` FROM product_variants ORDER BY size, color, sku`)
+	vrows, err := s.q.ListAllVariants(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list variants: %w", err)
 	}
-	variants, err := collectVariants(vrows)
-	if err != nil {
-		return nil, err
-	}
-
-	return attachVariants(products, variants), nil
-}
-
-// attachVariants files each variant under its product, so the caller gets one
-// query's worth of rows arranged as the domain sees them.
-func attachVariants(products []Product, variants []Variant) []Product {
-	byID := make(map[string]int, len(products))
-	for i, p := range products {
-		products[i].Variants = []Variant{}
-		byID[p.ID] = i
-	}
-	for _, v := range variants {
-		if i, ok := byID[v.ProductID]; ok {
-			products[i].Variants = append(products[i].Variants, v)
-		}
-	}
-	return products
+	return attachVariants(products, variants(vrows)), nil
 }
 
 // ListActive returns the products a customer may see: active products with
@@ -94,75 +78,51 @@ func attachVariants(products []Product, variants []Variant) []Product {
 // disappear from a size selector, which reads as a bug; the storefront shows
 // them as unavailable instead.
 func (s *Store) ListActive(ctx context.Context) ([]Product, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+productColumns+` FROM products p
-		 WHERE p.active
-		   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
-		 ORDER BY p.title`)
+	rows, err := s.q.ListActiveProducts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list active products: %w", err)
 	}
-	products, err := collectProducts(rows)
-	if err != nil {
-		return nil, err
-	}
+	products := products(rows)
 	if len(products) == 0 {
 		return products, nil
 	}
 
-	// A subquery rather than a join, so the shared column list needs no table
-	// alias: joining products here would make `id` ambiguous.
-	vrows, err := s.pool.Query(ctx,
-		`SELECT `+variantColumns+` FROM product_variants
-		 WHERE active AND product_id IN (SELECT id FROM products WHERE active)
-		 ORDER BY size, color, sku`)
+	vrows, err := s.q.ListActiveVariants(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list active variants: %w", err)
 	}
-	variants, err := collectVariants(vrows)
-	if err != nil {
-		return nil, err
-	}
-	return attachVariants(products, variants), nil
+	return attachVariants(products, variants(vrows)), nil
 }
 
 // GetActiveBySlug returns one product for the storefront, with its active
 // variants. An inactive product, or one whose every variant is inactive, is
 // ErrNotFound: from outside, "withdrawn" and "never existed" are the same page.
 func (s *Store) GetActiveBySlug(ctx context.Context, slug string) (Product, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+productColumns+` FROM products WHERE slug = $1 AND active`, slug)
-	p, err := scanProduct(row)
+	row, err := s.q.GetActiveProductBySlug(ctx, slug)
 	if err != nil {
-		return Product{}, err
+		return Product{}, translate(fmt.Errorf("catalog: product: %w", err))
 	}
 
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+variantColumns+` FROM product_variants
-		 WHERE product_id = $1 AND active ORDER BY size, color, sku`, p.ID)
+	vrows, err := s.q.ListActiveVariantsByProduct(ctx, row.ID)
 	if err != nil {
 		return Product{}, fmt.Errorf("catalog: active variants: %w", err)
 	}
-	if p.Variants, err = collectVariants(rows); err != nil {
-		return Product{}, err
-	}
-	if len(p.Variants) == 0 {
+	if len(vrows) == 0 {
 		return Product{}, ErrNotFound
 	}
+	p := product(row)
+	p.Variants = variants(vrows)
 	return p, nil
 }
 
 // Get returns one product with its variants.
 func (s *Store) Get(ctx context.Context, id string) (Product, error) {
-	if !isUUID(id) {
-		return Product{}, ErrNotFound
-	}
-	row := s.pool.QueryRow(ctx, `SELECT `+productColumns+` FROM products WHERE id = $1`, id)
-	p, err := scanProduct(row)
+	row, err := s.q.GetProduct(ctx, id)
 	if err != nil {
-		return Product{}, err
+		return Product{}, translate(fmt.Errorf("catalog: product: %w", err))
 	}
-	p.Variants, err = s.Variants(ctx, p.ID)
-	if err != nil {
+	p := product(row)
+	if p.Variants, err = s.Variants(ctx, p.ID); err != nil {
 		return Product{}, err
 	}
 	return p, nil
@@ -170,13 +130,12 @@ func (s *Store) Get(ctx context.Context, id string) (Product, error) {
 
 // GetBySlug returns one product by its public slug, with its variants.
 func (s *Store) GetBySlug(ctx context.Context, slug string) (Product, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+productColumns+` FROM products WHERE slug = $1`, slug)
-	p, err := scanProduct(row)
+	row, err := s.q.GetProductBySlug(ctx, slug)
 	if err != nil {
-		return Product{}, err
+		return Product{}, translate(fmt.Errorf("catalog: product: %w", err))
 	}
-	p.Variants, err = s.Variants(ctx, p.ID)
-	if err != nil {
+	p := product(row)
+	if p.Variants, err = s.Variants(ctx, p.ID); err != nil {
 		return Product{}, err
 	}
 	return p, nil
@@ -184,52 +143,56 @@ func (s *Store) GetBySlug(ctx context.Context, slug string) (Product, error) {
 
 // Variants returns one product's variants in display order.
 func (s *Store) Variants(ctx context.Context, productID string) ([]Variant, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+variantColumns+` FROM product_variants WHERE product_id = $1 ORDER BY size, color, sku`, productID)
+	rows, err := s.q.ListVariantsByProduct(ctx, productID)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: variants: %w", err)
+		return nil, translate(fmt.Errorf("catalog: variants: %w", err))
 	}
-	return collectVariants(rows)
+	return variants(rows), nil
 }
 
 // Create inserts a product. The database generates the id, so no UUID
 // dependency reaches the binary.
 func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
-	row := s.pool.QueryRow(ctx,
-		`INSERT INTO products (id, kind, slug, title, description, image_url, active)
-		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
-		 RETURNING `+productColumns,
-		p.Kind, p.Slug, p.Title, p.Description, p.ImageURL, p.Active)
-	return scanProduct(row)
+	row, err := s.q.CreateProduct(ctx, gen.CreateProductParams{
+		Kind:        p.Kind,
+		Slug:        p.Slug,
+		Title:       p.Title,
+		Description: p.Description,
+		ImageURL:    p.ImageURL,
+		Active:      p.Active,
+	})
+	if err != nil {
+		return Product{}, translate(fmt.Errorf("catalog: create product: %w", err))
+	}
+	return product(row), nil
 }
 
-// Update writes every editable product column. updated_at is maintained here
-// rather than by a trigger, so the write is visible in the query itself.
+// Update writes every editable product column.
 func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
-	if !isUUID(p.ID) {
-		return Product{}, ErrNotFound
+	row, err := s.q.UpdateProduct(ctx, gen.UpdateProductParams{
+		ID:          p.ID,
+		Kind:        p.Kind,
+		Slug:        p.Slug,
+		Title:       p.Title,
+		Description: p.Description,
+		ImageURL:    p.ImageURL,
+		Active:      p.Active,
+	})
+	if err != nil {
+		return Product{}, translate(fmt.Errorf("catalog: update product: %w", err))
 	}
-	row := s.pool.QueryRow(ctx,
-		`UPDATE products
-		 SET kind = $2, slug = $3, title = $4, description = $5, image_url = $6, active = $7, updated_at = now()
-		 WHERE id = $1
-		 RETURNING `+productColumns,
-		p.ID, p.Kind, p.Slug, p.Title, p.Description, p.ImageURL, p.Active)
-	return scanProduct(row)
+	return product(row), nil
 }
 
 // Delete removes a product; its variants go with it by cascade. It fails once
 // an order references a variant, because purchase history must not be
 // rewritable — deactivate instead.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	if !isUUID(id) {
-		return ErrNotFound
-	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM products WHERE id = $1`, id)
+	affected, err := s.q.DeleteProduct(ctx, id)
 	if err != nil {
 		return translate(fmt.Errorf("catalog: delete product: %w", err))
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -237,43 +200,48 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 // CreateVariant adds a variant to an existing product.
 func (s *Store) CreateVariant(ctx context.Context, v Variant) (Variant, error) {
-	if !isUUID(v.ProductID) {
-		return Variant{}, ErrNotFound
+	row, err := s.q.CreateVariant(ctx, gen.CreateVariantParams{
+		ProductID:  v.ProductID,
+		SKU:        v.SKU,
+		Size:       v.Size,
+		Color:      v.Color,
+		PriceCents: v.PriceCents,
+		StockQty:   v.StockQty,
+		Active:     v.Active,
+	})
+	if err != nil {
+		return Variant{}, translate(fmt.Errorf("catalog: create variant: %w", err))
 	}
-	row := s.pool.QueryRow(ctx,
-		`INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-		 RETURNING `+variantColumns,
-		v.ProductID, v.SKU, v.Size, v.Color, v.PriceCents, v.StockQty, v.Active)
-	return scanVariant(row)
+	return variant(row), nil
 }
 
 // UpdateVariant writes every editable variant column. The product id is part of
 // the WHERE clause so a mismatched pair from a URL updates nothing instead of
 // editing another product's variant.
 func (s *Store) UpdateVariant(ctx context.Context, v Variant) (Variant, error) {
-	if !isUUID(v.ID) || !isUUID(v.ProductID) {
-		return Variant{}, ErrNotFound
+	row, err := s.q.UpdateVariant(ctx, gen.UpdateVariantParams{
+		ID:         v.ID,
+		ProductID:  v.ProductID,
+		SKU:        v.SKU,
+		Size:       v.Size,
+		Color:      v.Color,
+		PriceCents: v.PriceCents,
+		StockQty:   v.StockQty,
+		Active:     v.Active,
+	})
+	if err != nil {
+		return Variant{}, translate(fmt.Errorf("catalog: update variant: %w", err))
 	}
-	row := s.pool.QueryRow(ctx,
-		`UPDATE product_variants
-		 SET sku = $3, size = $4, color = $5, price_cents = $6, stock_qty = $7, active = $8
-		 WHERE id = $1 AND product_id = $2
-		 RETURNING `+variantColumns,
-		v.ID, v.ProductID, v.SKU, v.Size, v.Color, v.PriceCents, v.StockQty, v.Active)
-	return scanVariant(row)
+	return variant(row), nil
 }
 
 // DeleteVariant removes one variant of one product.
 func (s *Store) DeleteVariant(ctx context.Context, productID, id string) error {
-	if !isUUID(productID) || !isUUID(id) {
-		return ErrNotFound
-	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM product_variants WHERE id = $1 AND product_id = $2`, id, productID)
+	affected, err := s.q.DeleteVariant(ctx, gen.DeleteVariantParams{ID: id, ProductID: productID})
 	if err != nil {
 		return translate(fmt.Errorf("catalog: delete variant: %w", err))
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -293,34 +261,38 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 	}
 	defer tx.Rollback(ctx)
 
-	row := tx.QueryRow(ctx,
-		`INSERT INTO products (id, kind, slug, title, description, image_url, active)
-		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (slug) DO UPDATE
-		 SET kind = EXCLUDED.kind, title = EXCLUDED.title, description = EXCLUDED.description,
-		     image_url = EXCLUDED.image_url, active = EXCLUDED.active, updated_at = now()
-		 RETURNING `+productColumns,
-		p.Kind, p.Slug, p.Title, p.Description, p.ImageURL, p.Active)
-	out, err := scanProduct(row)
+	// The generated queries take any DBTX, so the same code runs inside a
+	// transaction by being handed the transaction instead of the pool.
+	q := s.q.WithTx(tx)
+
+	row, err := q.UpsertProduct(ctx, gen.UpsertProductParams{
+		Kind:        p.Kind,
+		Slug:        p.Slug,
+		Title:       p.Title,
+		Description: p.Description,
+		ImageURL:    p.ImageURL,
+		Active:      p.Active,
+	})
 	if err != nil {
-		return Product{}, err
+		return Product{}, translate(fmt.Errorf("catalog: upsert product: %w", err))
 	}
+	out := product(row)
 
 	out.Variants = make([]Variant, 0, len(p.Variants))
 	for _, v := range p.Variants {
-		vrow := tx.QueryRow(ctx,
-			`INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-			 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-			 ON CONFLICT (sku) DO UPDATE
-			 SET product_id = EXCLUDED.product_id, size = EXCLUDED.size, color = EXCLUDED.color,
-			     price_cents = EXCLUDED.price_cents, active = EXCLUDED.active
-			 RETURNING `+variantColumns,
-			out.ID, v.SKU, v.Size, v.Color, v.PriceCents, v.StockQty, v.Active)
-		got, err := scanVariant(vrow)
+		vrow, err := q.UpsertVariant(ctx, gen.UpsertVariantParams{
+			ProductID:  out.ID,
+			SKU:        v.SKU,
+			Size:       v.Size,
+			Color:      v.Color,
+			PriceCents: v.PriceCents,
+			StockQty:   v.StockQty,
+			Active:     v.Active,
+		})
 		if err != nil {
-			return Product{}, err
+			return Product{}, translate(fmt.Errorf("catalog: upsert variant: %w", err))
 		}
-		out.Variants = append(out.Variants, got)
+		out.Variants = append(out.Variants, variant(vrow))
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -329,59 +301,87 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 	return out, nil
 }
 
-func scanProduct(row pgx.Row) (Product, error) {
-	var p Product
-	err := row.Scan(&p.ID, &p.Kind, &p.Slug, &p.Title, &p.Description, &p.ImageURL, &p.Active, &p.CreatedAt, &p.UpdatedAt)
-	if err != nil {
-		return Product{}, translate(fmt.Errorf("catalog: product: %w", err))
+// attachVariants files each variant under its product, so the caller gets two
+// queries' worth of rows arranged as the domain sees them.
+func attachVariants(products []Product, variants []Variant) []Product {
+	byID := make(map[string]int, len(products))
+	for i, p := range products {
+		products[i].Variants = []Variant{}
+		byID[p.ID] = i
 	}
-	return p, nil
-}
-
-func scanVariant(row pgx.Row) (Variant, error) {
-	var v Variant
-	err := row.Scan(&v.ID, &v.ProductID, &v.SKU, &v.Size, &v.Color, &v.PriceCents, &v.StockQty, &v.Active)
-	if err != nil {
-		return Variant{}, translate(fmt.Errorf("catalog: variant: %w", err))
-	}
-	return v, nil
-}
-
-func collectProducts(rows pgx.Rows) ([]Product, error) {
-	defer rows.Close()
-	products := []Product{}
-	for rows.Next() {
-		p, err := scanProduct(rows)
-		if err != nil {
-			return nil, err
+	for _, v := range variants {
+		if i, ok := byID[v.ProductID]; ok {
+			products[i].Variants = append(products[i].Variants, v)
 		}
-		products = append(products, p)
 	}
-	return products, rows.Err()
+	return products
 }
 
-func collectVariants(rows pgx.Rows) ([]Variant, error) {
-	defer rows.Close()
-	variants := []Variant{}
-	for rows.Next() {
-		v, err := scanVariant(rows)
-		if err != nil {
-			return nil, err
-		}
-		variants = append(variants, v)
+// The four functions below are the whole mapping between a database row and a
+// domain value. They are by name rather than by position, which is the point of
+// generating the scan: a column added or moved cannot silently land in the wrong
+// field.
+
+func product(r gen.Product) Product {
+	return Product{
+		ID:          r.ID,
+		Kind:        r.Kind,
+		Slug:        r.Slug,
+		Title:       r.Title,
+		Description: r.Description,
+		ImageURL:    r.ImageURL,
+		Active:      r.Active,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
 	}
-	return variants, rows.Err()
+}
+
+func products(rows []gen.Product) []Product {
+	out := make([]Product, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, product(r))
+	}
+	return out
+}
+
+func variant(r gen.ProductVariant) Variant {
+	return Variant{
+		ID:         r.ID,
+		ProductID:  r.ProductID,
+		SKU:        r.SKU,
+		Size:       r.Size,
+		Color:      r.Color,
+		PriceCents: r.PriceCents,
+		StockQty:   r.StockQty,
+		Active:     r.Active,
+	}
+}
+
+func variants(rows []gen.ProductVariant) []Variant {
+	out := make([]Variant, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, variant(r))
+	}
+	return out
 }
 
 // translate turns the driver's vocabulary into this package's: a missing row
 // becomes ErrNotFound, a unique violation becomes a *ConflictError naming the
-// field a form can highlight.
+// field a form can highlight, and a malformed UUID becomes ErrNotFound — from
+// outside, an id that could never exist and one that does not are the same answer.
+//
+// This replaced a hand-written isUUID() pre-check. Ids are strings all the way to
+// the database now, so a malformed one arrives as error 22P02 rather than being
+// caught before the round trip. One less thing to keep in step with Postgres's
+// idea of a UUID, at the cost of a query that was always going to find nothing.
 func translate(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch pgErr.Code {
+		case "22P02": // invalid input syntax, i.e. not a UUID
+			return ErrNotFound
 		case "23503": // foreign key violation
 			return ErrInUse
 		case "23505": // unique violation
@@ -396,27 +396,4 @@ func translate(err error) error {
 		}
 	}
 	return err
-}
-
-// isUUID keeps a malformed path parameter from reaching Postgres, where it
-// would come back as a syntax error and read like a server fault rather than
-// the 404 it is.
-func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, r := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if r != '-' {
-				return false
-			}
-		default:
-			isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
-			if !isHex {
-				return false
-			}
-		}
-	}
-	return true
 }

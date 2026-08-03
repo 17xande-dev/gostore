@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,9 +42,15 @@ func (e *OutOfStockError) Error() string {
 	return fmt.Sprintf("cart: only %d in stock", e.Available)
 }
 
-type Store struct{ pool *pgxpool.Pool }
+// Store is the cart's persistence. The SQL lives in internal/db/queries/cart.sql.
+type Store struct {
+	pool *pgxpool.Pool
+	q    *gen.Queries
+}
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool, q: gen.New(pool)}
+}
 
 // NewToken returns an opaque cart token: 24 bytes from crypto/rand, URL-safe.
 // It is unguessable rather than signed, because holding one grants nothing but
@@ -62,26 +69,19 @@ func (s *Store) Create(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.pool.Exec(ctx, `INSERT INTO carts (id) VALUES ($1)`, token); err != nil {
+	if err := s.q.CreateCart(ctx, token); err != nil {
 		return "", fmt.Errorf("cart: create: %w", err)
 	}
 	return token, nil
 }
 
 // Get returns the cart and its items, priced from the catalog as it stands now.
-//
-// The join is deliberately not filtered by active: an item whose product has
-// been withdrawn stays visible and is marked unavailable, because a line
-// silently disappearing between page loads looks like a bug or a hidden price
-// change.
 func (s *Store) Get(ctx context.Context, token string) (Cart, error) {
 	if token == "" {
 		return Cart{}, ErrNotFound
 	}
 
-	var c Cart
-	err := s.pool.QueryRow(ctx, `SELECT id, created_at, updated_at FROM carts WHERE id = $1`, token).
-		Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
+	row, err := s.q.GetCart(ctx, token)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Cart{}, ErrNotFound
@@ -89,31 +89,25 @@ func (s *Store) Get(ctx context.Context, token string) (Cart, error) {
 		return Cart{}, fmt.Errorf("cart: get: %w", err)
 	}
 
-	rows, err := s.pool.Query(ctx,
-		`SELECT i.variant_id::text, i.quantity,
-		        p.slug, p.title, v.sku, v.size, v.color,
-		        v.price_cents, v.stock_qty, (v.active AND p.active) AS purchasable
-		 FROM cart_items i
-		 JOIN product_variants v ON v.id = i.variant_id
-		 JOIN products p ON p.id = v.product_id
-		 WHERE i.cart_id = $1
-		 ORDER BY p.title, v.size, v.color, v.sku`, token)
+	lines, err := s.q.ListCartItems(ctx, token)
 	if err != nil {
 		return Cart{}, fmt.Errorf("cart: get items: %w", err)
 	}
-	defer rows.Close()
 
-	c.Items = []Item{}
-	for rows.Next() {
-		var i Item
-		if err := rows.Scan(&i.VariantID, &i.Quantity, &i.ProductSlug, &i.ProductTitle,
-			&i.SKU, &i.Size, &i.Color, &i.UnitPriceCents, &i.StockQty, &i.Purchasable); err != nil {
-			return Cart{}, fmt.Errorf("cart: scan item: %w", err)
-		}
-		c.Items = append(c.Items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return Cart{}, fmt.Errorf("cart: get items: %w", err)
+	c := Cart{ID: row.ID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Items: []Item{}}
+	for _, l := range lines {
+		c.Items = append(c.Items, Item{
+			VariantID:      l.VariantID,
+			Quantity:       l.Quantity,
+			ProductSlug:    l.ProductSlug,
+			ProductTitle:   l.ProductTitle,
+			SKU:            l.SKU,
+			Size:           l.Size,
+			Color:          l.Color,
+			UnitPriceCents: l.PriceCents,
+			StockQty:       l.StockQty,
+			Purchasable:    l.Purchasable,
+		})
 	}
 	return c, nil
 }
@@ -131,15 +125,16 @@ func (s *Store) Add(ctx context.Context, token, variantID string, quantity int) 
 		return fmt.Errorf("cart: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
 
-	stock, err := availableStock(ctx, tx, variantID)
+	stock, err := availableStock(ctx, q, variantID)
 	if err != nil {
 		return err
 	}
 
-	var existing int
-	err = tx.QueryRow(ctx, `SELECT quantity FROM cart_items WHERE cart_id = $1 AND variant_id = $2`,
-		token, variantID).Scan(&existing)
+	existing, err := q.GetCartLineQuantity(ctx, gen.GetCartLineQuantityParams{
+		CartID: token, VariantID: variantID,
+	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("cart: read line: %w", err)
 	}
@@ -152,7 +147,7 @@ func (s *Store) Add(ctx context.Context, token, variantID string, quantity int) 
 		return &OutOfStockError{Available: stock}
 	}
 
-	if err := upsertLine(ctx, tx, token, variantID, wanted); err != nil {
+	if err := upsertLine(ctx, q, token, variantID, wanted); err != nil {
 		return err
 	}
 	return commit(ctx, tx)
@@ -173,15 +168,16 @@ func (s *Store) SetQuantity(ctx context.Context, token, variantID string, quanti
 		return fmt.Errorf("cart: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
 
-	stock, err := availableStock(ctx, tx, variantID)
+	stock, err := availableStock(ctx, q, variantID)
 	if err != nil {
 		return err
 	}
 	if quantity > stock {
 		return &OutOfStockError{Available: stock}
 	}
-	if err := upsertLine(ctx, tx, token, variantID, quantity); err != nil {
+	if err := upsertLine(ctx, q, token, variantID, quantity); err != nil {
 		return err
 	}
 	return commit(ctx, tx)
@@ -191,8 +187,12 @@ func (s *Store) SetQuantity(ctx context.Context, token, variantID string, quanti
 // the shopper's intent — "this should not be in my cart" — is satisfied either
 // way, and a double-click should not produce a failure page.
 func (s *Store) Remove(ctx context.Context, token, variantID string) error {
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM cart_items WHERE cart_id = $1 AND variant_id = $2`, token, variantID); err != nil {
+	err := s.q.DeleteCartLine(ctx, gen.DeleteCartLineParams{CartID: token, VariantID: variantID})
+	if err != nil {
+		if isMalformedUUID(err) {
+			// A variant id that could never exist is already not in the cart.
+			return nil
+		}
 		return fmt.Errorf("cart: remove: %w", err)
 	}
 	return s.touch(ctx, token)
@@ -200,7 +200,7 @@ func (s *Store) Remove(ctx context.Context, token, variantID string) error {
 
 // Clear empties a cart without deleting it.
 func (s *Store) Clear(ctx context.Context, token string) error {
-	if _, err := s.pool.Exec(ctx, `DELETE FROM cart_items WHERE cart_id = $1`, token); err != nil {
+	if err := s.q.ClearCart(ctx, token); err != nil {
 		return fmt.Errorf("cart: clear: %w", err)
 	}
 	return s.touch(ctx, token)
@@ -209,47 +209,39 @@ func (s *Store) Clear(ctx context.Context, token string) error {
 // DeleteOlderThan removes carts untouched for the given number of days, keeping
 // the table bounded. Returns how many went.
 func (s *Store) DeleteOlderThan(ctx context.Context, days int) (int64, error) {
-	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM carts WHERE updated_at < now() - make_interval(days => $1)`, days)
+	n, err := s.q.DeleteCartsOlderThan(ctx, int32(days))
 	if err != nil {
 		return 0, fmt.Errorf("cart: delete old carts: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return n, nil
 }
 
 // availableStock returns a variant's stock, or ErrUnavailable if it cannot be
 // sold at all. A malformed id is ErrUnavailable rather than a database error:
 // from outside, a variant that never existed and one that cannot be bought are
 // the same answer.
-func availableStock(ctx context.Context, tx pgx.Tx, variantID string) (int, error) {
-	var stock int
-	var purchasable bool
-	err := tx.QueryRow(ctx,
-		`SELECT v.stock_qty, (v.active AND p.active)
-		 FROM product_variants v JOIN products p ON p.id = v.product_id
-		 WHERE v.id = $1`, variantID).Scan(&stock, &purchasable)
+func availableStock(ctx context.Context, q *gen.Queries, variantID string) (int, error) {
+	row, err := q.GetVariantAvailability(ctx, variantID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return 0, ErrUnavailable
 	case err != nil:
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "22P02" { // invalid input syntax for uuid
+		if isMalformedUUID(err) {
 			return 0, ErrUnavailable
 		}
 		return 0, fmt.Errorf("cart: read variant: %w", err)
-	case !purchasable:
+	case !row.Purchasable:
 		return 0, ErrUnavailable
 	}
-	return stock, nil
+	return row.StockQty, nil
 }
 
 // upsertLine writes a line and stamps the cart, so the cleanup job measures
 // activity rather than creation.
-func upsertLine(ctx context.Context, tx pgx.Tx, token, variantID string, quantity int) error {
-	_, err := tx.Exec(ctx,
-		`INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3)
-		 ON CONFLICT (cart_id, variant_id) DO UPDATE SET quantity = EXCLUDED.quantity`,
-		token, variantID, quantity)
+func upsertLine(ctx context.Context, q *gen.Queries, token, variantID string, quantity int) error {
+	err := q.UpsertCartLine(ctx, gen.UpsertCartLineParams{
+		CartID: token, VariantID: variantID, Quantity: quantity,
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -258,14 +250,14 @@ func upsertLine(ctx context.Context, tx pgx.Tx, token, variantID string, quantit
 		}
 		return fmt.Errorf("cart: write line: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE carts SET updated_at = now() WHERE id = $1`, token); err != nil {
+	if err := q.TouchCart(ctx, token); err != nil {
 		return fmt.Errorf("cart: touch: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) touch(ctx context.Context, token string) error {
-	if _, err := s.pool.Exec(ctx, `UPDATE carts SET updated_at = now() WHERE id = $1`, token); err != nil {
+	if err := s.q.TouchCart(ctx, token); err != nil {
 		return fmt.Errorf("cart: touch: %w", err)
 	}
 	return nil
@@ -276,4 +268,12 @@ func commit(ctx context.Context, tx pgx.Tx) error {
 		return fmt.Errorf("cart: commit: %w", err)
 	}
 	return nil
+}
+
+// isMalformedUUID reports whether Postgres refused a value as a UUID. Ids are
+// strings all the way to the database, so this is where "that is not an id at
+// all" arrives.
+func isMalformedUUID(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "22P02"
 }

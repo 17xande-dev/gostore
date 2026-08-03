@@ -49,6 +49,7 @@ Other useful targets:
 | `make logs` | Follow the server logs |
 | `make migrate` | Apply pending migrations without starting the server |
 | `make migrate-status` | Show which migrations have been applied |
+| `make sqlc` | Regenerate the stores' query code after editing SQL (`make sqlc-install` first) |
 
 ## Configuration
 
@@ -453,14 +454,28 @@ a router (`ServeMux` does method and wildcard patterns), a validation library (s
 fight the per-field messages these forms need), a decimal type (money is integer cents), and
 a UUID library (the database generates them).
 
+### Build-time tools
+
+Separate from the table above, because nothing here links into the binary:
+
+| Tool | For |
+|---|---|
+| [`sqlc`](https://sqlc.dev) | Generates the stores' row structs and scan code from the SQL |
+
+sqlc is pinned in the **Makefile**, not as a `go tool` directive in `go.mod`. That is a
+deliberate trade: `go tool` would pin the version alongside the code, but it also puts about
+forty indirect modules — a MySQL driver, antlr, cel-go — into the file this README points at
+as the project's dependency statement, and grows `go.sum` from 62 lines to 165. For something
+that never reaches the binary, keeping `go.mod` a truthful description of what the server
+depends on is worth more than the convenience. `make sqlc-install` installs the pinned
+version; CI runs it before anything else.
+
 ### Decisions still open
 
 Recorded here so they are decided deliberately rather than by default:
 
 | Decision | Candidate | When |
 |---|---|---|
-| Row scanning boilerplate | `pgx.CollectRows` + `RowToStructByName` — already in the tree, no new dependency | **Overdue.** `orders` has landed with a 17-column hand-written `Scan`, which is where this stops being tidy |
-| Hand-written stores vs. generated queries | [`sqlc`](https://sqlc.dev) | **Window closed.** The plan said before `orders` or never, and `orders` has landed; retrofitting it now is the expensive version |
 | Password hashing algorithm | argon2id, via [`alexedwards/argon2id`](https://github.com/alexedwards/argon2id) or `x/crypto/argon2` | OWASP puts argon2id first and bcrypt second. bcrypt at cost 12 is the current choice because its hash string is self-describing; revisit if that stops being a good enough reason |
 | Sending email | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Phase 7. `net/smtp` has no MIME or modern TLS ergonomics, and hand-rolling multipart text+HTML is exactly the fiddly-not-cryptographic category |
 | Per-IP rate limiting | `golang.org/x/time/rate` for the buckets, hand-written keying and eviction | Phase 9. The limiter is the deep part; a map with a sweep is not |
@@ -488,7 +503,52 @@ go test ./...      # database-backed tests skip when TEST_DATABASE_URL is unset
 Database tests create a dedicated schema per test and drop it on cleanup, so they never
 interfere with each other or with development data.
 
+### The store layer
+
+Queries live in `internal/db/queries/*.sql`; [sqlc](https://sqlc.dev) reads them **against the
+migrations** and generates `internal/db/gen`. The stores in `internal/{catalog,cart,orders}`
+call the generated methods and map rows onto the domain types.
+
+```
+internal/db/migrations/*.sql   the schema (goose runs these; sqlc reads them)
+internal/db/queries/*.sql      the queries, annotated with -- name: X :one
+internal/db/gen/               generated. Do not edit; `make sqlc` rewrites it
+internal/{catalog,cart,orders} the stores: mapping, error translation, transactions
+```
+
+**Add or change a query:** edit the `.sql` file, run `make sqlc`, then use the new method.
+CI runs `sqlc diff` and fails if the checked-in generated code is stale, so a query edited
+without regenerating cannot reach `main` as code that quietly runs the old statement.
+
+What this buys, and it is one specific thing: **a column can no longer land in the wrong
+field.** The mapping is by name, checked at compile time, instead of a positional `Scan`
+against a hand-maintained column list. `orders` has seven consecutive `TEXT` columns —
+`customer_name`, `customer_email`, `customer_phone`, `shipping_address` and three
+`gateway_*` — where a reordering used to compile, run, and file the phone number as the
+address.
+
+What it does not buy: the interesting parts are still hand-written, and deliberately so.
+Transactions (`orders.MarkPaid`, `catalog.Upsert`) are orchestrated in Go, because the
+control flow — lock, check, loop, decide — is the logic. Error translation is hand-written,
+because turning `23505` into "that slug is taken, and here is the field to highlight" is
+domain knowledge no generator has.
+
+Three things worth knowing before touching `sqlc.yaml`:
+
+- **`uuid` is overridden to `string`**, so ids are one type everywhere: in a URL path, in a
+  form field, in a template. The cost is that a malformed id reaches Postgres and returns
+  error `22P02`, which each store's `translate()` maps to `ErrNotFound`. That replaced a
+  hand-written `isUUID` check.
+- **`SELECT *` is deliberate** on single-table queries. sqlc expands it against the real
+  schema at generation time, so the column list cannot drift from the table.
+- **A cast can be load-bearing.** `(v.active AND p.active)::bool` looks redundant — neither
+  column is nullable — but sqlc cannot prove that and would otherwise hand the store a
+  `*bool`, implying a third state that does not exist.
+
 ### Migrations
+
+The migrations are also sqlc's idea of the schema, so a migration and the generated code
+change together: add a column, run `make sqlc`.
 
 Numbered `.sql` files in `internal/db/migrations`, managed by
 [goose](https://github.com/pressly/goose), embedded into the binary and applied in one

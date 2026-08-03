@@ -34,6 +34,12 @@ jobs:
           go-version: "1.26"
           cache: true
 
+      # The generated stores must match the SQL they came from. A query edited
+      # without regenerating would otherwise reach main as code that compiles and
+      # runs the old statement.
+      - run: make sqlc-install
+      - run: make sqlc-check
+
       - run: go vet ./...
       - run: go build ./...
       # The database-backed tests run here, so a PR cannot break migrations
