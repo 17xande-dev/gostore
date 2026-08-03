@@ -6,20 +6,35 @@ import (
 	"strings"
 )
 
+// Policy is the parts of the Content-Security-Policy that depend on how this
+// particular store is deployed. Everything else in the policy is fixed, because
+// the templates earn it.
+type Policy struct {
+	// FrameAncestors are the origins allowed to frame the store — where
+	// embedding is permitted to happen. Empty means 'none'.
+	FrameAncestors []string
+
+	// FormActions are the external origins a form may post to, beyond the store
+	// itself. In practice this is the payment gateway: the checkout hands the
+	// shopper to it with a real form submission, and form-action 'self' alone
+	// makes the browser block that — silently enough to cost an afternoon.
+	FormActions []string
+}
+
 // SecurityHeaders sets the response headers every page wants.
 //
 // The Content-Security-Policy is strict because the templates earn it: no inline
 // script, no external origins, htmx served from the binary. Adopters who add a
 // CDN font or an analytics tag will need to widen it, which is the correct
 // direction of travel — start closed and open deliberately.
-//
-// frameAncestors is where embedding is permitted to happen: the read-only
-// catalog is meant to be droppable into someone else's page, and 'none' would
-// forbid exactly that.
-func SecurityHeaders(frameAncestors []string) Middleware {
+func SecurityHeaders(p Policy) Middleware {
 	frame := "'none'"
-	if len(frameAncestors) > 0 {
-		frame = strings.Join(frameAncestors, " ")
+	if len(p.FrameAncestors) > 0 {
+		frame = strings.Join(p.FrameAncestors, " ")
+	}
+	formAction := "'self'"
+	if len(p.FormActions) > 0 {
+		formAction += " " + strings.Join(p.FormActions, " ")
 	}
 
 	csp := strings.Join([]string{
@@ -29,7 +44,7 @@ func SecurityHeaders(frameAncestors []string) Middleware {
 		"img-src 'self' https: data:",
 		"style-src 'self' 'unsafe-inline'",
 		"script-src 'self'",
-		"form-action 'self'",
+		"form-action " + formAction,
 		"base-uri 'none'",
 		"object-src 'none'",
 		"frame-ancestors " + frame,

@@ -14,6 +14,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/middleware"
+	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/payment"
 )
 
 // newStorefront mirrors how main.go mounts the public routes: security headers
@@ -28,12 +30,17 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool), testSessions(t))
+	gateway := payment.NewFake()
+	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool),
+		orders.NewStore(pool), gateway, testSessions(t))
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)
 
-	srv := httptest.NewServer(middleware.Chain(mux, middleware.SecurityHeaders(cfg.EmbedOrigins)))
+	srv := httptest.NewServer(middleware.Chain(mux, middleware.SecurityHeaders(middleware.Policy{
+		FrameAncestors: cfg.EmbedOrigins,
+		FormActions:    []string{gateway.FormActionOrigin()},
+	})))
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
 	return srv, store

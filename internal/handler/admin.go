@@ -12,6 +12,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/middleware"
+	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
 	"github.com/justinas/nosurf"
 )
@@ -24,27 +26,34 @@ type Handler struct {
 	tmpl     *Templates
 	cat      *catalog.Store
 	cart     *cart.Store
+	orders   *orders.Store
+	gateway  payment.Gateway
 	sessions *auth.Sessions
 }
 
-func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store, sessions *auth.Sessions) *Handler {
-	return &Handler{cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts, sessions: sessions}
+func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
+	ord *orders.Store, gateway payment.Gateway, sessions *auth.Sessions) *Handler {
+	return &Handler{
+		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
+		orders: ord, gateway: gateway, sessions: sessions,
+	}
 }
 
-// FirstPartyHandler returns everything that changes state — the admin and the
-// cart — behind CSRF protection. The admin routes additionally require a session;
-// the cart is anonymous.
+// FirstPartyHandler returns everything that changes state — the admin, the cart
+// and the checkout — behind CSRF protection. The admin routes additionally require
+// a session; the cart and checkout are anonymous.
 //
 // CSRF is scoped to these routes rather than wrapped around the server's whole
 // mux, because nosurf sets a token cookie on every response it handles and the
 // embeddable catalog reads must stay cookie-free to be droppable into another
-// origin's page. Scoping by group also means the payment callback will be
-// CSRF-exempt by not being in the group at all, instead of by an exempt-path
-// string that has to keep matching the route.
+// origin's page. Scoping by group is also what makes the payment callback
+// CSRF-exempt: it is not in this group at all, rather than being excused by an
+// exempt-path string that has to keep matching the route.
 func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler {
 	mux := http.NewServeMux()
 	h.RegisterAdmin(mux, protect)
 	h.registerCart(mux)
+	h.registerCheckout(mux)
 	return h.withCSRF(mux)
 }
 
@@ -55,9 +64,8 @@ func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler 
 func (h *Handler) withCSRF(next http.Handler) http.Handler {
 	csrf := nosurf.New(next)
 	csrf.SetBaseCookie(http.Cookie{
-		// Path "/" because the protected routes span /admin, /cart, the
-		// first-party catalog pages — and /checkout next — and a cookie has only
-		// one path.
+		// Path "/" because the protected routes span /admin, /cart, /cart/checkout
+		// and the first-party catalog pages, and a cookie has only one path.
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.cfg.CookieSecure,

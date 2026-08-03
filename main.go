@@ -22,6 +22,9 @@ import (
 	"github.com/17xande-dev/gostore/internal/db"
 	"github.com/17xande-dev/gostore/internal/handler"
 	"github.com/17xande-dev/gostore/internal/middleware"
+	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/gostore/internal/payment/payfast"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -82,11 +85,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool), sessions)
+
+	gateway, err := newGateway(cfg, log)
+	if err != nil {
+		return err
+	}
+	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool),
+		orders.NewStore(pool), gateway, sessions)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, sessions, pool, log),
+		Handler:           routes(cfg, h, gateway, sessions, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -126,24 +135,72 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 	return nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+// newGateway builds the payment gateway. PayFast is the only one, so this is a
+// constructor rather than a registry — but it is the one place a second gateway
+// would be chosen, which is why the rest of the server only ever sees the
+// payment.Gateway interface.
+func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
+	// PayFast settles in ZAR and nothing else. Discovering that at the first
+	// checkout, after an order row already exists, is worse than at boot.
+	if cfg.Currency != payfast.Currency {
+		return nil, fmt.Errorf("config: CURRENCY is %q, but PayFast settles in %s only",
+			cfg.Currency, payfast.Currency)
+	}
+
+	// The gateway's URLs are derived from BASE_URL, because three URLs that have
+	// to agree with each other and with the deployment are three chances to get
+	// one wrong. NotifyURL is the exception: PayFast's own servers have to reach
+	// it, which during development means a tunnel's hostname rather than whatever
+	// BASE_URL says.
+	notify := cfg.BaseURL + "/payments/payfast/callback"
+	if cfg.PayFast.NotifyURL != "" {
+		notify = cfg.PayFast.NotifyURL
+	}
+
+	return payfast.New(payfast.Config{
+		MerchantID:       cfg.PayFast.MerchantID,
+		MerchantKey:      cfg.PayFast.MerchantKey,
+		Passphrase:       cfg.PayFast.Passphrase,
+		Sandbox:          cfg.PayFast.Sandbox,
+		ReturnURL:        cfg.BaseURL + "/cart/checkout/success",
+		CancelURL:        cfg.BaseURL + "/cart/checkout/cancel",
+		NotifyURL:        notify,
+		AllowedCIDRs:     cfg.PayFast.AllowedCIDRs,
+		AllowAnySourceIP: cfg.PayFast.AllowAnySourceIP,
+		Log:              log,
+	})
+}
+
+func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
 	h.RegisterStorefront(mux)
+
+	// The gateway callback is mounted on this mux and not the first-party one, so
+	// it sits outside CSRF protection by not being in the group — a payment
+	// provider cannot carry a token. It authenticates itself instead; see
+	// internal/handler/webhook.go.
+	h.RegisterPayments(mux)
 
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:
 	// they are embeddable cross-origin, which means cookie-free.
 	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
 	mux.Handle("/admin/", firstParty)
-	// Both patterns: one matches /cart exactly, the other everything below it.
+	// Both patterns: one matches /cart exactly, the other everything below it —
+	// which includes /cart/checkout, where the cart cookie is in scope.
 	mux.Handle("/cart", firstParty)
 	mux.Handle("/cart/", firstParty)
 
 	// Security headers wrap everything, including 404s and /healthz. The origins
-	// allowed to fetch the catalog are also the ones allowed to frame it.
-	return middleware.Chain(mux, middleware.SecurityHeaders(cfg.EmbedOrigins))
+	// allowed to fetch the catalog are also the ones allowed to frame it, and the
+	// gateway's origin has to be allowed as a form target or the browser blocks
+	// the hand-over to payment.
+	return middleware.Chain(mux, middleware.SecurityHeaders(middleware.Policy{
+		FrameAncestors: cfg.EmbedOrigins,
+		FormActions:    []string{gateway.FormActionOrigin()},
+	}))
 }
 
 // healthz reports readiness, including the database, so a container platform

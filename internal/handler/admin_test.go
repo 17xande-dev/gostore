@@ -21,6 +21,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/middleware"
+	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/payment"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -48,6 +50,15 @@ func testConfig() config.Config {
 	}
 }
 
+// newServer mounts everything main.go mounts. It returns the fake gateway too,
+// because the checkout and callback tests assert on both sides of it: what the
+// checkout handed over, and what happened when a notification came back.
+func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
+	t.Helper()
+	srv, store, _, _ := newStore(t)
+	return srv, store
+}
+
 func testSessions(t *testing.T) *auth.Sessions {
 	t.Helper()
 	cfg := testConfig()
@@ -58,14 +69,15 @@ func testSessions(t *testing.T) *auth.Sessions {
 	return s
 }
 
-// newServer mounts the admin exactly as main.go does — same subtree, same CSRF
+// newStore mounts everything exactly as main.go does — same subtrees, same CSRF
 // wrapper, same middleware — with a cookie jar but no session yet. Tests that
 // build their own routing would stop testing what actually runs.
-func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
+func newStore(t *testing.T) (*httptest.Server, *catalog.Store, *orders.Store, *payment.Fake) {
 	t.Helper()
 
 	pool := dbtest.Pool(t)
 	store := catalog.NewStore(pool)
+	orderStore := orders.NewStore(pool)
 
 	tmpl, err := ParseTemplates("")
 	if err != nil {
@@ -73,12 +85,15 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	}
 	log := slog.New(slog.DiscardHandler)
 	sessions := testSessions(t)
-	h := New(testConfig(), log, tmpl, store, cart.NewStore(pool), sessions)
+	gateway := payment.NewFake()
+	h := New(testConfig(), log, tmpl, store, cart.NewStore(pool), orderStore, gateway, sessions)
 
 	mux := http.NewServeMux()
 	// Everything main.go mounts, mounted the same way: the cart tests need the
-	// product pages, because an add-to-cart starts on one.
+	// product pages, because an add-to-cart starts on one, and the callback has to
+	// be outside the CSRF group for the same reason it is in production.
 	h.RegisterStorefront(mux)
+	h.RegisterPayments(mux)
 	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
 	mux.Handle("/admin/", firstParty)
 	mux.Handle("/cart", firstParty)
@@ -94,7 +109,7 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	// followed away.
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
-	return srv, store
+	return srv, store, orderStore, gateway
 }
 
 // setup returns a signed-in server for the admin routes plus the catalog store

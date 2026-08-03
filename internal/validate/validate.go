@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
+	"github.com/17xande-dev/gostore/internal/orders"
 )
 
 // FormErrors maps a form field name to a single message. One message per field
@@ -93,6 +94,49 @@ func Variant(v catalog.Variant) FormErrors {
 		e.Add("stock_qty", "Cannot be negative.")
 	}
 	return e
+}
+
+// Customer validates the checkout form.
+//
+// It is deliberately forgiving about everything except the email address. A name
+// or an address is whatever the customer says it is — this code has no business
+// having opinions about either, and a shop that refuses an address because it has
+// no comma in it loses a sale to no purpose. The email address is the exception
+// because it is the only way the confirmation reaches anybody, and a typo there is
+// silent.
+func Customer(c orders.Customer) FormErrors {
+	e := FormErrors{}
+
+	required(e, "name", c.Name)
+	maxLen(e, "name", c.Name, 200)
+	maxLen(e, "phone", c.Phone, 50)
+
+	required(e, "address", c.Address)
+	maxLen(e, "address", c.Address, 2_000)
+
+	switch {
+	case strings.TrimSpace(c.Email) == "":
+		e.Add("email", "Required.")
+	case !isEmail(c.Email):
+		e.Add("email", "Does not look like an email address.")
+	default:
+		maxLen(e, "email", c.Email, 320)
+	}
+	return e
+}
+
+// isEmail is the weakest useful check: one @ with something either side, and no
+// spaces. Anything stricter rejects addresses that are perfectly valid — the
+// grammar in RFC 5322 permits far more than most validators believe — and the only
+// real test of an address is whether mail to it arrives.
+func isEmail(s string) bool {
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, " \t\r\n") {
+		return false
+	}
+	local, domain, found := strings.Cut(s, "@")
+	return found && local != "" && domain != "" &&
+		!strings.Contains(domain, "@") && strings.Contains(domain, ".")
 }
 
 func required(e FormErrors, field, value string) {

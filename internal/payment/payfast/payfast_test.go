@@ -1,0 +1,291 @@
+package payfast
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/17xande-dev/gostore/internal/payment"
+)
+
+// testConfig is a gateway configured with PayFast's own published sandbox
+// credentials and passphrase. They are public — they appear in PayFast's
+// documentation and in every tutorial — so there is nothing here to keep secret.
+func testConfig() Config {
+	return Config{
+		MerchantID:  "10000100",
+		MerchantKey: "46f0cd694581a",
+		Passphrase:  "jt7NOE43FZPn",
+		Sandbox:     true,
+		ReturnURL:   "https://store.example/cart/checkout/success",
+		CancelURL:   "https://store.example/cart/checkout/cancel",
+		NotifyURL:   "https://store.example/payments/payfast/callback",
+	}
+}
+
+func testGateway(t *testing.T, edit func(*Config)) *Gateway {
+	t.Helper()
+	cfg := testConfig()
+	if edit != nil {
+		edit(&cfg)
+	}
+	g, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return g
+}
+
+func testRequest() payment.Request {
+	return payment.Request{
+		OrderID:     "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+		AmountCents: 29900,
+		Currency:    "ZAR",
+		ItemName:    "Test Store order 3F2504E0",
+		NameFirst:   "Jane",
+		NameLast:    "Doe",
+		Email:       "jane@example.com",
+	}
+}
+
+// TestPayFast_SignatureMatchesKnownVector pins the signature against a fixed
+// vector, in two halves, because a mismatched signature otherwise says nothing
+// about which part was wrong.
+//
+// The parameter string is spelled out literally: it is the part with the field
+// order, the encoding and the passphrase in it, and reading it is how anyone
+// checks this implementation against PayFast's own signature tool at
+// https://developers.payfast.co.za. The digest is MD5 of exactly those bytes,
+// computed independently of this code.
+//
+// **Before taking real money, put this string through PayFast's signature tool and
+// confirm the digest.** That is a step nobody can do from a test suite, and the
+// consequence of skipping it is every payment being rejected.
+func TestPayFast_SignatureMatchesKnownVector(t *testing.T) {
+	const (
+		wantString = "merchant_id=10000100&merchant_key=46f0cd694581a" +
+			"&return_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fsuccess" +
+			"&cancel_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fcancel" +
+			"&notify_url=https%3A%2F%2Fstore.example%2Fpayments%2Fpayfast%2Fcallback" +
+			"&name_first=Jane&name_last=Doe&email_address=jane%40example.com" +
+			"&m_payment_id=3f2504e0-4f89-41d3-9a0c-0305e82c3301" +
+			"&amount=299.00&item_name=Test+Store+order+3F2504E0" +
+			"&passphrase=jt7NOE43FZPn"
+		wantDigest = "32152117a7d193d4adf056aafc05a5eb"
+	)
+
+	g := testGateway(t, nil)
+	_, fields, err := g.BuildRedirectForm(testRequest())
+	if err != nil {
+		t.Fatalf("BuildRedirectForm: %v", err)
+	}
+
+	// Everything except the signature is what was signed.
+	signed := fields[:len(fields)-1]
+	if got := signatureString(signed, g.cfg.Passphrase); got != wantString {
+		t.Errorf("parameter string:\n got %s\nwant %s", got, wantString)
+	}
+	if got := sign(signed, g.cfg.Passphrase); got != wantDigest {
+		t.Errorf("signature = %s, want %s", got, wantDigest)
+	}
+
+	last := fields[len(fields)-1]
+	if last.Name != "signature" {
+		t.Fatalf("the last field is %q, want signature — PayFast expects it last", last.Name)
+	}
+	if last.Value != wantDigest {
+		t.Errorf("submitted signature = %s, want %s", last.Value, wantDigest)
+	}
+}
+
+func TestPayFast_SignatureOrderIsSubmissionOrderNotAlphabetical(t *testing.T) {
+	// Sorting the fields is the single most common way to get this wrong: PayFast
+	// signs them in the order they were submitted. If the two ever agree, this test
+	// is not testing anything, so it asserts they differ.
+	fields := []payment.Field{
+		{Name: "merchant_id", Value: "10000100"},
+		{Name: "amount", Value: "299.00"},
+	}
+	sorted := []payment.Field{fields[1], fields[0]}
+
+	if sign(fields, "") == sign(sorted, "") {
+		t.Fatal("reordering the fields did not change the signature, so order is not being honoured")
+	}
+	if got, want := signatureString(fields, ""), "merchant_id=10000100&amount=299.00"; got != want {
+		t.Errorf("parameter string = %q, want %q", got, want)
+	}
+}
+
+func TestPayFast_URLEncodeIsPHPs(t *testing.T) {
+	// PHP's urlencode, which is what the signature is defined in terms of. The
+	// tilde is the one that catches people: Go's url.QueryEscape leaves it alone,
+	// PHP escapes it, and one character is a failed signature.
+	cases := map[string]string{
+		"Jane Doe":              "Jane+Doe",
+		"jane@example.com":      "jane%40example.com",
+		"https://a.example/b":   "https%3A%2F%2Fa.example%2Fb",
+		"a~b":                   "a%7Eb",
+		"a-b_c.d":               "a-b_c.d",
+		"299.00":                "299.00",
+		"Grüße":                 "Gr%C3%BC%C3%9Fe", // UTF-8, byte by byte
+		"a+b":                   "a%2Bb",           // a literal plus is not a space
+		"50%":                   "50%25",
+		"quote\"and'apostrophe": "quote%22and%27apostrophe",
+	}
+	for in, want := range cases {
+		if got := urlencode(in); got != want {
+			t.Errorf("urlencode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPayFast_BuildRedirectFormOmitsBlankFields(t *testing.T) {
+	// PayFast excludes blank fields when it verifies a signature, so a blank field
+	// that is submitted anyway is a mismatch. Rather than sign one set and submit
+	// another, blanks are not submitted at all.
+	g := testGateway(t, nil)
+
+	req := testRequest()
+	req.NameLast = "" // a shopper with a one-word name
+	_, fields, err := g.BuildRedirectForm(req)
+	if err != nil {
+		t.Fatalf("BuildRedirectForm: %v", err)
+	}
+
+	for _, f := range fields {
+		if f.Value == "" {
+			t.Errorf("field %q was submitted with an empty value", f.Name)
+		}
+		if f.Name == "name_last" {
+			t.Error("name_last was submitted despite being blank")
+		}
+	}
+	// And the signature covers exactly the fields that are being sent.
+	signed := fields[:len(fields)-1]
+	if got, want := fields[len(fields)-1].Value, sign(signed, g.cfg.Passphrase); got != want {
+		t.Errorf("the signature does not cover the submitted fields: %s != %s", got, want)
+	}
+}
+
+func TestPayFast_BuildRedirectFormTargetsTheRightHost(t *testing.T) {
+	sandbox := testGateway(t, nil)
+	action, _, err := sandbox.BuildRedirectForm(testRequest())
+	if err != nil {
+		t.Fatalf("BuildRedirectForm: %v", err)
+	}
+	if action != "https://sandbox.payfast.co.za/eng/process" {
+		t.Errorf("sandbox action = %q", action)
+	}
+	// The CSP has to name this origin, or the browser blocks the hand-over.
+	if sandbox.FormActionOrigin() != "https://sandbox.payfast.co.za" {
+		t.Errorf("sandbox FormActionOrigin = %q", sandbox.FormActionOrigin())
+	}
+
+	live := testGateway(t, func(c *Config) { c.Sandbox = false })
+	action, _, err = live.BuildRedirectForm(testRequest())
+	if err != nil {
+		t.Fatalf("BuildRedirectForm: %v", err)
+	}
+	if action != "https://www.payfast.co.za/eng/process" {
+		t.Errorf("live action = %q", action)
+	}
+	if live.FormActionOrigin() != "https://www.payfast.co.za" {
+		t.Errorf("live FormActionOrigin = %q", live.FormActionOrigin())
+	}
+}
+
+func TestPayFast_RefusesWhatPayFastWouldReject(t *testing.T) {
+	g := testGateway(t, nil)
+
+	cases := []struct {
+		name string
+		edit func(*payment.Request)
+		want error
+	}{
+		{
+			// PayFast settles in ZAR. Sending it anything else produces a payment
+			// in the wrong currency rather than an error, which is worse.
+			name: "another currency",
+			edit: func(r *payment.Request) { r.Currency = "USD" },
+			want: ErrCurrency,
+		},
+		{
+			name: "below the minimum",
+			edit: func(r *payment.Request) { r.AmountCents = MinAmountCents - 1 },
+			want: ErrAmount,
+		},
+		{
+			name: "zero",
+			edit: func(r *payment.Request) { r.AmountCents = 0 },
+			want: ErrAmount,
+		},
+	}
+	for _, tc := range cases {
+		req := testRequest()
+		tc.edit(&req)
+		if _, _, err := g.BuildRedirectForm(req); !errors.Is(err, tc.want) {
+			t.Errorf("%s: error = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestPayFast_TruncatesItemName(t *testing.T) {
+	g := testGateway(t, nil)
+
+	req := testRequest()
+	req.ItemName = strings.Repeat("x", itemNameMaxLen+50)
+	_, fields, err := g.BuildRedirectForm(req)
+	if err != nil {
+		t.Fatalf("BuildRedirectForm: %v", err)
+	}
+
+	for _, f := range fields {
+		if f.Name == "item_name" && len(f.Value) != itemNameMaxLen {
+			t.Errorf("item_name is %d bytes, want %d", len(f.Value), itemNameMaxLen)
+		}
+	}
+
+	// Truncation cuts on a rune boundary: an item name is not worth emitting
+	// invalid UTF-8 over.
+	if got := truncate(strings.Repeat("é", 60), 51); !isValidUTF8(got) {
+		t.Errorf("truncate produced invalid UTF-8: %q", got)
+	}
+}
+
+func isValidUTF8(s string) bool {
+	for _, r := range s {
+		if r == '�' {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPayFast_NewRequiresConfiguration(t *testing.T) {
+	// Every one of these is checked at startup rather than at the first checkout,
+	// because the first checkout is a real shopper.
+	cases := map[string]func(*Config){
+		"no merchant id":  func(c *Config) { c.MerchantID = "" },
+		"no merchant key": func(c *Config) { c.MerchantKey = "" },
+		"no notify URL":   func(c *Config) { c.NotifyURL = "" },
+		"no return URL":   func(c *Config) { c.ReturnURL = "" },
+		"no cancel URL":   func(c *Config) { c.CancelURL = "" },
+		"bad CIDR":        func(c *Config) { c.AllowedCIDRs = []string{"197.97.145.144"} },
+	}
+	for name, edit := range cases {
+		cfg := testConfig()
+		edit(&cfg)
+		if _, err := New(cfg); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+func TestPayFast_DefaultCIDRsParse(t *testing.T) {
+	// The published ranges are a default in code, so a typo in one of them would
+	// otherwise only surface when a real notification was rejected.
+	g := testGateway(t, nil)
+	if len(g.allowed) != len(DefaultAllowedCIDRs) {
+		t.Fatalf("%d parsed prefixes, want %d", len(g.allowed), len(DefaultAllowedCIDRs))
+	}
+}

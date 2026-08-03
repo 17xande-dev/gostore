@@ -10,7 +10,7 @@ import (
 func ok(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }
 
 func TestSecurityHeaders(t *testing.T) {
-	h := SecurityHeaders(nil)(http.HandlerFunc(ok))
+	h := SecurityHeaders(Policy{})(http.HandlerFunc(ok))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
@@ -22,6 +22,7 @@ func TestSecurityHeaders(t *testing.T) {
 		"object-src 'none'",
 		"base-uri 'none'",
 		"frame-ancestors 'none'",
+		"form-action 'self'",
 	} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP is missing %q: %s", want, csp)
@@ -38,7 +39,9 @@ func TestSecurityHeaders(t *testing.T) {
 func TestSecurityHeaders_FrameAncestorsFollowEmbedOrigins(t *testing.T) {
 	// Embedding the catalog in someone else's page is the point of the feature,
 	// so the origins allowed to fetch it must also be allowed to frame it.
-	h := SecurityHeaders([]string{"https://cms.example", "https://other.example"})(http.HandlerFunc(ok))
+	h := SecurityHeaders(Policy{
+		FrameAncestors: []string{"https://cms.example", "https://other.example"},
+	})(http.HandlerFunc(ok))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
@@ -46,6 +49,23 @@ func TestSecurityHeaders_FrameAncestorsFollowEmbedOrigins(t *testing.T) {
 	csp := w.Header().Get("Content-Security-Policy")
 	if !strings.Contains(csp, "frame-ancestors https://cms.example https://other.example") {
 		t.Errorf("frame-ancestors does not list the embed origins: %s", csp)
+	}
+}
+
+func TestSecurityHeaders_FormActionAllowsTheGateway(t *testing.T) {
+	// The checkout hands the shopper to the gateway with a real cross-origin form
+	// post. form-action 'self' alone makes the browser block it — silently, from
+	// the shopper's point of view — so the gateway's origin has to be named.
+	h := SecurityHeaders(Policy{
+		FormActions: []string{"https://sandbox.payfast.co.za"},
+	})(http.HandlerFunc(ok))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/cart/checkout", nil))
+
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "form-action 'self' https://sandbox.payfast.co.za") {
+		t.Errorf("form-action does not allow the gateway: %s", csp)
 	}
 }
 

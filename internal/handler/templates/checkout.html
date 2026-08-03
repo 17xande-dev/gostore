@@ -1,0 +1,146 @@
+{{/*
+  Checkout: the shipping form, the hand-over to the payment gateway, and the two
+  pages the gateway sends the shopper back to.
+*/}}
+{{define "checkout"}}
+{{template "head" .}}
+
+<p><a href="/cart">← Back to your cart</a></p>
+<h1>Checkout</h1>
+<div id="checkout">
+{{template "checkout_form" .}}
+</div>
+
+{{template "foot" .}}
+{{end}}
+
+{{define "checkout_form"}}
+{{with .Error}}<p><strong>{{.}}</strong></p>{{end}}
+
+<table border="1" cellpadding="4">
+  <thead><tr><th>Item</th><th>Quantity</th><th>Line total</th></tr></thead>
+  <tbody>
+  {{range .Cart.Items}}
+    <tr>
+      <td>{{.ProductTitle}}{{with .Label}} <small>{{.}}</small>{{end}}</td>
+      <td>{{.Quantity}}</td>
+      <td>{{$.Currency}} {{money .LineTotalCents}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="2">Total</th><th>{{.Currency}} {{money .Cart.TotalCents}}</th></tr>
+  </tfoot>
+</table>
+
+<form method="post" action="/cart/checkout">
+  {{template "csrf" .CSRFToken}}
+
+  <p>
+    <label>Name
+      <input type="text" name="name" value="{{.Form.Name}}" required autocomplete="name">
+    </label>
+    {{template "err" .Errors.name}}
+  </p>
+  <p>
+    <label>Email
+      <input type="email" name="email" value="{{.Form.Email}}" required autocomplete="email">
+    </label>
+    {{/* The only field checked strictly: it is how the confirmation reaches anybody. */}}
+    {{template "err" .Errors.email}}
+  </p>
+  <p>
+    <label>Phone <small>(optional)</small>
+      <input type="tel" name="phone" value="{{.Form.Phone}}" autocomplete="tel">
+    </label>
+    {{template "err" .Errors.phone}}
+  </p>
+  <p>
+    <label>Delivery address<br>
+      <textarea name="address" rows="4" cols="40" required autocomplete="street-address">{{.Form.Address}}</textarea>
+    </label>
+    {{template "err" .Errors.address}}
+  </p>
+
+  <button type="submit">Pay {{.Currency}} {{money .Cart.TotalCents}}</button>
+</form>
+{{end}}
+
+{{/*
+  The hand-over to the gateway. This is a real cross-origin form submission, not a
+  redirect, because the gateway wants the fields posted to it — which is why the
+  CSP has to name the gateway's origin in form-action, and why the vendored
+  submit-on-load script exists: with script-src 'self' and no inline script, an
+  onload attribute would simply be blocked.
+
+  The button is not a fallback nobody sees. Without JavaScript it is the whole
+  mechanism, and it is deliberately labelled so that pressing it is obviously the
+  right thing to do.
+*/}}
+{{define "checkout_redirect"}}
+{{template "head" .}}
+
+<h1>Sending you to pay</h1>
+<p>Order <strong>{{.Order.Reference}}</strong> — {{.Currency}} {{money .Order.TotalCents}}</p>
+<p>You are being handed over to {{.Gateway}} to pay. If nothing happens, press the button.</p>
+
+<form id="gateway-redirect" method="post" action="{{.Action}}">
+  {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+  {{end}}
+  <button type="submit">Continue to {{.Gateway}}</button>
+</form>
+<script src="{{asset "redirect.js"}}" defer></script>
+
+{{template "foot" .}}
+{{end}}
+
+{{/*
+  The gateway's return_url. It proves nothing: a shopper can reach this page
+  without paying, simply by typing it. So it says the payment is being confirmed,
+  and never that it succeeded — only the authenticated callback decides that.
+*/}}
+{{define "checkout_success"}}
+{{template "head" .}}
+
+<h1>Thank you</h1>
+{{if .HaveOrder}}
+  <p>Your order reference is <strong>{{.Order.Reference}}</strong>. Quote it in any email about this order.</p>
+  {{if .Order.Paid}}
+    <p>Payment confirmed. We will be in touch about delivery.</p>
+  {{else}}
+    <p>We are waiting for the payment to be confirmed. This usually takes a few
+    seconds, and you will get an email once it is done — you do not need to pay again.</p>
+  {{end}}
+  <table border="1" cellpadding="4">
+    <tbody>
+    {{range .Order.Items}}
+      <tr>
+        <td>{{.Title}}{{with .Label}} <small>{{.}}</small>{{end}}</td>
+        <td>{{.Quantity}}</td>
+        <td>{{$.Currency}} {{money .LineTotalCents}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+    <tfoot><tr><th colspan="2">Total</th><th>{{.Currency}} {{money .Order.TotalCents}}</th></tr></tfoot>
+  </table>
+{{else}}
+  <p>If you have just paid, your payment is being confirmed and you will get an
+  email shortly.</p>
+{{end}}
+
+<p><a href="/products">Continue shopping</a></p>
+
+{{template "foot" .}}
+{{end}}
+
+{{/* The gateway's cancel_url: nothing was paid, and the cart is untouched. */}}
+{{define "checkout_cancel"}}
+{{template "head" .}}
+
+<h1>Payment cancelled</h1>
+<p>Nothing has been charged{{if .HaveOrder}}, and order {{.Order.Reference}} has not been paid{{end}}.
+Your cart is still as you left it.</p>
+<p><a href="/cart">Back to your cart</a> · <a href="/products">Continue shopping</a></p>
+
+{{template "foot" .}}
+{{end}}

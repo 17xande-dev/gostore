@@ -71,8 +71,12 @@
 {{range .Cart.Problems}}<p><strong>{{.}}</strong></p>{{end}}
 
 {{if .Cart.Purchasable}}
-  {{/* Checkout arrives in the next phase; the button is deliberately not here yet. */}}
-  <p><small>Checkout is not built yet.</small></p>
+  {{/*
+    A plain link, not an htmx swap: the checkout is a page of its own with a form
+    on it, and it lives under /cart because that is where the cart cookie is
+    scoped — see internal/handler/checkout.go.
+  */}}
+  <p><a href="/cart/checkout"><strong>Checkout</strong></a></p>
 {{else}}
   <p><small>Fix the problems above before checking out.</small></p>
 {{end}}

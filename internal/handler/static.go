@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-//go:embed static/htmx.min.js static/htmx.LICENSE
+//go:embed static/htmx.min.js static/htmx.LICENSE static/redirect.js
 var staticFS embed.FS
 
 // staticAsset is one embedded file, with the URL it is served at.
@@ -30,6 +30,9 @@ var staticAssets = sync.OnceValue(func() map[string]staticAsset {
 	files := map[string]string{
 		"htmx.min.js":  "text/javascript; charset=utf-8",
 		"htmx.LICENSE": "text/plain; charset=utf-8",
+		// Ours, not vendored: submits the payment hand-over form on load, because
+		// the CSP forbids the inline script that would otherwise do it.
+		"redirect.js": "text/javascript; charset=utf-8",
 	}
 
 	assets := make(map[string]staticAsset, len(files))

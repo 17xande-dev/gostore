@@ -13,12 +13,18 @@ func setRequired(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/gostore")
 	t.Setenv("ADMIN_PASSWORD_HASH", "$2a$12$C6UzMDM.H6dfI/f/IKcEe.rLfIRhKrKcXKcXKcXKcXKcXKcXKcXKc")
 	t.Setenv("SESSION_SECRET", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // 32 bytes
+	// PayFast's own published sandbox credentials — see .env.example.
+	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
+	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
 }
 
 func TestLoad_RequiresSecrets(t *testing.T) {
 	// Each required var, named in the error, so a misconfigured deployment says
 	// what is missing instead of failing later and less clearly.
-	for _, key := range []string{"DATABASE_URL", "ADMIN_PASSWORD_HASH", "SESSION_SECRET"} {
+	for _, key := range []string{
+		"DATABASE_URL", "ADMIN_PASSWORD_HASH", "SESSION_SECRET",
+		"PAYFAST_MERCHANT_ID", "PAYFAST_MERCHANT_KEY",
+	} {
 		setRequired(t)
 		t.Setenv(key, "")
 
@@ -179,6 +185,89 @@ func TestLoad_EmbedOrigins(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Errorf("EMBED_ORIGINS %q was accepted", bad)
 		}
+	}
+}
+
+func TestLoad_PayFast(t *testing.T) {
+	setRequired(t)
+
+	// Sandbox is on unless explicitly turned off: the wrong default here takes
+	// real money during somebody's first afternoon with the project.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.PayFast.Sandbox {
+		t.Error("PayFast.Sandbox is false by default")
+	}
+	if c.PayFast.AllowAnySourceIP {
+		t.Error("the notification source-IP check is disabled by default")
+	}
+	if c.PayFast.AllowedCIDRs != nil {
+		t.Errorf("AllowedCIDRs = %v with the var unset, want nil so the gateway's defaults apply", c.PayFast.AllowedCIDRs)
+	}
+
+	t.Setenv("PAYFAST_SANDBOX", "false")
+	t.Setenv("PAYFAST_ALLOWED_CIDRS", " 10.0.0.0/8 , 192.168.0.0/16 ")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.PayFast.Sandbox {
+		t.Error("PAYFAST_SANDBOX=false did not turn the sandbox off")
+	}
+	want := []string{"10.0.0.0/8", "192.168.0.0/16"}
+	if len(c.PayFast.AllowedCIDRs) != len(want) {
+		t.Fatalf("AllowedCIDRs = %v, want %v", c.PayFast.AllowedCIDRs, want)
+	}
+	for i := range want {
+		if c.PayFast.AllowedCIDRs[i] != want[i] {
+			t.Errorf("AllowedCIDRs[%d] = %q, want %q", i, c.PayFast.AllowedCIDRs[i], want[i])
+		}
+	}
+
+	// Disabling the check is spelled out, so it cannot happen by leaving something
+	// blank.
+	t.Setenv("PAYFAST_ALLOWED_CIDRS", "any")
+	if c, err = Load(); err != nil || !c.PayFast.AllowAnySourceIP {
+		t.Errorf("PAYFAST_ALLOWED_CIDRS=any: AllowAnySourceIP = %v, err = %v", c.PayFast.AllowAnySourceIP, err)
+	}
+
+	// The notify URL is the one PayFast's servers must reach, so a relative one
+	// is a misconfiguration that would only show up as a missing notification.
+	for _, bad := range []string{"/payments/payfast/callback", "notify.example.com"} {
+		setRequired(t)
+		t.Setenv("PAYFAST_NOTIFY_URL", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("PAYFAST_NOTIFY_URL %q was accepted", bad)
+		}
+	}
+}
+
+func TestLoad_TrustProxyIP(t *testing.T) {
+	setRequired(t)
+
+	// False by default: believing X-Forwarded-For without a proxy in front lets a
+	// client claim any source IP, which is one of the checks on the payment
+	// callback.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TrustProxyIP {
+		t.Error("TrustProxyIP is true by default")
+	}
+
+	t.Setenv("TRUST_PROXY_IP", "true")
+	if c, err = Load(); err != nil || !c.TrustProxyIP {
+		t.Errorf("TRUST_PROXY_IP=true: %v, %v", c.TrustProxyIP, err)
+	}
+
+	// Anything that is not plainly true is false, so a typo cannot quietly turn
+	// it on.
+	t.Setenv("TRUST_PROXY_IP", "ture")
+	if c, err = Load(); err != nil || c.TrustProxyIP {
+		t.Errorf("TRUST_PROXY_IP=ture was treated as true")
 	}
 }
 

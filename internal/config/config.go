@@ -49,6 +49,19 @@ type Config struct {
 	// signed with it has expired.
 	SessionSecretPrevious []byte
 
+	// PayFast is the payment gateway's configuration. It is a flat struct here
+	// rather than the gateway package's own Config so that config depends on no
+	// gateway: main assembles the two, which is also where a second gateway
+	// would be chosen.
+	PayFast PayFast
+
+	// TrustProxyIP makes the server believe X-Forwarded-For. It must be false
+	// unless something in front of the server is actually setting that header,
+	// because a client can otherwise claim any IP it likes — and the payment
+	// callback's source-IP check is one of the things that would then be
+	// trivially bypassed.
+	TrustProxyIP bool
+
 	// CookieSecure is derived from BaseURL rather than configured separately:
 	// an HTTPS deployment always wants Secure cookies, and localhost
 	// development cannot use them.
@@ -62,6 +75,32 @@ type Config struct {
 
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
+}
+
+// PayFast is what the PayFast gateway needs from the environment. The merchant
+// id and key are required: a store that cannot take a payment is not a store, and
+// discovering that at the first checkout is worse than discovering it at boot.
+//
+// Notification URLs are derived from BaseURL rather than configured, with one
+// override — NotifyURL — because that is the one PayFast's own servers have to
+// reach, which on a development machine means a tunnel's hostname and not
+// localhost.
+type PayFast struct {
+	MerchantID  string
+	MerchantKey string
+	Passphrase  string
+	Sandbox     bool
+
+	NotifyURL string
+
+	// AllowedCIDRs overrides PayFast's published source ranges. It is
+	// configuration rather than a constant because PayFast has changed its ranges
+	// before, and adding one should not need a release of this project.
+	AllowedCIDRs []string
+	// AllowAnySourceIP disables the source-IP check entirely. See
+	// PAYFAST_ALLOWED_CIDRS=any in .env.example: it is for testing against the
+	// sandbox and never right in production.
+	AllowAnySourceIP bool
 }
 
 // AllowsEmbedding reports whether any origin may fetch the catalog fragments.
@@ -81,12 +120,28 @@ func Load() (Config, error) {
 		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		SessionTTL:        24 * time.Hour,
 		ShutdownTimeout:   15 * time.Second,
+		TrustProxyIP:      boolEnv("TRUST_PROXY_IP", false),
+		PayFast: PayFast{
+			MerchantID:  os.Getenv("PAYFAST_MERCHANT_ID"),
+			MerchantKey: os.Getenv("PAYFAST_MERCHANT_KEY"),
+			Passphrase:  os.Getenv("PAYFAST_PASSPHRASE"),
+			// Sandbox defaults to true: the wrong default here takes real money
+			// from a real card during somebody's first afternoon with the project.
+			Sandbox:   boolEnv("PAYFAST_SANDBOX", true),
+			NotifyURL: strings.TrimSpace(os.Getenv("PAYFAST_NOTIFY_URL")),
+		},
 	}
 	c.CookieSecure = strings.HasPrefix(c.BaseURL, "https://")
 
 	var missing []string
 	if c.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")
+	}
+	if c.PayFast.MerchantID == "" {
+		missing = append(missing, "PAYFAST_MERCHANT_ID")
+	}
+	if c.PayFast.MerchantKey == "" {
+		missing = append(missing, "PAYFAST_MERCHANT_KEY")
 	}
 	// The admin credentials are required rather than optional-with-a-default:
 	// a store whose admin is reachable without a password is worse than a store
@@ -153,6 +208,27 @@ func Load() (Config, error) {
 		c.EmbedOrigins = append(c.EmbedOrigins, origin)
 	}
 
+	// "any" is spelled out rather than being an empty list, so disabling a
+	// security check is something an operator typed on purpose.
+	switch cidrs := strings.TrimSpace(os.Getenv("PAYFAST_ALLOWED_CIDRS")); cidrs {
+	case "":
+	case "any":
+		c.PayFast.AllowAnySourceIP = true
+	default:
+		for _, cidr := range strings.Split(cidrs, ",") {
+			if cidr = strings.TrimSpace(cidr); cidr != "" {
+				c.PayFast.AllowedCIDRs = append(c.PayFast.AllowedCIDRs, cidr)
+			}
+		}
+	}
+
+	if c.PayFast.NotifyURL != "" {
+		u, err := url.Parse(c.PayFast.NotifyURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return Config{}, fmt.Errorf("config: PAYFAST_NOTIFY_URL %q must be an absolute URL", c.PayFast.NotifyURL)
+		}
+	}
+
 	if c.TemplateDir != "" {
 		if fi, err := os.Stat(c.TemplateDir); err != nil {
 			return Config{}, fmt.Errorf("config: TEMPLATE_DIR %q: %w", c.TemplateDir, err)
@@ -189,6 +265,20 @@ func LoadTool() (Config, error) {
 		return Config{}, fmt.Errorf("config: required env vars not set: DATABASE_URL")
 	}
 	return c, nil
+}
+
+// boolEnv reads a flag. Only the obvious spellings count as true, and anything
+// else is false — a typo turning a safety default off silently is worse than a
+// typo being ignored.
+func boolEnv(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func env(key, def string) string {
