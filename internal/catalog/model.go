@@ -64,6 +64,46 @@ func (p Product) TotalStock() int {
 	return total
 }
 
+// InStock reports whether any of the product's loaded variants can be sold.
+func (p Product) InStock() bool {
+	for _, v := range p.Variants {
+		if v.InStock() {
+			return true
+		}
+	}
+	return false
+}
+
+// MinPriceCents and MaxPriceCents bracket the product's loaded variants, so a
+// listing can show one price or a range without the template doing arithmetic.
+// Both are 0 for a product with no variants loaded.
+func (p Product) MinPriceCents() int64 {
+	if len(p.Variants) == 0 {
+		return 0
+	}
+	min := p.Variants[0].PriceCents
+	for _, v := range p.Variants[1:] {
+		if v.PriceCents < min {
+			min = v.PriceCents
+		}
+	}
+	return min
+}
+
+func (p Product) MaxPriceCents() int64 {
+	var max int64
+	for _, v := range p.Variants {
+		if v.PriceCents > max {
+			max = v.PriceCents
+		}
+	}
+	return max
+}
+
+// OnePrice reports whether every variant costs the same, which is what decides
+// between showing a price and showing a range.
+func (p Product) OnePrice() bool { return p.MinPriceCents() == p.MaxPriceCents() }
+
 // Slugify derives a URL-safe slug from a title, so leaving the slug field blank
 // in the admin or a seed file is a reasonable thing to do.
 func Slugify(s string) string {

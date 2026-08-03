@@ -85,7 +85,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(h, sessions, pool, log),
+		Handler:           routes(cfg, h, sessions, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -125,16 +125,21 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 	return nil
 }
 
-func routes(h *handler.Handler, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
+	h.RegisterStorefront(mux)
+
 	// The admin is mounted as a subtree so CSRF protection, and the cookie
 	// nosurf needs to set for it, apply there and nowhere else. Storefront
-	// routes stay outside it: the catalog fragments are embeddable
-	// cross-origin, which means cookie-free.
+	// routes stay outside it: the catalog reads are embeddable cross-origin,
+	// which means cookie-free.
 	mux.Handle("/admin/", h.AdminHandler(middleware.RequireAdmin(sessions, log)))
-	return mux
+
+	// Security headers wrap everything, including 404s and /healthz. The origins
+	// allowed to fetch the catalog are also the ones allowed to frame it.
+	return middleware.Chain(mux, middleware.SecurityHeaders(cfg.EmbedOrigins))
 }
 
 // healthz reports readiness, including the database, so a container platform

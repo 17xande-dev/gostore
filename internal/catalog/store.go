@@ -67,6 +67,12 @@ func (s *Store) List(ctx context.Context) ([]Product, error) {
 		return nil, err
 	}
 
+	return attachVariants(products, variants), nil
+}
+
+// attachVariants files each variant under its product, so the caller gets one
+// query's worth of rows arranged as the domain sees them.
+func attachVariants(products []Product, variants []Variant) []Product {
 	byID := make(map[string]int, len(products))
 	for i, p := range products {
 		products[i].Variants = []Variant{}
@@ -77,7 +83,72 @@ func (s *Store) List(ctx context.Context) ([]Product, error) {
 			products[i].Variants = append(products[i].Variants, v)
 		}
 	}
-	return products, nil
+	return products
+}
+
+// ListActive returns the products a customer may see: active products with
+// their active variants, and only those that have at least one — a product with
+// nothing purchasable under it is not a listing, it is a dead end.
+//
+// Out-of-stock variants are included. Hiding them would make a size silently
+// disappear from a size selector, which reads as a bug; the storefront shows
+// them as unavailable instead.
+func (s *Store) ListActive(ctx context.Context) ([]Product, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+productColumns+` FROM products p
+		 WHERE p.active
+		   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
+		 ORDER BY p.title`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list active products: %w", err)
+	}
+	products, err := collectProducts(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(products) == 0 {
+		return products, nil
+	}
+
+	// A subquery rather than a join, so the shared column list needs no table
+	// alias: joining products here would make `id` ambiguous.
+	vrows, err := s.pool.Query(ctx,
+		`SELECT `+variantColumns+` FROM product_variants
+		 WHERE active AND product_id IN (SELECT id FROM products WHERE active)
+		 ORDER BY size, color, sku`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list active variants: %w", err)
+	}
+	variants, err := collectVariants(vrows)
+	if err != nil {
+		return nil, err
+	}
+	return attachVariants(products, variants), nil
+}
+
+// GetActiveBySlug returns one product for the storefront, with its active
+// variants. An inactive product, or one whose every variant is inactive, is
+// ErrNotFound: from outside, "withdrawn" and "never existed" are the same page.
+func (s *Store) GetActiveBySlug(ctx context.Context, slug string) (Product, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+productColumns+` FROM products WHERE slug = $1 AND active`, slug)
+	p, err := scanProduct(row)
+	if err != nil {
+		return Product{}, err
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+variantColumns+` FROM product_variants
+		 WHERE product_id = $1 AND active ORDER BY size, color, sku`, p.ID)
+	if err != nil {
+		return Product{}, fmt.Errorf("catalog: active variants: %w", err)
+	}
+	if p.Variants, err = collectVariants(rows); err != nil {
+		return Product{}, err
+	}
+	if len(p.Variants) == 0 {
+		return Product{}, ErrNotFound
+	}
+	return p, nil
 }
 
 // Get returns one product with its variants.

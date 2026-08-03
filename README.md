@@ -5,9 +5,9 @@ htmx frontend, PostgreSQL for storage, and [PayFast](https://payfast.io) for pay
 Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
-> catalog (products, variants, seed command, admin CRUD) and admin authentication work.
-> The storefront, cart, checkout and the PayFast integration are being built in that
-> order — see the build order below.
+> catalog (products, variants, seed command, admin CRUD), admin authentication and the
+> read-only storefront work. Cart, checkout and the PayFast integration are being built in
+> that order — see the build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) so `make up`
 > gives you a working admin. Replace it, and `SESSION_SECRET`, before anyone else can
@@ -65,6 +65,7 @@ list with defaults.
 | `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs |
 | `STORE_NAME` | no | `gostore` | Displayed store name |
 | `CURRENCY` | no | `ZAR` | Currency code (PayFast requires `ZAR`) |
+| `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
 | `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
@@ -117,9 +118,9 @@ or an `X-CSRF-Token` header. A request without one gets `403`.
 
 CSRF is mounted over the `/admin` subtree rather than the whole server, for a reason worth
 knowing before adding routes: nosurf sets a token cookie on every response it handles, and
-the catalog fragments to come have to stay cookie-free to be droppable into another origin's
-page. Scoping it by subtree also means the payment callback — which cannot carry a token, and
-must never require one — will be exempt by not being in the group at all, rather than by an
+the catalog reads have to stay cookie-free to be droppable into another origin's page.
+Scoping it by subtree also means the payment callback — which cannot carry a token, and must
+never require one — will be exempt by not being in the group at all, rather than by an
 exempt-path string that has to keep matching the route.
 
 nosurf also requires that an unsafe request identify its origin, via `Sec-Fetch-Site`,
@@ -180,12 +181,58 @@ make seed SEED_FILE=my-catalog.json
 
 `testdata/products.json` is generic sample data: fictional titles, no real contact details.
 
+## Storefront
+
+| Route | Serves |
+|---|---|
+| `GET /products` | The catalog |
+| `GET /products/{slug}` | One product, with its variants |
+
+Both are **read-only and set no cookies**, and both answer twice over: a full page for an
+ordinary visit, and a bare fragment when htmx asks (`HX-Request: true`, unless `HX-Boosted`
+says the browser is replacing the whole document). One URL serves the store and an embedder,
+so there is no second API to keep in step.
+
+Only active products with at least one active variant appear; an inactive product is a `404`,
+not an unlinked page. Sold-out variants are *shown* and marked unavailable rather than
+hidden, because a size vanishing from a selector reads as a bug to whoever is looking for it.
+
+### Embedding the catalog elsewhere
+
+Set `EMBED_ORIGINS` to the origins allowed to fetch the fragments, and they can be dropped
+into a page on another domain:
+
+```html
+<div hx-get="https://store.example.com/products" hx-trigger="load"></div>
+```
+
+That is the whole integration. It works because the fragments need no cookie: `EMBED_ORIGINS`
+controls both the CORS allowance and the CSP's `frame-ancestors`, and no credentialed CORS
+header is ever sent, so a permissive origin list cannot become a way to act as somebody.
+
+Everything from "add to cart" onward stays first-party on the store's own domain. That keeps
+the cart cookie first-party and sidesteps `SameSite=None`, third-party cookie blocking and
+iframe checkout entirely — the split is a feature of the design, not a limitation of it.
+
+
 ### Theming
 
 The default templates are plain, unstyled and meant to be replaced. Set `TEMPLATE_DIR` to
 a directory containing `*.html` files; any file whose name matches an embedded template
 replaces it, and the rest fall back to the defaults. Overrides are read at startup, so a
 change needs a restart but never a rebuild.
+
+Overriding is per *template*, not per page: a file defining `{{define "products_list"}}`
+replaces the catalog listing wherever it appears, including inside the default full page.
+
+### Static assets
+
+htmx is vendored into the binary rather than loaded from a CDN, so the store works offline,
+the CSP stays `script-src 'self'`, and no third-party origin sits near the payment path.
+Asset URLs carry a hash of the file's contents (`/static/htmx.min.js?v=71ea67185bfa`) and are
+served `immutable`, so upgrading the file invalidates every cached copy by itself. See
+[`internal/handler/static/README.md`](internal/handler/static/README.md) for the provenance
+of the vendored bytes and how to verify a replacement.
 
 ## Dependencies
 
@@ -290,8 +337,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 1. **Skeleton** — config, migration runner, compose, Dockerfile, `/healthz`, CI ← *done*
 2. **Catalog** — products and variants, seed command, admin CRUD ← *done*
 3. **Admin auth** — signed session cookie, `RequireAdmin`, `cmd/hashpw` ← *done*
-4. Storefront reads and htmx ← *next*
-5. Cart
+4. **Storefront reads** — `/products` pages and fragments, vendored htmx, CORS ← *done*
+5. Cart ← *next*
 6. Checkout + PayFast
 7. Order emails + admin orders
 8. Images (object storage)

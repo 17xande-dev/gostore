@@ -52,6 +52,8 @@ func funcs() template.FuncMap {
 		// Amounts are cents everywhere in Go; the decimal point exists only in
 		// the rendered page.
 		"money": catalog.FormatPrice,
+		// asset resolves a vendored file to its content-addressed URL.
+		"asset": assetURL,
 	}
 }
 

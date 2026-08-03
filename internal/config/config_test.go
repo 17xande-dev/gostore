@@ -135,6 +135,53 @@ func TestLoad_PreviousSessionSecret(t *testing.T) {
 	}
 }
 
+func TestLoad_EmbedOrigins(t *testing.T) {
+	setRequired(t)
+
+	// Unset means no embedding, which is the right default for a store only ever
+	// browsed on its own domain.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.AllowsEmbedding() {
+		t.Error("embedding is allowed with EMBED_ORIGINS unset")
+	}
+
+	t.Setenv("EMBED_ORIGINS", " https://cms.example , https://www.cms.example:8443 ")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"https://cms.example", "https://www.cms.example:8443"}
+	if len(c.EmbedOrigins) != len(want) {
+		t.Fatalf("EmbedOrigins = %v, want %v", c.EmbedOrigins, want)
+	}
+	for i := range want {
+		if c.EmbedOrigins[i] != want[i] {
+			t.Errorf("EmbedOrigins[%d] = %q, want %q", i, c.EmbedOrigins[i], want[i])
+		}
+	}
+	if !c.AllowsEmbedding() {
+		t.Error("AllowsEmbedding() is false with two origins configured")
+	}
+
+	t.Setenv("EMBED_ORIGINS", "*")
+	if c, err = Load(); err != nil || len(c.EmbedOrigins) != 1 || c.EmbedOrigins[0] != "*" {
+		t.Errorf("wildcard: %v, %v", c.EmbedOrigins, err)
+	}
+
+	// These are compared literally against an Origin header, so anything that
+	// could never match one is a misconfiguration worth failing on now.
+	for _, bad := range []string{"cms.example", "https://cms.example/", "https://cms.example/embed", "://nope"} {
+		setRequired(t)
+		t.Setenv("EMBED_ORIGINS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("EMBED_ORIGINS %q was accepted", bad)
+		}
+	}
+}
+
 func TestLoad_SessionTTL(t *testing.T) {
 	setRequired(t)
 	t.Setenv("SESSION_TTL_HOURS", "8")

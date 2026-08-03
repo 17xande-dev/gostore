@@ -1,0 +1,36 @@
+{{/*
+  The full catalog page, for a visit to the store itself. The list inside it is
+  its own template, so the same URL can serve just that fragment to an htmx
+  request — including one coming from a page on another origin.
+*/}}
+{{define "products"}}
+{{template "head" .}}
+
+<h1>{{.StoreName}}</h1>
+{{template "products_list" .}}
+
+{{template "foot" .}}
+{{end}}
+
+{{define "products_list"}}
+{{if not .Products}}
+  <p>Nothing for sale yet.</p>
+{{else}}
+<ul>
+  {{range .Products}}
+  <li>
+    {{if .ImageURL}}<img src="{{.ImageURL}}" alt="{{.Title}}" width="120">{{end}}
+    <a href="/products/{{.Slug}}" hx-boost="true">{{.Title}}</a>
+    <span>
+      {{if .OnePrice}}
+        {{$.Currency}} {{money .MinPriceCents}}
+      {{else}}
+        {{$.Currency}} {{money .MinPriceCents}} – {{money .MaxPriceCents}}
+      {{end}}
+    </span>
+    {{if not .InStock}}<span>Sold out</span>{{end}}
+  </li>
+  {{end}}
+</ul>
+{{end}}
+{{end}}

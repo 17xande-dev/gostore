@@ -7,6 +7,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -53,9 +54,18 @@ type Config struct {
 	// development cannot use them.
 	CookieSecure bool
 
+	// EmbedOrigins are the origins allowed to fetch the read-only catalog
+	// fragments cross-origin, for dropping the catalog into a page hosted
+	// elsewhere. Empty means no CORS headers at all, which is the right default
+	// for a store that is only ever browsed on its own domain.
+	EmbedOrigins []string
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
 }
+
+// AllowsEmbedding reports whether any origin may fetch the catalog fragments.
+func (c Config) AllowsEmbedding() bool { return len(c.EmbedOrigins) > 0 }
 
 // Load reads configuration from the environment, applying defaults and
 // returning an error listing every missing or malformed required value.
@@ -124,6 +134,23 @@ func Load() (Config, error) {
 	case "debug", "info", "warn", "error":
 	default:
 		return Config{}, fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error; got %q", c.LogLevel)
+	}
+
+	// Origins are compared literally against the browser's Origin header, so a
+	// trailing slash or a path in one of these would never match anything and is
+	// better reported now than debugged later.
+	for _, origin := range strings.Split(os.Getenv("EMBED_ORIGINS"), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		if origin != "*" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Scheme == "" || u.Host == "" || u.Path != "" {
+				return Config{}, fmt.Errorf("config: EMBED_ORIGINS entry %q must be scheme://host[:port] with no path", origin)
+			}
+		}
+		c.EmbedOrigins = append(c.EmbedOrigins, origin)
 	}
 
 	if c.TemplateDir != "" {

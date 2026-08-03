@@ -1,0 +1,49 @@
+{{define "product"}}
+{{template "head" .}}
+
+<p><a href="/products" hx-boost="true">← All products</a></p>
+{{template "product_detail" .}}
+
+{{template "foot" .}}
+{{end}}
+
+{{define "product_detail"}}
+{{with .Product}}
+<article>
+  <h1>{{.Title}}</h1>
+  {{if .ImageURL}}<img src="{{.ImageURL}}" alt="{{.Title}}" width="320">{{end}}
+  {{with .Description}}<p>{{.}}</p>{{end}}
+
+  {{/*
+    One variant with no options is a product with nothing to choose — a book,
+    typically — so it shows a price rather than a selector nobody needs. The
+    data model does not branch here; only the presentation does.
+  */}}
+  {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
+    {{with index .Variants 0}}
+      <p>{{$.Currency}} {{money .PriceCents}}</p>
+      <p>{{if .InStock}}In stock{{else}}Sold out{{end}}</p>
+    {{end}}
+  {{else}}
+    <table border="1" cellpadding="4">
+      <thead><tr><th>Option</th><th>Price</th><th>Availability</th></tr></thead>
+      <tbody>
+      {{range .Variants}}
+        <tr>
+          <td>{{.Label}}</td>
+          <td>{{$.Currency}} {{money .PriceCents}}</td>
+          <td>{{if .InStock}}In stock{{else}}Sold out{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+
+  {{/*
+    Adding to a cart arrives in the next phase, and deliberately not here: this
+    template is served cross-origin, and anything that changes state has to be
+    first-party on the store's own domain.
+  */}}
+</article>
+{{end}}
+{{end}}

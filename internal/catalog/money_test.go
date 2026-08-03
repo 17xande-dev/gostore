@@ -79,6 +79,53 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+func TestProductPricingHelpers(t *testing.T) {
+	// No variants loaded: the helpers must not panic or invent a price.
+	var bare Product
+	if bare.MinPriceCents() != 0 || bare.MaxPriceCents() != 0 || bare.InStock() || bare.TotalStock() != 0 {
+		t.Error("a product with no variants does not read as empty")
+	}
+	if !bare.OnePrice() {
+		t.Error("OnePrice() should be trivially true with nothing to compare")
+	}
+
+	one := Product{Variants: []Variant{{PriceCents: 24900, StockQty: 3}}}
+	if one.MinPriceCents() != 24900 || one.MaxPriceCents() != 24900 || !one.OnePrice() {
+		t.Errorf("single variant: %d–%d, OnePrice=%v", one.MinPriceCents(), one.MaxPriceCents(), one.OnePrice())
+	}
+
+	// The lowest price is not the first row, so a helper that returns
+	// Variants[0] would pass a laxer test than this one.
+	many := Product{Variants: []Variant{
+		{PriceCents: 31900, StockQty: 0},
+		{PriceCents: 19900, StockQty: 0},
+		{PriceCents: 34900, StockQty: 2},
+	}}
+	if many.MinPriceCents() != 19900 {
+		t.Errorf("MinPriceCents = %d, want 19900", many.MinPriceCents())
+	}
+	if many.MaxPriceCents() != 34900 {
+		t.Errorf("MaxPriceCents = %d, want 34900", many.MaxPriceCents())
+	}
+	if many.OnePrice() {
+		t.Error("OnePrice() is true across three different prices")
+	}
+	if !many.InStock() {
+		t.Error("InStock() is false although the last variant has stock")
+	}
+	if many.TotalStock() != 2 {
+		t.Errorf("TotalStock = %d, want 2", many.TotalStock())
+	}
+
+	soldOut := Product{Variants: []Variant{{PriceCents: 100}, {PriceCents: 100}}}
+	if soldOut.InStock() {
+		t.Error("InStock() is true with every variant at zero")
+	}
+	if !soldOut.OnePrice() {
+		t.Error("OnePrice() is false for two identically priced variants")
+	}
+}
+
 func TestVariantLabel(t *testing.T) {
 	cases := []struct {
 		v    Variant
