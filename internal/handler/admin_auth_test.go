@@ -78,7 +78,7 @@ func TestAdminAuth_AllowsWithValidCookie(t *testing.T) {
 	if cookie.Path != "/admin" {
 		t.Errorf("Path = %q, want /admin", cookie.Path)
 	}
-	if _, err := auth.VerifySession(testConfig().SessionSecret, cookie.Value, time.Now()); err != nil {
+	if _, err := testSessions(t).Verify(cookie.Value, time.Now()); err != nil {
 		t.Errorf("the issued cookie does not verify: %v", err)
 	}
 
@@ -153,14 +153,21 @@ func TestAdminAuth_ExpiredSessionIsRejected(t *testing.T) {
 
 	// A session that was genuinely issued, by this deployment's secret, but has
 	// run out. The expiry is signed, so a client cannot extend it.
+	cfg := testConfig()
+	shortLived, err := auth.NewSessions(cfg.SessionSecret, nil, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("NewSessions: %v", err)
+	}
+	value, err := shortLived.Issue(time.Now())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/admin/products", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req.AddCookie(&http.Cookie{
-		Name:  auth.CookieName,
-		Value: auth.IssueSession(testConfig().SessionSecret, -time.Second, time.Now()),
-	})
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: value})
 
 	res, _ := do(t, srv, req)
 	if res.StatusCode != http.StatusSeeOther {

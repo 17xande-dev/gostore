@@ -2,83 +2,171 @@ package auth
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/securecookie"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var testSecret = bytes.Repeat([]byte("k"), MinSecretLen)
+var (
+	testSecret = bytes.Repeat([]byte("k"), MinSecretLen)
+	otherKey   = bytes.Repeat([]byte("j"), MinSecretLen)
+)
 
-func TestSession_RoundTrips(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-
-	value := IssueSession(testSecret, time.Hour, now)
-	expiry, err := VerifySession(testSecret, value, now)
+func newTestSessions(t *testing.T, secret, previous []byte, ttl time.Duration) *Sessions {
+	t.Helper()
+	s, err := NewSessions(secret, previous, ttl)
 	if err != nil {
-		t.Fatalf("VerifySession: %v", err)
+		t.Fatalf("NewSessions: %v", err)
 	}
-	if want := now.Add(time.Hour); !expiry.Equal(want) {
-		t.Errorf("expiry = %s, want %s", expiry, want)
-	}
+	return s
+}
 
-	// Still valid a minute before it runs out, gone a second after.
-	if _, err := VerifySession(testSecret, value, now.Add(59*time.Minute)); err != nil {
-		t.Errorf("VerifySession before expiry: %v", err)
+func TestNewSessions_RejectsWeakInput(t *testing.T) {
+	short := bytes.Repeat([]byte("k"), MinSecretLen-1)
+	cases := map[string]struct {
+		secret, previous []byte
+		ttl              time.Duration
+	}{
+		"short secret":          {short, nil, time.Hour},
+		"short previous secret": {testSecret, short, time.Hour},
+		"no secret":             {nil, nil, time.Hour},
+		"zero ttl":              {testSecret, nil, 0},
+		"negative ttl":          {testSecret, nil, -time.Hour},
 	}
-	if _, err := VerifySession(testSecret, value, now.Add(time.Hour+time.Second)); !errors.Is(err, ErrExpired) {
-		t.Errorf("VerifySession after expiry = %v, want ErrExpired", err)
+	for name, tc := range cases {
+		if _, err := NewSessions(tc.secret, tc.previous, tc.ttl); err == nil {
+			t.Errorf("%s: NewSessions accepted it", name)
+		}
 	}
 }
 
-func TestVerifySession_RejectsForgeries(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	value := IssueSession(testSecret, time.Hour, now)
-	payload, mac, _ := strings.Cut(value, ".")
+func TestSession_RoundTrips(t *testing.T) {
+	s := newTestSessions(t, testSecret, nil, time.Hour)
+	now := time.Now()
 
-	// Extending the expiry is the attack that matters: the payload is readable
-	// and editable by anyone holding the cookie, so only the signature stops it.
-	farFuture := base64.RawURLEncoding.EncodeToString(
-		[]byte(strconv.FormatInt(now.Add(100*24*time.Hour).Unix(), 10)))
+	value, err := s.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
 
+	expiry, err := s.Verify(value, now)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	// Whole seconds: the expiry is carried as a unix timestamp.
+	if want := now.Add(time.Hour).Truncate(time.Second); !expiry.Equal(want) {
+		t.Errorf("expiry = %s, want %s", expiry, want)
+	}
+
+	if _, err := s.Verify(value, now.Add(59*time.Minute)); err != nil {
+		t.Errorf("Verify before expiry: %v", err)
+	}
+	if _, err := s.Verify(value, now.Add(time.Hour+2*time.Second)); !errors.Is(err, ErrExpired) {
+		t.Errorf("Verify after expiry = %v, want ErrExpired", err)
+	}
+}
+
+func TestVerify_RejectsForgeries(t *testing.T) {
+	s := newTestSessions(t, testSecret, nil, time.Hour)
+	now := time.Now()
+
+	value, err := s.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	// The encoded form is base64 over "timestamp|payload|mac", so there is no
+	// separately submittable payload to strip — truncating or flipping a byte is
+	// what tampering actually looks like here.
 	cases := map[string]string{
-		"empty":              "",
-		"no separator":       payload + mac,
-		"payload rewritten":  farFuture + "." + mac,
-		"signature dropped":  payload + ".",
-		"signature garbage":  payload + "." + base64.RawURLEncoding.EncodeToString([]byte("nope")),
-		"not base64":         "!!!.???",
-		"payload not a time": base64.RawURLEncoding.EncodeToString([]byte("soon")) + "." + mac,
+		"empty":        "",
+		"garbage":      "not-a-cookie",
+		"truncated":    value[:len(value)-4],
+		"flipped byte": flipLast(value),
 	}
 	for name, bad := range cases {
-		if _, err := VerifySession(testSecret, bad, now); err == nil {
-			t.Errorf("%s: VerifySession accepted %q", name, bad)
+		if _, err := s.Verify(bad, now); err == nil {
+			t.Errorf("%s: Verify accepted %q", name, bad)
 		}
 	}
 
-	// A value signed with a different secret — another deployment's cookie, or
-	// a rotated secret — must not verify here.
-	other := IssueSession(bytes.Repeat([]byte("j"), MinSecretLen), time.Hour, now)
-	if _, err := VerifySession(testSecret, other, now); err == nil {
+	// Another deployment's cookie, or one signed with a rotated-out key.
+	other := newTestSessions(t, otherKey, nil, time.Hour)
+	otherValue, err := other.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := s.Verify(otherValue, now); err == nil {
 		t.Error("a session signed with another secret was accepted")
 	}
-	if _, err := VerifySession(testSecret, value, now); err != nil {
+
+	// The genuine value still works, so none of the above was a false pass.
+	if _, err := s.Verify(value, now); err != nil {
 		t.Errorf("the genuine value stopped verifying: %v", err)
 	}
 }
 
-func TestVerifySession_ExpiryIsSignedNotJustCookieMetadata(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
+func TestVerify_MACCoversTheCookieName(t *testing.T) {
+	// securecookie signs the name along with the value, so a value lifted from
+	// a different cookie of ours could not be replayed as a session. Prove the
+	// property holds by verifying under a different name.
+	s := newTestSessions(t, testSecret, nil, time.Hour)
+	now := time.Now()
 
-	// An already-expired session reports ErrExpired rather than a signature
-	// failure, so a handler can tell "signed out" from "tampered with".
-	value := IssueSession(testSecret, -time.Minute, now)
-	if _, err := VerifySession(testSecret, value, now); !errors.Is(err, ErrExpired) {
-		t.Errorf("VerifySession = %v, want ErrExpired", err)
+	value, err := s.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	var payload string
+	if err := decodeUnderName("some_other_cookie", value, &payload, testSecret); err == nil {
+		t.Error("the session value verified under a different cookie name")
+	}
+}
+
+func TestSession_PreviousSecretVerifiesButDoesNotSign(t *testing.T) {
+	now := time.Now()
+
+	// Before rotation: a session signed with the old secret.
+	old := newTestSessions(t, otherKey, nil, time.Hour)
+	oldValue, err := old.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	// After rotation: new secret signs, old secret still verifies, so the
+	// operator is not signed out by a deploy.
+	rotated := newTestSessions(t, testSecret, otherKey, time.Hour)
+	if _, err := rotated.Verify(oldValue, now); err != nil {
+		t.Errorf("a session from the previous secret was rejected: %v", err)
+	}
+
+	newValue, err := rotated.Issue(now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := rotated.Verify(newValue, now); err != nil {
+		t.Errorf("a freshly issued session does not verify: %v", err)
+	}
+	// New sessions must be signed with the new secret only: once the previous
+	// secret is dropped from the config, they have to keep working.
+	current := newTestSessions(t, testSecret, nil, time.Hour)
+	if _, err := current.Verify(newValue, now); err != nil {
+		t.Errorf("a session issued after rotation was signed with the old secret: %v", err)
+	}
+	if _, err := old.Verify(newValue, now); err == nil {
+		t.Error("a session issued after rotation still verifies under the old secret alone")
+	}
+}
+
+func TestTTL(t *testing.T) {
+	s := newTestSessions(t, testSecret, nil, 3*time.Hour)
+	if s.TTL() != 3*time.Hour {
+		t.Errorf("TTL() = %s, want 3h", s.TTL())
 	}
 }
 
@@ -124,4 +212,24 @@ func TestHashPassword_IsSalted(t *testing.T) {
 	if a == b {
 		t.Error("two hashes of the same password are identical; the salt is not doing its job")
 	}
+}
+
+// decodeUnderName verifies a cookie value as if it had come from a differently
+// named cookie, which is what the name-binding test needs and the package's own
+// API deliberately does not expose.
+func decodeUnderName(name, value string, dst *string, secret []byte) error {
+	return securecookie.DecodeMulti(name, value, dst, securecookie.New(secret, nil))
+}
+
+func flipLast(s string) string {
+	if s == "" {
+		return s
+	}
+	b := []byte(s)
+	if b[len(b)-1] == 'A' {
+		b[len(b)-1] = 'B'
+	} else {
+		b[len(b)-1] = 'A'
+	}
+	return string(b)
 }

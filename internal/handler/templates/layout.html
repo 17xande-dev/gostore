@@ -14,7 +14,6 @@
 <body>
 <header>
   <strong>{{.StoreName}}</strong>
-  <nav><a href="/admin/products">Products</a></nav>
 </header>
 <main>
 {{end}}
@@ -30,8 +29,19 @@
   login page does not offer to sign out of a session it does not have.
 */}}
 {{define "adminnav"}}
-<form method="post" action="/admin/logout"><button type="submit">Sign out</button></form>
+<nav><a href="/admin/products">Products</a></nav>
+<form method="post" action="/admin/logout">
+  {{template "csrf" .CSRFToken}}
+  <button type="submit">Sign out</button>
+</form>
 {{end}}
+
+{{/*
+  csrf renders the hidden field nosurf checks. Every form that changes anything
+  needs it; a form without one gets a 403, which is the intended failure but an
+  annoying one to debug, so it is a named template rather than copied markup.
+*/}}
+{{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
 
 {{/* err renders the message for one field, if the form recorded one. */}}
 {{define "err"}}{{with .}}<p><small><strong>{{.}}</strong></small></p>{{end}}{{end}}

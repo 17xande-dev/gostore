@@ -7,23 +7,70 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/validate"
+	"github.com/justinas/nosurf"
 )
 
 // Handler holds everything the HTTP layer needs. It is created once at startup
 // and is safe for concurrent use.
 type Handler struct {
-	cfg  config.Config
-	log  *slog.Logger
-	tmpl *Templates
-	cat  *catalog.Store
+	cfg      config.Config
+	log      *slog.Logger
+	tmpl     *Templates
+	cat      *catalog.Store
+	sessions *auth.Sessions
 }
 
-func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store) *Handler {
-	return &Handler{cfg: cfg, log: log, tmpl: tmpl, cat: cat}
+func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, sessions *auth.Sessions) *Handler {
+	return &Handler{cfg: cfg, log: log, tmpl: tmpl, cat: cat, sessions: sessions}
+}
+
+// AdminHandler returns the whole /admin subtree: the routes, plus CSRF
+// protection over them.
+//
+// CSRF is scoped to this subtree rather than wrapped around the server's whole
+// mux, because nosurf sets a token cookie on every response it handles and the
+// embeddable catalog fragments must stay cookie-free to be droppable into
+// another origin's page. Scoping by group also means the payment callback is
+// CSRF-exempt by not being in the group at all, instead of by an exempt-path
+// string that has to keep matching the route.
+func (h *Handler) AdminHandler(protect middleware.Middleware) http.Handler {
+	mux := http.NewServeMux()
+	h.RegisterAdmin(mux, protect)
+
+	csrf := nosurf.New(mux)
+	csrf.SetBaseCookie(http.Cookie{
+		Path:     "/admin",
+		HttpOnly: true,
+		Secure:   h.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   nosurf.MaxAge,
+	})
+	csrf.SetFailureHandler(http.HandlerFunc(h.csrfFailed))
+
+	// nosurf compares a request's Origin against one it builds from the Host
+	// header, and assumes https unless told otherwise — so without this every
+	// form on a plain-HTTP deployment is rejected as cross-origin. BaseURL is
+	// the right signal rather than r.TLS: behind a TLS-terminating proxy the
+	// connection is plain HTTP but the browser's origin is https.
+	csrf.SetIsTLSFunc(func(*http.Request) bool { return h.cfg.CookieSecure })
+	return csrf
+}
+
+// csrfFailed answers a request whose CSRF token was missing or wrong. It is a
+// 403 and nothing else: the request was either forged or made with a stale form,
+// and neither case should be retried silently.
+func (h *Handler) csrfFailed(w http.ResponseWriter, r *http.Request) {
+	h.log.Warn("rejected request with a bad CSRF token",
+		"method", r.Method, "path", r.URL.Path, "reason", nosurf.Reason(r))
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Refresh", "true")
+	}
+	http.Error(w, "the form you submitted has expired; reload the page and try again", http.StatusForbidden)
 }
 
 // RegisterAdmin wires the admin routes: the login form and the sign-out
@@ -55,17 +102,32 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products/{id}/variants/{variantID}/delete", h.adminVariantDelete)
 }
 
-type productsPage struct {
+// page is what every rendered page needs regardless of what it shows. It is
+// embedded rather than repeated so that adding something universal — the CSRF
+// token was exactly this — is one change, not one per page.
+type page struct {
 	Title     string
 	StoreName string
 	Currency  string
-	Products  []catalog.Product
+	CSRFToken string
+}
+
+func (h *Handler) newPage(r *http.Request, title string) page {
+	return page{
+		Title:     title,
+		StoreName: h.cfg.StoreName,
+		Currency:  h.cfg.Currency,
+		CSRFToken: nosurf.Token(r),
+	}
+}
+
+type productsPage struct {
+	page
+	Products []catalog.Product
 }
 
 type productFormPage struct {
-	Title     string
-	StoreName string
-	Currency  string
+	page
 
 	IsNew   bool
 	Product catalog.Product
@@ -98,15 +160,13 @@ func (h *Handler) adminProductList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, r, http.StatusOK, "admin_products", productsPage{
-		Title:     "Products",
-		StoreName: h.cfg.StoreName,
-		Currency:  h.cfg.Currency,
-		Products:  products,
+		page:     h.newPage(r, "Products"),
+		Products: products,
 	})
 }
 
 func (h *Handler) adminProductNew(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(catalog.Product{Active: true}, true, nil))
+	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, catalog.Product{Active: true}, true, nil))
 }
 
 func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +176,7 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if errs := validate.Product(p); errs.Any() {
-		h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(p, true, errs))
+		h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, true, errs))
 		return
 	}
 
@@ -125,7 +185,7 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
 			errs := validate.FormErrors{}
 			errs.Add(conflict.Field, "Already used by another product.")
-			h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(p, true, errs))
+			h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, true, errs))
 			return
 		}
 		h.serverError(w, r, err)
@@ -143,7 +203,7 @@ func (h *Handler) adminProductEdit(w http.ResponseWriter, r *http.Request) {
 		h.storeError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(p, false, nil))
+	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, p, false, nil))
 }
 
 func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +247,7 @@ func (h *Handler) adminProductDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		errs := validate.FormErrors{}
 		errs.Add("delete", "This product has been ordered and cannot be deleted. Deactivate it instead.")
-		h.render(w, r, http.StatusConflict, "admin_product_form", h.productForm(p, false, errs))
+		h.render(w, r, http.StatusConflict, "admin_product_form", h.productForm(r, p, false, errs))
 	default:
 		h.storeError(w, r, err)
 	}
@@ -323,15 +383,13 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.
 	return v, form, errs, true
 }
 
-func (h *Handler) productForm(p catalog.Product, isNew bool, errs validate.FormErrors) productFormPage {
+func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, errs validate.FormErrors) productFormPage {
 	title := "Edit product"
 	if isNew {
 		title = "New product"
 	}
 	return productFormPage{
-		Title:       title,
-		StoreName:   h.cfg.StoreName,
-		Currency:    h.cfg.Currency,
+		page:        h.newPage(r, title),
 		IsNew:       isNew,
 		Product:     p,
 		Errors:      errs,
@@ -348,7 +406,7 @@ func (h *Handler) renderProductForm(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	p.Variants = variants
-	h.render(w, r, status, "admin_product_form", h.productForm(p, false, errs))
+	h.render(w, r, status, "admin_product_form", h.productForm(r, p, false, errs))
 }
 
 // renderVariantErrors re-renders the edit page after a variant form was
@@ -360,7 +418,7 @@ func (h *Handler) renderVariantErrors(w http.ResponseWriter, r *http.Request, st
 		h.storeError(w, r, err)
 		return
 	}
-	page := h.productForm(p, false, nil)
+	page := h.productForm(r, p, false, nil)
 	page.VariantForm = form
 	page.VariantErrors = errs
 	page.VariantErrorID = variantID

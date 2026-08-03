@@ -6,6 +6,7 @@
 {{template "err" .Error}}
 
 <form method="post" action="/admin/login">
+  {{template "csrf" .CSRFToken}}
   <p>
     <label>Password<br>
       <input type="password" name="password" autocomplete="current-password" autofocus required>

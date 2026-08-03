@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
@@ -76,11 +77,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool))
+	sessions, err := auth.NewSessions(cfg.SessionSecret, cfg.SessionSecretPrevious, cfg.SessionTTL)
+	if err != nil {
+		return err
+	}
+	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), sessions)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, pool, log),
+		Handler:           routes(h, sessions, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -120,10 +125,15 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 	return nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(h *handler.Handler, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
-	h.RegisterAdmin(mux, middleware.RequireAdmin(cfg.SessionSecret, log))
+
+	// The admin is mounted as a subtree so CSRF protection, and the cookie
+	// nosurf needs to set for it, apply there and nowhere else. Storefront
+	// routes stay outside it: the catalog fragments are embeddable
+	// cross-origin, which means cookie-free.
+	mux.Handle("/admin/", h.AdminHandler(middleware.RequireAdmin(sessions, log)))
 	return mux
 }
 

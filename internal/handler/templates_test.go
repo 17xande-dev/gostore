@@ -18,8 +18,9 @@ func TestParseTemplates_EmbeddedDefaultsRender(t *testing.T) {
 	// Every page the handlers name must exist and execute, or the failure only
 	// shows up as a 500 on a live request.
 	pages := map[string]any{
-		"admin_products":     productsPage{Title: "Products", StoreName: "Test Store"},
-		"admin_product_form": productFormPage{Title: "New product", StoreName: "Test Store", IsNew: true},
+		"admin_products":     productsPage{page: page{Title: "Products", StoreName: "Test Store"}},
+		"admin_product_form": productFormPage{page: page{Title: "New product", StoreName: "Test Store"}, IsNew: true},
+		"admin_login":        loginPage{page: page{Title: "Sign in", StoreName: "Test Store"}},
 	}
 	for name, data := range pages {
 		w := httptest.NewRecorder()

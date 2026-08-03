@@ -46,13 +46,21 @@ services:
 
   server:
     build: .
+    # Anything in a local .env overrides the development defaults below, which
+    # is what makes "copy .env.example to .env and edit" actually do something.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      PORT: "8080"
+      # Deliberately not interpolated: inside compose the server must reach the
+      # postgres service, whatever DATABASE_URL a local .env sets for host-side
+      # runs. Everything else below takes a .env value when there is one.
       DATABASE_URL: postgres://gostore:gostore@postgres:5432/gostore?sslmode=disable
-      BASE_URL: http://localhost:8080
-      STORE_NAME: gostore
-      CURRENCY: ZAR
-      LOG_LEVEL: debug
+      PORT: "8080"
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      STORE_NAME: ${STORE_NAME:-gostore}
+      CURRENCY: ${CURRENCY:-ZAR}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
       # Development credentials, published on purpose so `make up` yields a
       # working admin: the password is "gostore". Both values MUST be replaced
       # for any deployment anyone else can reach — see the README.

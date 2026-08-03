@@ -106,6 +106,35 @@ func TestLoad_RejectsWeakSessionSecret(t *testing.T) {
 	}
 }
 
+func TestLoad_PreviousSessionSecret(t *testing.T) {
+	setRequired(t)
+
+	// Unset is the normal case: no rotation in progress.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.SessionSecretPrevious != nil {
+		t.Errorf("SessionSecretPrevious = %v with the var unset, want nil", c.SessionSecretPrevious)
+	}
+
+	t.Setenv("SESSION_SECRET_PREVIOUS", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load with a previous secret: %v", err)
+	}
+	if len(c.SessionSecretPrevious) != 32 {
+		t.Errorf("SessionSecretPrevious is %d bytes, want 32", len(c.SessionSecretPrevious))
+	}
+
+	// A weak previous secret is as bad as a weak current one — it can still
+	// sign a session that verifies.
+	t.Setenv("SESSION_SECRET_PREVIOUS", "c2hvcnQ=")
+	if _, err := Load(); err == nil {
+		t.Error("a too-short SESSION_SECRET_PREVIOUS was accepted")
+	}
+}
+
 func TestLoad_SessionTTL(t *testing.T) {
 	setRequired(t)
 	t.Setenv("SESSION_TTL_HOURS", "8")

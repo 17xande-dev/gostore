@@ -13,6 +13,30 @@ import (
 
 var testSecret = bytes.Repeat([]byte("k"), auth.MinSecretLen)
 
+func testSessions(t *testing.T, secret []byte) *auth.Sessions {
+	t.Helper()
+	s, err := auth.NewSessions(secret, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("NewSessions: %v", err)
+	}
+	return s
+}
+
+// issue returns a session cookie value signed by secret, valid or already
+// expired depending on ttl.
+func issue(t *testing.T, secret []byte, ttl time.Duration) string {
+	t.Helper()
+	s, err := auth.NewSessions(secret, nil, ttl)
+	if err != nil {
+		t.Fatalf("NewSessions: %v", err)
+	}
+	value, err := s.Issue(time.Now())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	return value
+}
+
 // protected returns a handler wrapped in RequireAdmin, plus a pointer to a flag
 // that records whether the wrapped handler was ever reached.
 func protected(t *testing.T) (http.Handler, *bool) {
@@ -23,17 +47,14 @@ func protected(t *testing.T) (http.Handler, *bool) {
 		reached = true
 		w.Write([]byte("secret"))
 	})
-	return RequireAdmin(testSecret, slog.New(slog.DiscardHandler))(next), &reached
+	return RequireAdmin(testSessions(t, testSecret), slog.New(slog.DiscardHandler))(next), &reached
 }
 
 func TestRequireAdmin_AllowsWithValidCookie(t *testing.T) {
 	h, reached := protected(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/products", nil)
-	req.AddCookie(&http.Cookie{
-		Name:  auth.CookieName,
-		Value: auth.IssueSession(testSecret, time.Hour, time.Now()),
-	})
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: issue(t, testSecret, time.Hour)})
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -47,12 +68,12 @@ func TestRequireAdmin_AllowsWithValidCookie(t *testing.T) {
 
 func TestRequireAdmin_RedirectsUnauthenticated(t *testing.T) {
 	cases := map[string]*http.Cookie{
-		"no cookie":     nil,
-		"empty cookie":  {Name: auth.CookieName, Value: ""},
-		"forged cookie": {Name: auth.CookieName, Value: "bm93" + ".ZmFrZQ"},
-		"other deployment": {Name: auth.CookieName, Value: auth.IssueSession(
-			bytes.Repeat([]byte("j"), auth.MinSecretLen), time.Hour, time.Now())},
-		"expired": {Name: auth.CookieName, Value: auth.IssueSession(testSecret, -time.Minute, time.Now())},
+		"no cookie":        nil,
+		"empty cookie":     {Name: auth.CookieName, Value: ""},
+		"forged cookie":    {Name: auth.CookieName, Value: "bm93LmZha2U"},
+		"other deployment": {Name: auth.CookieName, Value: issue(t, bytes.Repeat([]byte("j"), auth.MinSecretLen), time.Hour)},
+		// Genuinely issued by this deployment, but its second has passed.
+		"expired": {Name: auth.CookieName, Value: issue(t, testSecret, time.Nanosecond)},
 	}
 
 	for name, cookie := range cases {

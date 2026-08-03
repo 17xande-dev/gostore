@@ -21,12 +21,12 @@ type Middleware func(http.Handler) http.Handler
 // htmx request is not: swapping a login page into a fragment of the current
 // page would produce a broken hybrid, so it gets a 401 and a header telling
 // htmx to reload the page properly.
-func RequireAdmin(secret []byte, log *slog.Logger) Middleware {
+func RequireAdmin(sessions *auth.Sessions, log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(auth.CookieName)
 			if err == nil {
-				if _, err := auth.VerifySession(secret, cookie.Value, time.Now()); err == nil {
+				if _, err := sessions.Verify(cookie.Value, time.Now()); err == nil {
 					next.ServeHTTP(w, r)
 					return
 				} else if !errors.Is(err, auth.ErrExpired) {

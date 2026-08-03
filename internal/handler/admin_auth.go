@@ -8,20 +8,19 @@ import (
 )
 
 type loginPage struct {
-	Title     string
-	StoreName string
-	Error     string
+	page
+	Error string
 }
 
 func (h *Handler) adminLoginForm(w http.ResponseWriter, r *http.Request) {
 	// Already signed in? Skip the form rather than inviting a second login.
 	if cookie, err := r.Cookie(auth.CookieName); err == nil {
-		if _, err := auth.VerifySession(h.cfg.SessionSecret, cookie.Value, time.Now()); err == nil {
+		if _, err := h.sessions.Verify(cookie.Value, time.Now()); err == nil {
 			http.Redirect(w, r, "/admin/products", http.StatusSeeOther)
 			return
 		}
 	}
-	h.render(w, r, http.StatusOK, "admin_login", loginPage{Title: "Sign in", StoreName: h.cfg.StoreName})
+	h.render(w, r, http.StatusOK, "admin_login", loginPage{page: h.newPage(r, "Sign in")})
 }
 
 func (h *Handler) adminLogin(w http.ResponseWriter, r *http.Request) {
@@ -36,14 +35,18 @@ func (h *Handler) adminLogin(w http.ResponseWriter, r *http.Request) {
 		// time; a per-IP rate limit lands in the hardening phase.
 		h.log.Warn("failed admin login", "remote", r.RemoteAddr)
 		h.render(w, r, http.StatusUnauthorized, "admin_login", loginPage{
-			Title:     "Sign in",
-			StoreName: h.cfg.StoreName,
-			Error:     "That password is not right.",
+			page:  h.newPage(r, "Sign in"),
+			Error: "That password is not right.",
 		})
 		return
 	}
 
-	http.SetCookie(w, h.sessionCookie(auth.IssueSession(h.cfg.SessionSecret, h.cfg.SessionTTL, time.Now()), h.cfg.SessionTTL))
+	value, err := h.sessions.Issue(time.Now())
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	http.SetCookie(w, h.sessionCookie(value, h.sessions.TTL()))
 	h.log.Info("admin signed in", "remote", r.RemoteAddr)
 	http.Redirect(w, r, "/admin/products", http.StatusSeeOther)
 }

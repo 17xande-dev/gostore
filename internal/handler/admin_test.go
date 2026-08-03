@@ -2,12 +2,14 @@ package handler
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -45,8 +47,19 @@ func testConfig() config.Config {
 	}
 }
 
-// newServer returns the admin routes, protected exactly as main.go protects
-// them, with a cookie jar but no session yet.
+func testSessions(t *testing.T) *auth.Sessions {
+	t.Helper()
+	cfg := testConfig()
+	s, err := auth.NewSessions(cfg.SessionSecret, nil, cfg.SessionTTL)
+	if err != nil {
+		t.Fatalf("NewSessions: %v", err)
+	}
+	return s
+}
+
+// newServer mounts the admin exactly as main.go does — same subtree, same CSRF
+// wrapper, same middleware — with a cookie jar but no session yet. Tests that
+// build their own routing would stop testing what actually runs.
 func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	t.Helper()
 
@@ -57,11 +70,12 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	cfg := testConfig()
-	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store)
+	log := slog.New(slog.DiscardHandler)
+	sessions := testSessions(t)
+	h := New(testConfig(), log, tmpl, store, sessions)
 
 	mux := http.NewServeMux()
-	h.RegisterAdmin(mux, middleware.RequireAdmin(cfg.SessionSecret, slog.New(slog.DiscardHandler)))
+	mux.Handle("/admin/", h.AdminHandler(middleware.RequireAdmin(sessions, log)))
 
 	srv := httptest.NewServer(mux)
 	jar, err := cookiejar.New(nil)
@@ -456,15 +470,59 @@ func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, strin
 	return do(t, srv, req)
 }
 
+// post submits a form with a valid CSRF token, so ordinary tests exercise the
+// same path a browser takes rather than being exempted from it. Pass a
+// csrf_token explicitly — including an empty one — to control it, which is how
+// the CSRF tests themselves get a rejection.
 func post(t *testing.T, srv *httptest.Server, path string, form url.Values) (*http.Response, string) {
 	t.Helper()
+
+	if form == nil {
+		form = url.Values{}
+	}
+	if _, set := form["csrf_token"]; !set {
+		form.Set("csrf_token", csrfToken(t, srv))
+	}
+
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// nosurf checks the request's origin as well as its token, via
+	// Sec-Fetch-Site, Origin or Referer — a browser sends all three on a
+	// same-origin form post, so a test that sends none is not emulating one.
+	req.Header.Set("Origin", srv.URL)
+	req.Header.Set("Referer", srv.URL+path)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	return do(t, srv, req)
 }
+
+// csrfToken reads a token out of a rendered form. nosurf validates the
+// submitted token against the client's cookie, so any token issued to this jar
+// works for any later request from it.
+//
+// Which page depends on whether the client is signed in: the login form
+// redirects away once it is, and the new-product form is unreachable until it
+// is. Between them one of the two always renders.
+func csrfToken(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+
+	res, body := get(t, srv, "/admin/login")
+	if res.StatusCode != http.StatusOK {
+		_, body = get(t, srv, "/admin/products/new")
+	}
+
+	m := csrfFieldRE.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no csrf_token field in the page: %s", body)
+	}
+	// The token is base64, so html/template entity-escapes any "+" in it. A
+	// browser decodes that before submitting; this has to do the same.
+	return html.UnescapeString(m[1])
+}
+
+var csrfFieldRE = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
 
 func do(t *testing.T, srv *httptest.Server, req *http.Request) (*http.Response, string) {
 	t.Helper()

@@ -42,6 +42,12 @@ type Config struct {
 	SessionSecret     []byte
 	SessionTTL        time.Duration
 
+	// SessionSecretPrevious, when set, is still accepted for verifying existing
+	// sessions but never used to sign new ones — so SESSION_SECRET can be
+	// rotated without signing the operator out. Remove it once every session
+	// signed with it has expired.
+	SessionSecretPrevious []byte
+
 	// CookieSecure is derived from BaseURL rather than configured separately:
 	// an HTTPS deployment always wants Secure cookies, and localhost
 	// development cannot use them.
@@ -86,15 +92,17 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
 	}
 
-	decoded, err := base64.StdEncoding.DecodeString(secret)
+	decoded, err := decodeSecret("SESSION_SECRET", secret)
 	if err != nil {
-		return Config{}, fmt.Errorf("config: SESSION_SECRET must be base64: %w", err)
-	}
-	if len(decoded) < auth.MinSecretLen {
-		return Config{}, fmt.Errorf("config: SESSION_SECRET decodes to %d bytes, want at least %d "+
-			"(generate one with `openssl rand -base64 32`)", len(decoded), auth.MinSecretLen)
+		return Config{}, err
 	}
 	c.SessionSecret = decoded
+	if prev := os.Getenv("SESSION_SECRET_PREVIOUS"); prev != "" {
+		c.SessionSecretPrevious, err = decodeSecret("SESSION_SECRET_PREVIOUS", prev)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 
 	if h, ok := os.LookupEnv("SESSION_TTL_HOURS"); ok {
 		n, err := strconv.Atoi(h)
@@ -127,6 +135,18 @@ func Load() (Config, error) {
 	}
 
 	return c, nil
+}
+
+func decodeSecret(name, value string) ([]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("config: %s must be base64: %w", name, err)
+	}
+	if len(decoded) < auth.MinSecretLen {
+		return nil, fmt.Errorf("config: %s decodes to %d bytes, want at least %d "+
+			"(generate one with `openssl rand -base64 32`)", name, len(decoded), auth.MinSecretLen)
+	}
+	return decoded, nil
 }
 
 // LoadTool loads what a database-only command-line tool needs, which is just
