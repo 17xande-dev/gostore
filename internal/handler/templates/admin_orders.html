@@ -1,0 +1,39 @@
+{{define "admin_orders"}}
+{{template "head" .}}
+{{template "adminnav" .}}
+
+<h1>Orders</h1>
+
+{{if not .Orders}}
+  <p>No orders yet.</p>
+{{else}}
+<table border="1" cellpadding="4">
+  <thead>
+    <tr>
+      <th>Placed</th><th>Reference</th><th>Customer</th>
+      <th>Total</th><th>Status</th><th>Emailed</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Orders}}
+    <tr>
+      <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+      <td><a href="/admin/orders/{{.ID}}">{{.Reference}}</a></td>
+      <td>{{.Customer.Name}}<br><small>{{.Customer.Email}}</small></td>
+      <td>{{$.Currency}} {{money .TotalCents}}</td>
+      {{/*
+        A pending order is the normal resting state of an abandoned checkout, so it
+        is not marked as a problem. Only paid orders need packing.
+      */}}
+      <td>{{if .Paid}}<strong>paid</strong>{{else}}{{.Status}}{{end}}</td>
+      <td>{{if .Emailed}}yes{{else}}no{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<p><small>Showing the {{.Limit}} most recent orders.</small></p>
+{{end}}
+
+{{template "foot" .}}
+{{end}}

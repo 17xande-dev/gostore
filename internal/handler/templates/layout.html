@@ -31,7 +31,11 @@
   login page does not offer to sign out of a session it does not have.
 */}}
 {{define "adminnav"}}
-<nav><a href="/admin/products">Products</a> · <a href="/products">Storefront</a></nav>
+<nav>
+  <a href="/admin/products">Products</a> ·
+  <a href="/admin/orders">Orders</a> ·
+  <a href="/products">Storefront</a>
+</nav>
 <form method="post" action="/admin/logout">
   {{template "csrf" .CSRFToken}}
   <button type="submit">Sign out</button>

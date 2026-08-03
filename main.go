@@ -20,6 +20,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
+	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/handler"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
@@ -90,8 +91,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	mail, err := newMailer(cfg, log)
+	if err != nil {
+		return err
+	}
 	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool),
-		orders.NewStore(pool), gateway, sessions)
+		orders.NewStore(pool), gateway, mail, sessions)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
@@ -169,6 +174,45 @@ func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 		AllowAnySourceIP: cfg.PayFast.AllowAnySourceIP,
 		Log:              log,
 	})
+}
+
+// newMailer builds the mail sender, or a Discard that logs what it drops.
+//
+// Mail being unconfigured is a warning and not a boot failure: the shop's job is to
+// take an order and record it, and that does not depend on a mail server. A store
+// that refused to start because SMTP was missing would trade a working shop for a
+// missing receipt.
+func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
+	if !cfg.SMTP.Configured() {
+		log.Warn("no SMTP configured: order confirmations will be logged and dropped, not sent",
+			"fix", "set SMTP_HOST and EMAIL_FROM")
+		return email.Discard{Log: log}, nil
+	}
+
+	policy, err := email.ParseTLSPolicy(cfg.SMTP.TLS)
+	if err != nil {
+		return nil, err
+	}
+	if policy == email.TLSNone {
+		log.Warn("SMTP TLS is disabled: credentials and order details go over the network in the clear",
+			"host", cfg.SMTP.Host)
+	}
+
+	sender, err := email.NewSMTPSender(email.SMTPConfig{
+		Host:     cfg.SMTP.Host,
+		Port:     cfg.SMTP.Port,
+		Username: cfg.SMTP.Username,
+		Password: cfg.SMTP.Password,
+		From:     cfg.SMTP.From,
+		ReplyTo:  cfg.SMTP.ReplyTo,
+		TLS:      policy,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Info("email configured", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port,
+		"from", cfg.SMTP.From, "tls", policy, "notify", cfg.OrderNotifyEmail)
+	return sender, nil
 }
 
 func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {

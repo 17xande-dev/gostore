@@ -1,0 +1,25 @@
+{{/*
+  The customer's receipt, plain text.
+
+  This is a text/template, not an html/template, so nothing here is escaped — an
+  ampersand in a product title has to arrive as an ampersand and not as &amp;.
+  That is the whole reason the email templates are a separate set. Override it by
+  putting a file of this name in TEMPLATE_DIR.
+*/ -}}
+Hello {{.Order.Customer.Name}},
+
+Thank you — we have received your payment for order {{.Order.Reference}}.
+
+{{range .Order.Items}}  {{.Quantity}} x {{.Title}}{{with .Label}} ({{.}}){{end}} — {{$.Currency}} {{money .LineTotalCents}}
+{{end}}
+  Total: {{.Currency}} {{money .Order.TotalCents}}
+
+Delivering to:
+
+{{.Order.Customer.Address}}
+
+We will be in touch about delivery. If anything above is wrong, reply to this
+email and quote order {{.Order.Reference}}.
+
+{{.StoreName}}
+{{.BaseURL}}

@@ -1,0 +1,30 @@
+{{/*
+  The shop owner's copy: a work order, not a receipt. It leads with what has to be
+  packed and where it is going, and puts the oversell warning above everything
+  because that is the one thing needing a decision before the parcel is made up.
+*/ -}}
+{{if .Oversold}}*** OVERSOLD — DO NOT PACK BEFORE READING ***
+
+The payment succeeded but there was not enough stock left for:
+{{range .Oversold}}  - {{.}}
+{{end}}
+Stock was left as it was rather than driven negative, so the counts in the admin
+are still right for what is physically on the shelf. Somebody has to decide
+whether to fulfil late or refund.
+
+{{end -}}
+Order {{.Order.Reference}} — {{.Currency}} {{money .Order.TotalCents}} — paid
+
+Pack:
+{{range .Order.Items}}  {{.Quantity}} x {{.Title}}{{with .Label}} ({{.}}){{end}}
+{{end}}
+Ship to:
+
+  {{.Order.Customer.Name}}
+{{.Order.Customer.Address}}
+
+  {{.Order.Customer.Email}}{{with .Order.Customer.Phone}}
+  {{.}}{{end}}
+
+Payment: {{.Order.Gateway}}{{with .Order.GatewayRef}}, reference {{.}}{{end}}
+Full order: {{.BaseURL}}/admin/orders/{{.Order.ID}}

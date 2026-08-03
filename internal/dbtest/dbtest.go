@@ -11,11 +11,23 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// calls counts how many pools each test has asked for, so a second call gets a
+// schema of its own.
+//
+// Without this, two Pool calls in one test derive the same schema name and the
+// second silently drops and recreates the first one's tables — the first pool
+// stays open and working, against an empty database, and whatever it had written
+// is gone. That is a genuinely baffling failure to debug, and it has happened
+// once already.
+var calls sync.Map // test name -> *atomic.Int64
 
 // Pool returns a pool whose search_path is a schema unique to this test, with
 // every migration already applied.
@@ -29,6 +41,10 @@ func Pool(t *testing.T) *pgxpool.Pool {
 
 	ctx := t.Context()
 	schema := "test_" + sanitize(t.Name())
+	counter, _ := calls.LoadOrStore(t.Name(), new(atomic.Int64))
+	if n := counter.(*atomic.Int64).Add(1); n > 1 {
+		schema = fmt.Sprintf("%s_%d", schema, n)
+	}
 
 	admin, err := pgxpool.New(ctx, url)
 	if err != nil {

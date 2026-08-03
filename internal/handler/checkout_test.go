@@ -7,34 +7,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/17xande-dev/gostore/internal/catalog"
+	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
 )
 
-// checkoutShop is a storefront with a stocked catalog, an anonymous shopper, and
-// both halves of the payment path visible to the test: the fake gateway the
-// checkout hands over to, and the order store the callback writes through.
-type checkoutShop struct {
-	srv      *httptest.Server
-	catalog  *catalog.Store
-	orders   *orders.Store
-	gateway  *payment.Fake
-	variants map[string]catalog.Variant
-}
-
-func newCheckoutShop(t *testing.T) *checkoutShop {
+// newCheckoutShop is a shop with a stocked catalog and an anonymous shopper — the
+// starting point for every test from "add to cart" onwards.
+func newCheckoutShop(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Helper()
-	srv, store, orderStore, gateway := newStore(t)
-	return &checkoutShop{
-		srv: srv, catalog: store, orders: orderStore, gateway: gateway,
-		variants: stockCart(t, store),
-	}
+	s := newStore(t, edit...)
+	s.variants = stockCart(t, s.catalog)
+	return s
 }
 
 // stockOf reads a variant's remaining stock straight from the catalog, which is
 // what "the shop has three left" actually means.
-func (s *checkoutShop) stockOf(t *testing.T, sku string) int {
+func (s *shop) stockOf(t *testing.T, sku string) int {
 	t.Helper()
 	p, err := s.catalog.GetBySlug(t.Context(), "tee")
 	if err != nil {

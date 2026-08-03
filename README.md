@@ -6,8 +6,8 @@ Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
-> storefront, the cart, and checkout against PayFast all work. Order confirmation emails
-> and the admin's order views are next — see the build order below.
+> storefront, the cart, checkout against PayFast, order emails and the admin's order views
+> all work. Image uploads to object storage are next — see the build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) and PayFast's
 > **published sandbox credentials**, so `make up` gives you a working admin and a working
@@ -78,6 +78,17 @@ list with defaults.
 | `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
+| `SMTP_HOST` | no¹ | — | Mail relay. With no mail configured, receipts are logged and dropped |
+| `EMAIL_FROM` | no¹ | — | Sender address |
+| `SMTP_PORT` | no | `587` | `465` with `SMTP_TLS=tls`, `1025` for mailpit |
+| `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
+| `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
+| `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
+
+¹ `SMTP_HOST` and `EMAIL_FROM` are individually optional but must be set **together** — a
+half-configured relay is a boot failure, because the alternative is a receipt that silently
+never arrives.
 
 Object-storage settings arrive with their phase.
 
@@ -384,6 +395,63 @@ Three details account for nearly every PayFast integration failure, and
 taking real money** — no test suite can do that step, and the cost of skipping it is every
 payment being rejected.
 
+## Orders and email
+
+Two pages, both read-only:
+
+| Route | Shows |
+|---|---|
+| `GET /admin/orders` | Recent orders, newest first |
+| `GET /admin/orders/{id}` | What to pack, where it goes, and what the gateway said |
+
+**There are no buttons on either page, deliberately.** An order records something that
+happened, and the only thing allowed to change one is an authenticated gateway notification.
+A "mark as paid" button in the admin would be a way to record money that never arrived. A test
+asserts that no route under `/admin/orders` accepts a `POST`, so adding one is a decision
+somebody has to make on purpose.
+
+The order page shows the **snapshot** — the title, options and unit price as they were when
+the order was placed — so renaming, repricing or withdrawing a product afterwards does not
+rewrite what somebody bought. It also shows the raw gateway notification, for the day a
+customer and a bank disagree about what happened.
+
+The list is capped at the 200 most recent. Products are a small fixed set; orders accumulate
+forever, so "the catalog is small" does not carry over to this table.
+
+### What gets sent, and when
+
+When an authenticated notification says an order is paid, two emails go out — and both go out
+**after** the order is recorded paid. That ordering is the whole point: a mail server having a
+bad afternoon must never be able to lose a sale. Nothing in the mail path can fail the payment
+callback.
+
+- **The customer** gets a receipt, once. `orders.emailed` records it, so a replayed gateway
+  notification does not send a second copy. Both a plain-text and an HTML part are sent; the
+  plain-text one is not optional, because a receipt has to arrive readable in a client that
+  refuses HTML.
+- **`ORDER_NOTIFY_EMAIL`**, if set, gets a work order: what to pack, where it goes, and a link
+  to the admin page. It also carries the **oversell warning**, which otherwise exists only in
+  the logs — the person who has to tell a customer their item is gone should not have to find
+  that in a log aggregator.
+
+They are two separate sends rather than one message with two recipients: a receipt and a work
+order say different things, and one of them failing should not suppress the other.
+
+With no SMTP configured the server starts, warns loudly, and logs every message it drops.
+That is deliberate — the shop's job is to take an order and record it, and that does not
+depend on a mail server.
+
+### Email templates
+
+`email_order_paid.txt`, `email_order_paid.html` and `email_order_notify.txt`, overridable
+from `TEMPLATE_DIR` like any other template. The `.txt` files go through **`text/template`**
+and the rest through `html/template`, which is not a detail: running a receipt through the
+HTML escaper puts `&amp;` in front of a customer.
+
+The HTML part is deliberately primitive — table layout, inline styles, no external CSS and no
+images. Mail clients are twenty years behind browsers, and a receipt that renders everywhere
+beats one that looks better in three clients and breaks in the rest.
+
 ### Overselling
 
 Two people can pay for the last item, because stock is only taken at payment. When a
@@ -448,6 +516,7 @@ question is the depth of the problem, not the size of the dependency.
 | [`justinas/nosurf`](https://github.com/justinas/nosurf) | CSRF tokens and origin checks |
 | [`gorilla/securecookie`](https://github.com/gorilla/securecookie) | Signing the admin session cookie, including key rotation |
 | [`golang.org/x/crypto/bcrypt`](https://pkg.go.dev/golang.org/x/crypto/bcrypt) | Admin password hashing |
+| [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Sending email: MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:
 a router (`ServeMux` does method and wildcard patterns), a validation library (struct tags
@@ -477,7 +546,6 @@ Recorded here so they are decided deliberately rather than by default:
 | Decision | Candidate | When |
 |---|---|---|
 | Password hashing algorithm | argon2id, via [`alexedwards/argon2id`](https://github.com/alexedwards/argon2id) or `x/crypto/argon2` | OWASP puts argon2id first and bcrypt second. bcrypt at cost 12 is the current choice because its hash string is self-describing; revisit if that stops being a good enough reason |
-| Sending email | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Phase 7. `net/smtp` has no MIME or modern TLS ergonomics, and hand-rolling multipart text+HTML is exactly the fiddly-not-cryptographic category |
 | Per-IP rate limiting | `golang.org/x/time/rate` for the buckets, hand-written keying and eviction | Phase 9. The limiter is the deep part; a map with a sweep is not |
 | Server-side sessions | [`alexedwards/scs`](https://github.com/alexedwards/scs) | Only if a second admin or immediate revocation is ever needed — the same trigger as adding a `sessions` table |
 
@@ -590,8 +658,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 4. **Storefront reads** — `/products` pages and fragments, vendored htmx, CORS ← *done*
 5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
 6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
-7. Order emails + admin orders ← *next*
-8. Images (object storage)
+7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
+8. Images (object storage) ← *next*
 9. Hardening
 10. Publish
 

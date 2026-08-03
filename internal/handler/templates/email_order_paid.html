@@ -1,0 +1,57 @@
+{{/*
+  The HTML half of the customer's receipt, sent as an alternative to the plain-text
+  part rather than instead of it.
+
+  Deliberately primitive: table layout, inline styles, no external CSS and no
+  images. Mail clients are twenty years behind browsers, and a receipt that renders
+  everywhere beats one that looks better in three clients and breaks in the rest.
+  The plain-text part is what most people will actually see.
+*/}}
+{{define "email_order_paid"}}<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{{.StoreName}} order {{.Order.Reference}}</title></head>
+<body style="font-family: sans-serif; color: #111; line-height: 1.5;">
+<p>Hello {{.Order.Customer.Name}},</p>
+
+<p>Thank you — we have received your payment for order
+<strong>{{.Order.Reference}}</strong>.</p>
+
+<table cellpadding="6" cellspacing="0" border="0" style="border-collapse: collapse;">
+  <thead>
+    <tr style="text-align: left; border-bottom: 1px solid #ccc;">
+      <th>Item</th><th>Qty</th><th style="text-align: right;">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Order.Items}}
+    <tr style="border-bottom: 1px solid #eee;">
+      <td>{{.Title}}{{with .Label}}<br><small style="color: #666;">{{.}}</small>{{end}}</td>
+      <td>{{.Quantity}}</td>
+      <td style="text-align: right;">{{$.Currency}} {{money .LineTotalCents}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+  <tfoot>
+    <tr>
+      <th colspan="2" style="text-align: left;">Total</th>
+      <th style="text-align: right;">{{.Currency}} {{money .Order.TotalCents}}</th>
+    </tr>
+  </tfoot>
+</table>
+
+<p><strong>Delivering to</strong><br>
+{{/*
+  The address is a textarea's worth of text with real newlines in it. html/template
+  escapes the content, so this is safe; the <br>s come from the pre-escaped
+  linebreaks helper rather than from anything the customer typed.
+*/}}
+{{linebreaks .Order.Customer.Address}}</p>
+
+<p>We will be in touch about delivery. If anything above is wrong, reply to this
+email and quote order {{.Order.Reference}}.</p>
+
+<p style="color: #666;"><small>{{.StoreName}} —
+<a href="{{.BaseURL}}">{{.BaseURL}}</a></small></p>
+</body>
+</html>
+{{end}}

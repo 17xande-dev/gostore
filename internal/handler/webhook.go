@@ -154,16 +154,17 @@ func (h *Handler) applyCallback(r *http.Request, cb payment.Callback) {
 
 	if len(result.Oversold) > 0 {
 		// The money is in, so the order stands. Somebody has to reconcile the
-		// stock by hand; the admin order view grows a flag for this in the
-		// hardening phase.
+		// stock by hand; the owner's notification email carries this, and the
+		// admin order view grows a flag for it in the hardening phase.
 		log.Error("order paid but stock could not be decremented — oversold",
 			"items", result.Oversold)
 	}
 	log.Info("order paid", "total_cents", order.TotalCents, "items", order.Count())
 
-	// The confirmation email is deliberately not sent here yet: it arrives in the
-	// next phase, and it will be attempted *after* this point, so that a mail
-	// server having a bad afternoon can never lose a sale.
+	// Mail last, and only now that the order is recorded paid: a mail server
+	// having a bad afternoon must not be able to lose a sale. Nothing below can
+	// fail this request — see internal/handler/order_mail.go.
+	h.sendOrderEmails(r.Context(), order, result.Oversold)
 }
 
 // unpaidStatus maps a gateway's own vocabulary onto this store's. Anything

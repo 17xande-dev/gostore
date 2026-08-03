@@ -20,6 +20,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
@@ -50,13 +51,28 @@ func testConfig() config.Config {
 	}
 }
 
-// newServer mounts everything main.go mounts. It returns the fake gateway too,
-// because the checkout and callback tests assert on both sides of it: what the
-// checkout handed over, and what happened when a notification came back.
+// shop is a running server and everything behind it a test might assert on: what
+// reached the database, what the checkout handed the gateway, and what mail went
+// out. The fakes are the point — a test can inspect both sides of every boundary
+// without a payment provider or a mail server.
+type shop struct {
+	srv     *httptest.Server
+	catalog *catalog.Store
+	orders  *orders.Store
+	gateway *payment.Fake
+	mail    *email.Fake
+
+	// variants is the stocked catalog, by size, for the tests that put things in
+	// a cart. Empty until stockCart has run.
+	variants map[string]catalog.Variant
+}
+
+// newServer is the narrow view, for tests that only care about the catalog and the
+// admin.
 func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	t.Helper()
-	srv, store, _, _ := newStore(t)
-	return srv, store
+	s := newStore(t)
+	return s.srv, s.catalog
 }
 
 func testSessions(t *testing.T) *auth.Sessions {
@@ -72,8 +88,15 @@ func testSessions(t *testing.T) *auth.Sessions {
 // newStore mounts everything exactly as main.go does — same subtrees, same CSRF
 // wrapper, same middleware — with a cookie jar but no session yet. Tests that
 // build their own routing would stop testing what actually runs.
-func newStore(t *testing.T) (*httptest.Server, *catalog.Store, *orders.Store, *payment.Fake) {
+// edit lets a test change the configuration before the handler reads it, which is
+// the only chance it gets — the handler takes a copy at construction.
+func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Helper()
+
+	cfg := testConfig()
+	for _, e := range edit {
+		e(&cfg)
+	}
 
 	pool := dbtest.Pool(t)
 	store := catalog.NewStore(pool)
@@ -86,7 +109,8 @@ func newStore(t *testing.T) (*httptest.Server, *catalog.Store, *orders.Store, *p
 	log := slog.New(slog.DiscardHandler)
 	sessions := testSessions(t)
 	gateway := payment.NewFake()
-	h := New(testConfig(), log, tmpl, store, cart.NewStore(pool), orderStore, gateway, sessions)
+	mail := email.NewFake()
+	h := New(cfg, log, tmpl, store, cart.NewStore(pool), orderStore, gateway, mail, sessions)
 
 	mux := http.NewServeMux()
 	// Everything main.go mounts, mounted the same way: the cart tests need the
@@ -109,7 +133,7 @@ func newStore(t *testing.T) (*httptest.Server, *catalog.Store, *orders.Store, *p
 	// followed away.
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
-	return srv, store, orderStore, gateway
+	return &shop{srv: srv, catalog: store, orders: orderStore, gateway: gateway, mail: mail}
 }
 
 // setup returns a signed-in server for the admin routes plus the catalog store

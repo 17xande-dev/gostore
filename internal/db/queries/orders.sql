@@ -32,6 +32,18 @@ SELECT * FROM orders WHERE id = $1;
 -- name: GetLatestOrderForCart :one
 SELECT * FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1;
 
+-- The admin's order list. Limited rather than unpaginated: products are a small
+-- fixed set, but orders accumulate forever, so "the catalog is small" does not
+-- carry over to this table. Newest first, because that is the one an operator is
+-- looking for.
+--
+-- Whole rows and no aggregate, so sqlc reuses the Order model rather than
+-- generating a near-identical row type that would need its own field-by-field
+-- mapping. An item count would be nice on this page and is not worth that; the
+-- lines are one click away.
+-- name: ListRecentOrders :many
+SELECT * FROM orders ORDER BY created_at DESC LIMIT $1;
+
 -- name: ListOrderItems :many
 SELECT variant_id, title, size, color, unit_price_cents, quantity
 FROM order_items WHERE order_id = $1 ORDER BY id;

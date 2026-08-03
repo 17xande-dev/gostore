@@ -14,7 +14,7 @@ import (
 // placeOrder runs a real checkout and returns the pending order it created, so the
 // callback tests act on an order that came into existence the way orders actually
 // do.
-func placeOrder(t *testing.T, s *checkoutShop, sku string, quantity int) orders.Order {
+func placeOrder(t *testing.T, s *shop, sku string, quantity int) orders.Order {
 	t.Helper()
 
 	addToCart(t, s.srv, s.variants[sku].ID, quantity)
@@ -50,7 +50,7 @@ func callback(t *testing.T, srv *httptest.Server, gateway string, body []byte) *
 	return res
 }
 
-func (s *checkoutShop) reload(t *testing.T, id string) orders.Order {
+func (s *shop) reload(t *testing.T, id string) orders.Order {
 	t.Helper()
 	o, err := s.orders.Get(t.Context(), id)
 	if err != nil {

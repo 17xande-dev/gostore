@@ -11,6 +11,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
@@ -28,14 +29,15 @@ type Handler struct {
 	cart     *cart.Store
 	orders   *orders.Store
 	gateway  payment.Gateway
+	mail     email.Sender
 	sessions *auth.Sessions
 }
 
 func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
-	ord *orders.Store, gateway payment.Gateway, sessions *auth.Sessions) *Handler {
+	ord *orders.Store, gateway payment.Gateway, mail email.Sender, sessions *auth.Sessions) *Handler {
 	return &Handler{
 		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
-		orders: ord, gateway: gateway, sessions: sessions,
+		orders: ord, gateway: gateway, mail: mail, sessions: sessions,
 	}
 }
 
@@ -122,6 +124,10 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products/{id}/variants", h.adminVariantCreate)
 	admin("POST /admin/products/{id}/variants/{variantID}", h.adminVariantUpdate)
 	admin("POST /admin/products/{id}/variants/{variantID}/delete", h.adminVariantDelete)
+	// Read-only on purpose: only an authenticated gateway notification may change
+	// an order. See internal/handler/admin_orders.go.
+	admin("GET /admin/orders", h.adminOrderList)
+	admin("GET /admin/orders/{id}", h.adminOrderShow)
 }
 
 // page is what every rendered page needs regardless of what it shows. It is

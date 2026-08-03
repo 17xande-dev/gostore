@@ -203,6 +203,28 @@ func (s *Store) LatestForCart(ctx context.Context, cartID string) (Order, error)
 	return o, nil
 }
 
+// DefaultListLimit is how many orders the admin list shows. Orders accumulate
+// forever, unlike the catalog, so this page is bounded from the start rather than
+// after somebody's first busy month.
+const DefaultListLimit = 200
+
+// List returns recent orders, newest first, without their line items — the admin
+// list shows one row per order and the lines are one click away.
+func (s *Store) List(ctx context.Context, limit int) ([]Order, error) {
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	rows, err := s.q.ListRecentOrders(ctx, int32(limit))
+	if err != nil {
+		return nil, fmt.Errorf("orders: list: %w", err)
+	}
+	out := make([]Order, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, order(r))
+	}
+	return out, nil
+}
+
 func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
 	rows, err := s.q.ListOrderItems(ctx, orderID)
 	if err != nil {

@@ -283,6 +283,57 @@ func (q *Queries) ListOrderItems(ctx context.Context, orderID string) ([]ListOrd
 	return items, nil
 }
 
+const listRecentOrders = `-- name: ListRecentOrders :many
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, created_at, paid_at FROM orders ORDER BY created_at DESC LIMIT $1
+`
+
+// The admin's order list. Limited rather than unpaginated: products are a small
+// fixed set, but orders accumulate forever, so "the catalog is small" does not
+// carry over to this table. Newest first, because that is the one an operator is
+// looking for.
+//
+// Whole rows and no aggregate, so sqlc reuses the Order model rather than
+// generating a near-identical row type that would need its own field-by-field
+// mapping. An item count would be nice on this page and is not worth that; the
+// lines are one click away.
+func (q *Queries) ListRecentOrders(ctx context.Context, limit int32) ([]Order, error) {
+	rows, err := q.db.Query(ctx, listRecentOrders, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Order{}
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.CartID,
+			&i.CustomerName,
+			&i.CustomerEmail,
+			&i.CustomerPhone,
+			&i.ShippingAddress,
+			&i.TotalCents,
+			&i.Currency,
+			&i.Status,
+			&i.Gateway,
+			&i.GatewayRef,
+			&i.GatewayStatus,
+			&i.GatewayAmount,
+			&i.GatewayPayload,
+			&i.Emailed,
+			&i.CreatedAt,
+			&i.PaidAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockOrderStatus = `-- name: LockOrderStatus :one
 SELECT status FROM orders WHERE id = $1 FOR UPDATE
 `

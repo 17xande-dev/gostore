@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/email"
 )
 
 // Config is the fully resolved configuration for one server process.
@@ -54,6 +55,17 @@ type Config struct {
 	// gateway: main assembles the two, which is also where a second gateway
 	// would be chosen.
 	PayFast PayFast
+
+	// SMTP is how transactional mail leaves. It is optional: a store with no mail
+	// server still takes orders correctly, and refusing to boot over it would
+	// trade a working shop for a missing receipt. An unconfigured deployment logs
+	// loudly at startup and again for every message it drops.
+	SMTP SMTP
+
+	// OrderNotifyEmail is where a copy of each paid order goes — whoever packs the
+	// parcel. Empty means the customer's confirmation is the only mail sent, and
+	// the operator finds orders in /admin/orders instead.
+	OrderNotifyEmail string
 
 	// TrustProxyIP makes the server believe X-Forwarded-For. It must be false
 	// unless something in front of the server is actually setting that header,
@@ -103,6 +115,30 @@ type PayFast struct {
 	AllowAnySourceIP bool
 }
 
+// SMTP is the mail relay's configuration. Username and Password may be empty, for
+// a relay that authenticates by network address — mailpit in development being the
+// case that matters here.
+type SMTP struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+
+	// From is the sender address. A relay usually rejects a From it does not
+	// consider itself responsible for, so this has to be on a domain it accepts.
+	From    string
+	ReplyTo string
+
+	// TLS is "starttls" (the default, correct for port 587), "tls" (implicit, for
+	// 465) or "none" (development only).
+	TLS string
+}
+
+// Configured reports whether mail can actually be sent. Both a host and a From
+// address are needed: a relay with no sender is not a working configuration, and
+// half-configured is the case worth catching at startup.
+func (s SMTP) Configured() bool { return s.Host != "" && s.From != "" }
+
 // AllowsEmbedding reports whether any origin may fetch the catalog fragments.
 func (c Config) AllowsEmbedding() bool { return len(c.EmbedOrigins) > 0 }
 
@@ -121,6 +157,15 @@ func Load() (Config, error) {
 		SessionTTL:        24 * time.Hour,
 		ShutdownTimeout:   15 * time.Second,
 		TrustProxyIP:      boolEnv("TRUST_PROXY_IP", false),
+		OrderNotifyEmail:  strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
+		SMTP: SMTP{
+			Host:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
+			Username: os.Getenv("SMTP_USERNAME"),
+			Password: os.Getenv("SMTP_PASSWORD"),
+			From:     strings.TrimSpace(os.Getenv("EMAIL_FROM")),
+			ReplyTo:  strings.TrimSpace(os.Getenv("EMAIL_REPLY_TO")),
+			TLS:      env("SMTP_TLS", "starttls"),
+		},
 		PayFast: PayFast{
 			MerchantID:  os.Getenv("PAYFAST_MERCHANT_ID"),
 			MerchantKey: os.Getenv("PAYFAST_MERCHANT_KEY"),
@@ -206,6 +251,29 @@ func Load() (Config, error) {
 			}
 		}
 		c.EmbedOrigins = append(c.EmbedOrigins, origin)
+	}
+
+	// Mail is validated whenever any of it is set, so a half-configured relay is a
+	// boot failure rather than a receipt that silently never arrives.
+	c.SMTP.Port = 587
+	if p, ok := os.LookupEnv("SMTP_PORT"); ok {
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 || n > 65535 {
+			return Config{}, fmt.Errorf("config: SMTP_PORT must be a port number, got %q", p)
+		}
+		c.SMTP.Port = n
+	}
+	if _, err := email.ParseTLSPolicy(c.SMTP.TLS); err != nil {
+		return Config{}, fmt.Errorf("config: SMTP_TLS: %w", err)
+	}
+	if (c.SMTP.Host == "") != (c.SMTP.From == "") {
+		return Config{}, fmt.Errorf(
+			"config: SMTP_HOST and EMAIL_FROM must be set together; got host %q and from %q",
+			c.SMTP.Host, c.SMTP.From)
+	}
+	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
+		return Config{}, fmt.Errorf(
+			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
 	}
 
 	// "any" is spelled out rather than being an empty list, so disabling a

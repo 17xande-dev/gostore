@@ -78,11 +78,21 @@ services:
       # a tunnel. Off here, never off in production.
       PAYFAST_ALLOWED_CIDRS: ${PAYFAST_ALLOWED_CIDRS:-any}
       PAYFAST_NOTIFY_URL: ${PAYFAST_NOTIFY_URL:-}
+      # Mail goes to the mailpit service, where every message is caught and
+      # readable at http://localhost:8025 rather than delivered to anybody. TLS is
+      # off because mailpit offers none; that is correct here and nowhere else.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_TLS: ${SMTP_TLS:-none}
+      EMAIL_FROM: ${EMAIL_FROM:-orders@gostore.example}
+      ORDER_NOTIFY_EMAIL: ${ORDER_NOTIFY_EMAIL:-shop@gostore.example}
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
 
 volumes:
   pgdata:
