@@ -44,6 +44,23 @@ services:
       timeout: 3s
       retries: 20
 
+  # Creates the image bucket and makes it publicly readable, then exits. MinIO does
+  # not create buckets on demand, and the store deliberately has no
+  # bucket-creation rights: an application that can create buckets can also be
+  # made to create a thousand of them.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 gostore gostore123 &&
+      mc mb --ignore-existing local/gostore-images &&
+      mc anonymous set download local/gostore-images &&
+      echo 'bucket gostore-images ready, public read'
+      "
+
   server:
     build: .
     # Anything in a local .env overrides the development defaults below, which
@@ -86,6 +103,18 @@ services:
       SMTP_TLS: ${SMTP_TLS:-none}
       EMAIL_FROM: ${EMAIL_FROM:-orders@gostore.example}
       ORDER_NOTIFY_EMAIL: ${ORDER_NOTIFY_EMAIL:-shop@gostore.example}
+      # Product images go to the MinIO service. Note the two addresses, which is
+      # exactly why BLOB_PUBLIC_BASE_URL exists as its own value rather than being
+      # derived from the endpoint: the *server* reaches MinIO at minio:9000 inside
+      # the compose network, while the *browser* fetching an image reaches it at
+      # localhost:9000. In production the same split is R2's
+      # <account>.r2.cloudflarestorage.com versus a custom domain.
+      BLOB_ENDPOINT: ${BLOB_ENDPOINT:-minio:9000}
+      BLOB_BUCKET: ${BLOB_BUCKET:-gostore-images}
+      BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-gostore}
+      BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-gostore123}
+      BLOB_USE_TLS: ${BLOB_USE_TLS:-false}
+      BLOB_PUBLIC_BASE_URL: ${BLOB_PUBLIC_BASE_URL:-http://localhost:9000/gostore-images}
     ports:
       - "8080:8080"
     depends_on:
@@ -93,6 +122,8 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      minio-init:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

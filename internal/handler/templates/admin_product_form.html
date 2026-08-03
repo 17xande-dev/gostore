@@ -30,17 +30,29 @@
     </label>
     {{template "err" index .Errors "description"}}
   </p>
+  {{/*
+    The image is either an object this store uploaded and owns, or a URL somebody
+    pasted — never both. When it owns one, this field is not shown at all, because
+    editing the URL of an uploaded object would leave the object orphaned and the
+    product pointing at something else. Remove it first, then paste.
+  */}}
+  {{if not .Product.HasUploadedImage}}
   <p>
     <label>Image URL<br>
       <input name="image_url" value="{{.Product.ImageURL}}" size="60">
     </label>
     {{template "err" index .Errors "image_url"}}
   </p>
+  {{end}}
   <p>
     <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
   </p>
   <p><button type="submit">Save product</button> <a href="/admin/products">Back</a></p>
 </form>
+
+{{if not .IsNew}}
+{{template "product_image" .}}
+{{end}}
 
 {{if .IsNew}}
   <p><small>Variants can be added once the product is saved.</small></p>
@@ -108,4 +120,55 @@
 {{template "err" index . "options"}}
 {{template "err" index . "price"}}
 {{template "err" index . "stock_qty"}}
+{{end}}
+
+{{/*
+  The product image: the current one, and either an upload form or an explanation
+  of why there isn't one.
+
+  An upload is a separate form from the product form above, and a separate request,
+  because it is a separate kind of operation — multipart, size-limited, and with a
+  failure mode ("that is not an image") that has nothing to do with whether the
+  title is valid.
+*/}}
+{{define "product_image"}}
+<h2>Image</h2>
+
+{{template "err" index .Errors "image"}}
+
+{{with .Product.ImageURL}}
+  <p><img src="{{.}}" alt="{{$.Product.Title}}" width="240"></p>
+  <p><small><code>{{.}}</code></small></p>
+{{else}}
+  <p>No image.</p>
+{{end}}
+
+{{if .UploadsEnabled}}
+  <form method="post" action="/admin/products/{{.Product.ID}}/image" enctype="multipart/form-data">
+    {{template "csrf" .CSRFToken}}
+    <p>
+      <label>{{if .Product.ImageURL}}Replace{{else}}Upload{{end}} image
+        <input type="file" name="image" accept="{{.AcceptTypes}}" required>
+      </label>
+    </p>
+    <p>
+      <button type="submit">Upload</button>
+      <small>Up to {{.MaxUploadMB}} MB. JPEG, PNG, GIF or WebP.</small>
+    </p>
+  </form>
+
+  {{/*
+    Only offered for an image this store owns. A pasted URL is cleared by emptying
+    the field in the product form above; there is no object to delete.
+  */}}
+  {{if .Product.HasUploadedImage}}
+  <form method="post" action="/admin/products/{{.Product.ID}}/image/delete">
+    {{template "csrf" .CSRFToken}}
+    <button type="submit">Remove image</button>
+  </form>
+  {{end}}
+{{else}}
+  <p><small>Uploads are not configured on this deployment, so the image is whatever
+  URL is pasted above. Set the <code>BLOB_*</code> variables to upload instead.</small></p>
+{{end}}
 {{end}}

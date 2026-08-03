@@ -9,10 +9,35 @@ import (
 	"context"
 )
 
+const clearProductImage = `-- name: ClearProductImage :one
+UPDATE products
+SET image_url = '', image_key = '', updated_at = now()
+WHERE id = $1
+RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+`
+
+func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, error) {
+	row := q.db.QueryRow(ctx, clearProductImage, id)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Slug,
+		&i.Title,
+		&i.Description,
+		&i.ImageURL,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageKey,
+	)
+	return i, err
+}
+
 const createProduct = `-- name: CreateProduct :one
 INSERT INTO products (id, kind, slug, title, description, image_url, active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at
+RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
 
 type CreateProductParams struct {
@@ -45,6 +70,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }
@@ -121,7 +147,7 @@ func (q *Queries) DeleteVariant(ctx context.Context, arg DeleteVariantParams) (i
 }
 
 const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at FROM products WHERE slug = $1 AND active
+SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE slug = $1 AND active
 `
 
 func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -137,12 +163,13 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at FROM products WHERE id = $1
+SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
@@ -158,12 +185,13 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at FROM products WHERE slug = $1
+SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE slug = $1
 `
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -179,12 +207,13 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }
 
 const listActiveProducts = `-- name: ListActiveProducts :many
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at FROM products p
+SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
 ORDER BY p.title
@@ -211,6 +240,7 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]Product, error) {
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ImageKey,
 		); err != nil {
 			return nil, err
 		}
@@ -329,7 +359,7 @@ func (q *Queries) ListAllVariants(ctx context.Context) ([]ProductVariant, error)
 
 const listProducts = `-- name: ListProducts :many
 
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at FROM products ORDER BY title
+SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products ORDER BY title
 `
 
 // Queries behind internal/catalog. See sqlc.yaml; regenerate with `make sqlc`.
@@ -356,6 +386,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ImageKey,
 		); err != nil {
 			return nil, err
 		}
@@ -400,12 +431,46 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 	return items, nil
 }
 
+const setProductImage = `-- name: SetProductImage :one
+UPDATE products
+SET image_url = $2, image_key = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+`
+
+type SetProductImageParams struct {
+	ID       string
+	ImageURL string
+	ImageKey string
+}
+
+// Points a product at an uploaded object. The caller deletes the previous object,
+// if there was one, *after* this commits: an orphaned object costs a few kilobytes,
+// while a deleted object still referenced by a live row is a broken image.
+func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams) (Product, error) {
+	row := q.db.QueryRow(ctx, setProductImage, arg.ID, arg.ImageURL, arg.ImageKey)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Slug,
+		&i.Title,
+		&i.Description,
+		&i.ImageURL,
+		&i.Active,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageKey,
+	)
+	return i, err
+}
+
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
 SET kind = $2, slug = $3, title = $4, description = $5, image_url = $6,
     active = $7, updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at
+RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
 
 type UpdateProductParams struct {
@@ -420,6 +485,10 @@ type UpdateProductParams struct {
 
 // updated_at is maintained here rather than by a trigger, so the write is visible
 // in the query itself.
+//
+// image_key is deliberately absent: this is the product form, and the form has no
+// business reassigning which object in storage the product owns. Uploads go
+// through SetProductImage and removals through ClearProductImage.
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
 		arg.ID,
@@ -441,6 +510,7 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }
@@ -496,7 +566,7 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
 ON CONFLICT (slug) DO UPDATE
 SET kind = EXCLUDED.kind, title = EXCLUDED.title, description = EXCLUDED.description,
     image_url = EXCLUDED.image_url, active = EXCLUDED.active, updated_at = now()
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at
+RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
 
 type UpsertProductParams struct {
@@ -530,6 +600,7 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ImageKey,
 	)
 	return i, err
 }

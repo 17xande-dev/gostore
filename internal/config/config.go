@@ -67,6 +67,12 @@ type Config struct {
 	// the operator finds orders in /admin/orders instead.
 	OrderNotifyEmail string
 
+	// Blob is object storage for product images. Optional: with it unset the admin
+	// falls back to a pasted image URL, which is how the catalog worked for five
+	// phases and remains a perfectly good answer for a shop with a handful of
+	// photographs already hosted somewhere.
+	Blob Blob
+
 	// TrustProxyIP makes the server believe X-Forwarded-For. It must be false
 	// unless something in front of the server is actually setting that header,
 	// because a client can otherwise claim any IP it likes — and the payment
@@ -115,6 +121,29 @@ type PayFast struct {
 	AllowAnySourceIP bool
 }
 
+// Blob is object storage for product images, against anything speaking the S3
+// API — Cloudflare R2, Google Cloud Storage in interoperability mode, or MinIO.
+//
+// PublicBaseURL is separate from Endpoint and cannot be derived from it: the
+// address a bucket is written through and the address it is read from are
+// routinely different — R2 writes to <account>.r2.cloudflarestorage.com and reads
+// from a custom domain — and only the operator knows the second one.
+type Blob struct {
+	Endpoint  string
+	Bucket    string
+	AccessKey string
+	SecretKey string
+
+	// Region is "auto" for R2. GCS and MinIO ignore it.
+	Region string
+	UseTLS bool
+
+	PublicBaseURL string
+}
+
+// Configured reports whether image uploads can work.
+func (b Blob) Configured() bool { return b.Endpoint != "" }
+
 // SMTP is the mail relay's configuration. Username and Password may be empty, for
 // a relay that authenticates by network address — mailpit in development being the
 // case that matters here.
@@ -158,6 +187,15 @@ func Load() (Config, error) {
 		ShutdownTimeout:   15 * time.Second,
 		TrustProxyIP:      boolEnv("TRUST_PROXY_IP", false),
 		OrderNotifyEmail:  strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
+		Blob: Blob{
+			Endpoint:      strings.TrimSpace(os.Getenv("BLOB_ENDPOINT")),
+			Bucket:        strings.TrimSpace(os.Getenv("BLOB_BUCKET")),
+			AccessKey:     os.Getenv("BLOB_ACCESS_KEY_ID"),
+			SecretKey:     os.Getenv("BLOB_SECRET_ACCESS_KEY"),
+			Region:        env("BLOB_REGION", "auto"),
+			UseTLS:        boolEnv("BLOB_USE_TLS", true),
+			PublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("BLOB_PUBLIC_BASE_URL")), "/"),
+		},
 		SMTP: SMTP{
 			Host:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
 			Username: os.Getenv("SMTP_USERNAME"),
@@ -274,6 +312,35 @@ func Load() (Config, error) {
 	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
 		return Config{}, fmt.Errorf(
 			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
+	}
+
+	// Object storage is all-or-nothing: a partial configuration would fail at the
+	// first upload with whichever piece is missing, which is a worse place to find
+	// out than at boot.
+	if c.Blob.Configured() {
+		var missing []string
+		for _, f := range []struct{ name, value string }{
+			{"BLOB_BUCKET", c.Blob.Bucket},
+			{"BLOB_ACCESS_KEY_ID", c.Blob.AccessKey},
+			{"BLOB_SECRET_ACCESS_KEY", c.Blob.SecretKey},
+			{"BLOB_PUBLIC_BASE_URL", c.Blob.PublicBaseURL},
+		} {
+			if strings.TrimSpace(f.value) == "" {
+				missing = append(missing, f.name)
+			}
+		}
+		if len(missing) > 0 {
+			return Config{}, fmt.Errorf(
+				"config: BLOB_ENDPOINT is set, so these are required too: %s", strings.Join(missing, ", "))
+		}
+		u, err := url.Parse(c.Blob.PublicBaseURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return Config{}, fmt.Errorf(
+				"config: BLOB_PUBLIC_BASE_URL %q must be an absolute URL", c.Blob.PublicBaseURL)
+		}
+	} else if c.Blob.Bucket != "" || c.Blob.AccessKey != "" || c.Blob.PublicBaseURL != "" {
+		return Config{}, fmt.Errorf(
+			"config: BLOB_* variables are set but BLOB_ENDPOINT is not, so uploads would be off")
 	}
 
 	// "any" is spelled out rather than being an empty list, so disabling a

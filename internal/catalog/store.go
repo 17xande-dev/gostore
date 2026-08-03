@@ -184,6 +184,30 @@ func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 	return product(row), nil
 }
 
+// SetImage points a product at an uploaded object, returning the product as
+// stored. The caller deletes the object that was there before, if any, *after*
+// this returns: an orphaned object costs a few kilobytes, while an object deleted
+// out from under a live row is a broken image on the storefront.
+func (s *Store) SetImage(ctx context.Context, id, imageURL, imageKey string) (Product, error) {
+	row, err := s.q.SetProductImage(ctx, gen.SetProductImageParams{
+		ID: id, ImageURL: imageURL, ImageKey: imageKey,
+	})
+	if err != nil {
+		return Product{}, translate(fmt.Errorf("catalog: set product image: %w", err))
+	}
+	return product(row), nil
+}
+
+// ClearImage removes a product's image, returning the product as stored. As with
+// SetImage, deleting the object itself is the caller's job and happens afterwards.
+func (s *Store) ClearImage(ctx context.Context, id string) (Product, error) {
+	row, err := s.q.ClearProductImage(ctx, id)
+	if err != nil {
+		return Product{}, translate(fmt.Errorf("catalog: clear product image: %w", err))
+	}
+	return product(row), nil
+}
+
 // Delete removes a product; its variants go with it by cascade. It fails once
 // an order references a variant, because purchase history must not be
 // rewritable — deactivate instead.
@@ -333,6 +357,7 @@ func product(r gen.Product) Product {
 		Active:      r.Active,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
+		ImageKey:    r.ImageKey,
 	}
 }
 

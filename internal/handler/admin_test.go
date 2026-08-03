@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
@@ -61,6 +62,7 @@ type shop struct {
 	orders  *orders.Store
 	gateway *payment.Fake
 	mail    *email.Fake
+	images  *blob.Fake
 
 	// variants is the stocked catalog, by size, for the tests that put things in
 	// a cart. Empty until stockCart has run.
@@ -110,7 +112,8 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	sessions := testSessions(t)
 	gateway := payment.NewFake()
 	mail := email.NewFake()
-	h := New(cfg, log, tmpl, store, cart.NewStore(pool), orderStore, gateway, mail, sessions)
+	images := blob.NewFake()
+	h := New(cfg, log, tmpl, store, cart.NewStore(pool), orderStore, gateway, mail, images, sessions)
 
 	mux := http.NewServeMux()
 	// Everything main.go mounts, mounted the same way: the cart tests need the
@@ -133,7 +136,7 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	// followed away.
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
-	return &shop{srv: srv, catalog: store, orders: orderStore, gateway: gateway, mail: mail}
+	return &shop{srv: srv, catalog: store, orders: orderStore, gateway: gateway, mail: mail, images: images}
 }
 
 // setup returns a signed-in server for the admin routes plus the catalog store

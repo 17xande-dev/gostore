@@ -6,8 +6,9 @@ Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
-> storefront, the cart, checkout against PayFast, order emails and the admin's order views
-> all work. Image uploads to object storage are next — see the build order below.
+> storefront, the cart, checkout against PayFast, order emails, the admin's order views and
+> product image uploads all work. Hardening — rate limits, a CSP review, the cart cleanup
+> job — is next; see the build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) and PayFast's
 > **published sandbox credentials**, so `make up` gives you a working admin and a working
@@ -85,12 +86,19 @@ list with defaults.
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
 | `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
 | `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
+| `BLOB_ENDPOINT` | no² | — | Object storage host[:port], no scheme. Without it, images are pasted URLs |
+| `BLOB_BUCKET` | no² | — | Bucket name |
+| `BLOB_ACCESS_KEY_ID` / `BLOB_SECRET_ACCESS_KEY` | no² | — | Credentials |
+| `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
+| `BLOB_REGION` | no | `auto` | What R2 wants; GCS and MinIO ignore it |
+| `BLOB_USE_TLS` | no | `true` | `false` only for a MinIO on the same machine |
 
 ¹ `SMTP_HOST` and `EMAIL_FROM` are individually optional but must be set **together** — a
 half-configured relay is a boot failure, because the alternative is a receipt that silently
 never arrives.
 
-Object-storage settings arrive with their phase.
+² The `BLOB_*` set is all-or-nothing for the same reason: `BLOB_ENDPOINT` with any of the
+others missing refuses to boot rather than failing at the first upload.
 
 ## Admin
 
@@ -174,6 +182,56 @@ payment gateway's amount string is a real and hard-to-find class of bug.
 
 Manage the catalog at `/admin/products`. `image_url` is a pasted URL for now;
 upload-to-object-storage arrives in a later phase.
+
+### Product images
+
+Two ways to give a product a picture, and the store treats them as genuinely
+different things:
+
+- **A pasted URL.** Works with no configuration at all, and is a complete answer for a
+  shop whose photographs are already hosted somewhere. The store does not own those
+  bytes and will never try to delete them.
+- **An upload**, when the `BLOB_*` variables are set. The store owns the object and
+  deletes it when the image is replaced or removed.
+
+`products.image_key` is what separates the two: empty for a pasted URL, set for an
+uploaded object. That is a column rather than a prefix-match on the URL because the first
+pasted URL that happened to sit under the same prefix would otherwise make the store
+delete somebody else's file. The admin form shows the pasted field *or* an upload plus a
+remove button, never both, so the two states cannot be mixed into one confusing third.
+
+**Images are served straight from the bucket, never proxied through the store.** That is
+why the bucket has to be publicly readable at `BLOB_PUBLIC_BASE_URL`, and why the bytes
+never touch Go on a read — a CDN in front of the bucket does the work.
+
+Two consequences worth knowing:
+
+- **Uploads are validated on their sniffed magic bytes**, not the filename and not the
+  browser's `Content-Type`, and the stored extension comes from the sniffed type too. A
+  publicly readable bucket that will serve `evil.html` because somebody named their upload
+  that is a cross-site scripting hole on a hostname you own. JPEG, PNG, GIF and WebP;
+  5 MB.
+- **Replacing an image writes a new key**, so the new photograph is visible immediately.
+  A stable key would need a CDN purge on every replacement — an operation this store has
+  no credentials for and no way to verify — and until it happened the old picture would
+  keep being served.
+
+`BLOB_ENDPOINT` and `BLOB_PUBLIC_BASE_URL` are separate values because the address a
+bucket is *written* through and the address it is *read* from are routinely different:
+R2 writes to `<account>.r2.cloudflarestorage.com` and reads from a custom domain, and in
+the compose stack the server writes to `minio:9000` while your browser reads from
+`localhost:9000`. Only the operator knows the second one, so it is not derived.
+
+**Why minio-go and not the AWS SDK.** Since `aws-sdk-go-v2/service/s3` v1.73.0 every
+`PutObject` carries a CRC32 checksum by default, which
+[broke R2, GCS interop and older MinIO](https://github.com/aws/aws-sdk-go-v2/discussions/2960) —
+the three stores this targets — while being correct for the one it is least likely to be
+pointed at. minio-go speaks the conservative subset all of them agree on.
+
+The upload order is chosen so no failure leaves a product pointing at nothing: store the
+new object, point the product at it, and only then delete the old one. A failure part-way
+leaves the previous image working, or at worst an orphaned object that costs a few
+kilobytes and is logged.
 
 ### Seeding
 
@@ -517,11 +575,13 @@ question is the depth of the problem, not the size of the dependency.
 | [`gorilla/securecookie`](https://github.com/gorilla/securecookie) | Signing the admin session cookie, including key rotation |
 | [`golang.org/x/crypto/bcrypt`](https://pkg.go.dev/golang.org/x/crypto/bcrypt) | Admin password hashing |
 | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Sending email: MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
+| [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, MinIO |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:
 a router (`ServeMux` does method and wildcard patterns), a validation library (struct tags
-fight the per-field messages these forms need), a decimal type (money is integer cents), and
-a UUID library (the database generates them).
+fight the per-field messages these forms need), and a decimal type (money is
+integer cents). A UUID library is not needed *directly* — the database generates ids — and
+`google/uuid` now arrives indirectly with minio-go, which is fine.
 
 ### Build-time tools
 
@@ -659,8 +719,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
 6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
 7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
-8. Images (object storage) ← *next*
-9. Hardening
+8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
+9. Hardening ← *next*
 10. Publish
 
 ## Licence

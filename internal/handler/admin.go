@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
@@ -30,14 +31,16 @@ type Handler struct {
 	orders   *orders.Store
 	gateway  payment.Gateway
 	mail     email.Sender
+	blob     blob.Storage
 	sessions *auth.Sessions
 }
 
 func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
-	ord *orders.Store, gateway payment.Gateway, mail email.Sender, sessions *auth.Sessions) *Handler {
+	ord *orders.Store, gateway payment.Gateway, mail email.Sender, images blob.Storage,
+	sessions *auth.Sessions) *Handler {
 	return &Handler{
 		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
-		orders: ord, gateway: gateway, mail: mail, sessions: sessions,
+		orders: ord, gateway: gateway, mail: mail, blob: images, sessions: sessions,
 	}
 }
 
@@ -124,6 +127,8 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products/{id}/variants", h.adminVariantCreate)
 	admin("POST /admin/products/{id}/variants/{variantID}", h.adminVariantUpdate)
 	admin("POST /admin/products/{id}/variants/{variantID}/delete", h.adminVariantDelete)
+	admin("POST /admin/products/{id}/image", h.adminProductImageUpload)
+	admin("POST /admin/products/{id}/image/delete", h.adminProductImageDelete)
 	// Read-only on purpose: only an authenticated gateway notification may change
 	// an order. See internal/handler/admin_orders.go.
 	admin("GET /admin/orders", h.adminOrderList)
@@ -167,6 +172,13 @@ type productFormPage struct {
 	VariantForm    variantForm
 	VariantErrors  validate.FormErrors
 	VariantErrorID string
+
+	// Image upload state. UploadsEnabled is false when no object storage is
+	// configured, in which case the page offers a pasted URL and says so rather
+	// than showing a form that could only fail.
+	UploadsEnabled bool
+	AcceptTypes    string
+	MaxUploadMB    int64
 }
 
 // variantForm is the add-variant form's raw input, kept as typed so a
@@ -240,6 +252,19 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.ID = r.PathValue("id")
+
+	// An uploaded image's URL is not the form's to change: the field is not even
+	// rendered in that case, so an empty submission here means "not shown" and not
+	// "cleared". Taking it at face value would orphan the object and blank the
+	// image.
+	existing, err := h.cat.Get(r.Context(), p.ID)
+	if err != nil {
+		h.storeError(w, r, err)
+		return
+	}
+	if existing.HasUploadedImage() {
+		p.ImageURL = existing.ImageURL
+	}
 
 	if errs := validate.Product(p); errs.Any() {
 		h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, errs)
@@ -417,11 +442,14 @@ func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, er
 		title = "New product"
 	}
 	return productFormPage{
-		page:        h.newPage(r, title),
-		IsNew:       isNew,
-		Product:     p,
-		Errors:      errs,
-		VariantForm: variantForm{Active: true},
+		page:           h.newPage(r, title),
+		IsNew:          isNew,
+		Product:        p,
+		Errors:         errs,
+		VariantForm:    variantForm{Active: true},
+		UploadsEnabled: h.cfg.Blob.Configured(),
+		AcceptTypes:    strings.Join(blob.SupportedTypes(), ","),
+		MaxUploadMB:    blob.MaxUploadBytes >> 20,
 	}
 }
 

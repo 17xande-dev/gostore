@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
@@ -33,7 +34,7 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 	}
 	gateway := payment.NewFake()
 	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool),
-		orders.NewStore(pool), gateway, email.NewFake(), testSessions(t))
+		orders.NewStore(pool), gateway, email.NewFake(), blob.NewFake(), testSessions(t))
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)

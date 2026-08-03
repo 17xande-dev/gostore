@@ -244,6 +244,84 @@ func TestLoad_PayFast(t *testing.T) {
 	}
 }
 
+func TestLoad_Blob(t *testing.T) {
+	setRequired(t)
+
+	// Unconfigured is a complete, working store that pastes image URLs — the same
+	// way the catalog worked for five phases.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Blob.Configured() {
+		t.Error("object storage is configured with no BLOB_ENDPOINT")
+	}
+
+	blobEnv := func(t *testing.T) {
+		t.Helper()
+		setRequired(t)
+		t.Setenv("BLOB_ENDPOINT", "localhost:9000")
+		t.Setenv("BLOB_BUCKET", "gostore-images")
+		t.Setenv("BLOB_ACCESS_KEY_ID", "key")
+		t.Setenv("BLOB_SECRET_ACCESS_KEY", "secret")
+		t.Setenv("BLOB_PUBLIC_BASE_URL", "http://localhost:9000/gostore-images")
+	}
+
+	blobEnv(t)
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.Blob.Configured() {
+		t.Fatal("a full BLOB_* set was not recognised")
+	}
+	// "auto" is what R2 wants, and GCS and MinIO ignore it.
+	if c.Blob.Region != "auto" {
+		t.Errorf("Region = %q, want auto", c.Blob.Region)
+	}
+	if !c.Blob.UseTLS {
+		t.Error("TLS is off by default; it should have to be turned off deliberately")
+	}
+	// A trailing slash must not survive into image URLs.
+	t.Setenv("BLOB_PUBLIC_BASE_URL", "https://images.example/")
+	if c, err = Load(); err != nil || c.Blob.PublicBaseURL != "https://images.example" {
+		t.Errorf("PublicBaseURL = %q, %v", c.Blob.PublicBaseURL, err)
+	}
+
+	// A partial configuration fails at boot, not at the first upload — and the error
+	// names what is missing.
+	for _, key := range []string{
+		"BLOB_BUCKET", "BLOB_ACCESS_KEY_ID", "BLOB_SECRET_ACCESS_KEY", "BLOB_PUBLIC_BASE_URL",
+	} {
+		blobEnv(t)
+		t.Setenv(key, "")
+
+		_, err := Load()
+		if err == nil {
+			t.Errorf("%s unset was accepted", key)
+			continue
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("%s unset: error %q does not name it", key, err)
+		}
+	}
+
+	// And the other direction: credentials with no endpoint means uploads are off
+	// while somebody clearly intended them on.
+	setRequired(t)
+	t.Setenv("BLOB_BUCKET", "gostore-images")
+	t.Setenv("BLOB_ACCESS_KEY_ID", "key")
+	if _, err := Load(); err == nil {
+		t.Error("BLOB_* without BLOB_ENDPOINT was accepted, so uploads would be silently off")
+	}
+
+	blobEnv(t)
+	t.Setenv("BLOB_PUBLIC_BASE_URL", "/images")
+	if _, err := Load(); err == nil {
+		t.Error("a relative BLOB_PUBLIC_BASE_URL was accepted")
+	}
+}
+
 func TestLoad_TrustProxyIP(t *testing.T) {
 	setRequired(t)
 

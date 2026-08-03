@@ -50,10 +50,29 @@ RETURNING *;
 
 -- updated_at is maintained here rather than by a trigger, so the write is visible
 -- in the query itself.
+--
+-- image_key is deliberately absent: this is the product form, and the form has no
+-- business reassigning which object in storage the product owns. Uploads go
+-- through SetProductImage and removals through ClearProductImage.
 -- name: UpdateProduct :one
 UPDATE products
 SET kind = $2, slug = $3, title = $4, description = $5, image_url = $6,
     active = $7, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- Points a product at an uploaded object. The caller deletes the previous object,
+-- if there was one, *after* this commits: an orphaned object costs a few kilobytes,
+-- while a deleted object still referenced by a live row is a broken image.
+-- name: SetProductImage :one
+UPDATE products
+SET image_url = $2, image_key = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearProductImage :one
+UPDATE products
+SET image_url = '', image_key = '', updated_at = now()
 WHERE id = $1
 RETURNING *;
 

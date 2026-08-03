@@ -25,7 +25,18 @@ type Product struct {
 	CreatedAt   time.Time `json:"-"`
 	UpdatedAt   time.Time `json:"-"`
 	Variants    []Variant `json:"variants,omitempty"`
+
+	// ImageKey names the object in blob storage that ImageURL points at, and is
+	// empty when the URL was pasted in by hand. The distinction decides whether
+	// this store owns those bytes and may delete them — see
+	// 0003_product_image_key.sql. It is not in the JSON, because a seed file has no
+	// business claiming ownership of an object it did not upload.
+	ImageKey string `json:"-"`
 }
+
+// HasUploadedImage reports whether the image is an object this store owns, as
+// opposed to a URL somebody pasted.
+func (p Product) HasUploadedImage() bool { return p.ImageKey != "" }
 
 // Variant is a purchasable, priced, stocked row under a product.
 type Variant struct {

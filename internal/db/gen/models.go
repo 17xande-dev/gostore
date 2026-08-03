@@ -62,6 +62,7 @@ type Product struct {
 	Active      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	ImageKey    string
 }
 
 type ProductVariant struct {

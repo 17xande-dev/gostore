@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
@@ -95,8 +96,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	images, err := newBlobStorage(cfg, log)
+	if err != nil {
+		return err
+	}
 	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool),
-		orders.NewStore(pool), gateway, mail, sessions)
+		orders.NewStore(pool), gateway, mail, images, sessions)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
@@ -213,6 +218,41 @@ func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
 	log.Info("email configured", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port,
 		"from", cfg.SMTP.From, "tls", policy, "notify", cfg.OrderNotifyEmail)
 	return sender, nil
+}
+
+// newBlobStorage builds object storage for product images, or an Unconfigured that
+// refuses uploads.
+//
+// Refusing is right, where email drops silently: an upload is something an operator
+// is doing and watching, so it should fail with a message. Nothing else in the store
+// depends on this — the catalog, cart, checkout and payment path never touch it — so
+// a deployment without object storage is a complete shop that pastes image URLs.
+func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
+	if !cfg.Blob.Configured() {
+		log.Info("no object storage configured: product images are pasted URLs",
+			"enable", "set BLOB_ENDPOINT, BLOB_BUCKET, BLOB_ACCESS_KEY_ID, BLOB_SECRET_ACCESS_KEY and BLOB_PUBLIC_BASE_URL")
+		return blob.Unconfigured{}, nil
+	}
+
+	storage, err := blob.NewS3(blob.S3Config{
+		Endpoint:      cfg.Blob.Endpoint,
+		Bucket:        cfg.Blob.Bucket,
+		AccessKey:     cfg.Blob.AccessKey,
+		SecretKey:     cfg.Blob.SecretKey,
+		Region:        cfg.Blob.Region,
+		UseTLS:        cfg.Blob.UseTLS,
+		PublicBaseURL: cfg.Blob.PublicBaseURL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Blob.UseTLS {
+		log.Warn("object storage TLS is disabled: credentials go over the network in the clear",
+			"endpoint", cfg.Blob.Endpoint)
+	}
+	log.Info("object storage configured", "endpoint", cfg.Blob.Endpoint,
+		"bucket", cfg.Blob.Bucket, "public_base", cfg.Blob.PublicBaseURL)
+	return storage, nil
 }
 
 func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
