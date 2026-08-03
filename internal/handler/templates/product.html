@@ -1,10 +1,65 @@
+{{/*
+  The first-party product page: the shared detail fragment, plus the add-to-cart
+  form.
+
+  The form lives here and not in "product_detail" on purpose. That fragment is
+  what gets embedded on another origin, where a cart form could not work anyway —
+  SameSite=Lax withholds the cookie on a cross-site post and the CSRF origin
+  check would refuse it. An embedded catalog links to this page instead, which is
+  the same split the whole design rests on: reads anywhere, writes first-party.
+*/}}
 {{define "product"}}
 {{template "head" .}}
 
 <p><a href="/products" hx-boost="true">← All products</a></p>
 {{template "product_detail" .}}
+{{template "add_to_cart" .}}
 
 {{template "foot" .}}
+{{end}}
+
+{{define "add_to_cart"}}
+{{with .Product}}
+{{if .InStock}}
+<form method="post" action="/cart/items" hx-post="/cart/items" hx-target="#cart-status">
+  {{template "csrf" $.CSRFToken}}
+
+  {{/*
+    One variant with no options needs no chooser, just a hidden id — the shopper
+    has nothing to decide. Anything else gets a select, with sold-out options
+    disabled rather than missing, so a shopper looking for their size can see
+    that it exists and is gone.
+  */}}
+  {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
+    <input type="hidden" name="variant_id" value="{{(index .Variants 0).ID}}">
+  {{else}}
+    <label>Option
+      <select name="variant_id" required>
+        {{range .Variants}}
+        <option value="{{.ID}}" {{if not .InStock}}disabled{{end}}>
+          {{.Label}} — {{$.Currency}} {{money .PriceCents}}{{if not .InStock}} (sold out){{end}}
+        </option>
+        {{end}}
+      </select>
+    </label>
+  {{end}}
+
+  <label>Quantity <input type="number" name="quantity" value="1" min="1" max="99" size="3"></label>
+  <button type="submit">Add to cart</button>
+</form>
+
+{{/*
+  This page cannot know what is in the cart: the cart cookie is scoped to /cart,
+  so the browser does not send it here — which is exactly what keeps the catalog
+  cacheable and embeddable. So the status is fetched from a path that does get the
+  cookie, and refreshed in place after an add. Without JavaScript the block stays
+  empty and the form still works, landing on /cart instead.
+*/}}
+<div id="cart-status" hx-get="/cart/status" hx-trigger="load"></div>
+{{else}}
+<p>Sold out.</p>
+{{end}}
+{{end}}
 {{end}}
 
 {{define "product_detail"}}

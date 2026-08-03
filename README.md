@@ -5,9 +5,9 @@ htmx frontend, PostgreSQL for storage, and [PayFast](https://payfast.io) for pay
 Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
-> catalog (products, variants, seed command, admin CRUD), admin authentication and the
-> read-only storefront work. Cart, checkout and the PayFast integration are being built in
-> that order — see the build order below.
+> catalog (products, variants, seed command, admin CRUD), admin authentication, the
+> storefront and the cart work. Checkout and the PayFast integration are next — see the
+> build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) so `make up`
 > gives you a working admin. Replace it, and `SESSION_SECRET`, before anyone else can
@@ -112,16 +112,23 @@ Notes:
 
 ## CSRF
 
-Every state-changing admin request needs a [nosurf](https://github.com/justinas/nosurf)
-token, submitted as a `csrf_token` form field (the `{{template "csrf" .CSRFToken}}` partial)
-or an `X-CSRF-Token` header. A request without one gets `403`.
+Every state-changing request — admin or cart — needs a
+[nosurf](https://github.com/justinas/nosurf) token, submitted as a `csrf_token` form field
+(the `{{template "csrf" .CSRFToken}}` partial) or an `X-CSRF-Token` header. A request without
+one gets `403`.
 
-CSRF is mounted over the `/admin` subtree rather than the whole server, for a reason worth
-knowing before adding routes: nosurf sets a token cookie on every response it handles, and
-the catalog reads have to stay cookie-free to be droppable into another origin's page.
-Scoping it by subtree also means the payment callback — which cannot carry a token, and must
-never require one — will be exempt by not being in the group at all, rather than by an
-exempt-path string that has to keep matching the route.
+CSRF is mounted over groups of routes rather than the whole server, for a reason worth
+knowing before adding any: nosurf sets a token cookie on every response it handles, and a
+catalog fetched from another origin must stay cookie-free. So `/admin`, `/cart` and
+*first-party* catalog pages go through it — the last of those because the product page
+carries an add-to-cart form — while the same catalog pages fetched cross-origin do not.
+Grouping also means the payment callback, which cannot carry a token and must never require
+one, will be exempt by not being in a group at all, rather than by an exempt-path string that
+has to keep matching the route.
+
+The trap this design walks into, if you extend it: **a page rendered outside the CSRF layer
+gets an empty `.CSRFToken`**, and every form on it is then refused with a `403`. Any new page
+carrying a form has to be inside one of these groups.
 
 nosurf also requires that an unsafe request identify its origin, via `Sec-Fetch-Site`,
 `Origin` or `Referer`. Browsers always send at least one; **`curl` does not**, so manual
@@ -188,10 +195,15 @@ make seed SEED_FILE=my-catalog.json
 | `GET /products` | The catalog |
 | `GET /products/{slug}` | One product, with its variants |
 
-Both are **read-only and set no cookies**, and both answer twice over: a full page for an
-ordinary visit, and a bare fragment when htmx asks (`HX-Request: true`, unless `HX-Boosted`
-says the browser is replacing the whole document). One URL serves the store and an embedder,
-so there is no second API to keep in step.
+Both are read-only, and both answer twice over: a full page for an ordinary visit, and a
+bare fragment when htmx asks (`HX-Request: true`, unless `HX-Boosted` says the browser is
+replacing the whole document). One URL serves the store and an embedder, so there is no
+second API to keep in step.
+
+**A request from another origin gets no cookies at all** — that is what makes the catalog
+droppable into someone else's page. A *first-party* visit does pass through the CSRF layer,
+because the product page carries an add-to-cart form and a form needs a token; it never picks
+up a cart cookie there. The two chains serve identical HTML.
 
 Only active products with at least one active variant appear; an inactive product is a `404`,
 not an unlinked page. Sold-out variants are *shown* and marked unavailable rather than
@@ -214,6 +226,47 @@ Everything from "add to cart" onward stays first-party on the store's own domain
 the cart cookie first-party and sidesteps `SameSite=None`, third-party cookie blocking and
 iframe checkout entirely — the split is a feature of the design, not a limitation of it.
 
+Concretely: the embedded fragment carries **no** add-to-cart form, and links to the store's
+own product page instead. A cart form on another origin could not work anyway — `SameSite=Lax`
+withholds the cookie on a cross-site post, and the CSRF origin check would refuse it.
+
+## Cart
+
+| Route | Does |
+|---|---|
+| `GET /cart` | The cart page (or its body, for htmx) |
+| `GET /cart/status` | The "N items in your cart" fragment |
+| `POST /cart/items` | Add a variant |
+| `POST /cart/items/{variantID}` | Set a quantity; **0 removes the line** |
+| `DELETE /cart/items/{variantID}` | Remove a line (what htmx sends) |
+
+A cart is a database row keyed by an opaque 24-byte random token that is also the cookie
+value — `HttpOnly`, `SameSite=Lax`, 30 days, scoped to `/cart`. Not a signed cart carried in
+the cookie: prices and stock are live server-side truth that has to be re-read on every
+render anyway, so reading the cart from the database is not extra work, it is the same work.
+The token is unguessable rather than signed, because holding one grants nothing beyond one
+anonymous basket.
+
+Consequences worth knowing before changing any of it:
+
+- **The cart holds quantities, not prices.** Every render prices the lines from the catalog
+  as it stands, so a price change or a sell-out shows up next time the cart is looked at.
+  Snapshotting happens when the order is created, not before.
+- **Withdrawn or sold-out lines stay visible** and are marked unavailable, with the reason,
+  and they block checkout. A line vanishing between page loads reads as a bug — or worse, as
+  a silent change to the total.
+- **Stock is checked against the resulting total**, so two adds of three cannot smuggle six
+  past a limit of four. A refusal says how many are actually left.
+- **A cart row is created on the first add**, not on the first visit, so browsing leaves no
+  trail of empty carts.
+- **A stale cookie starts a fresh cart** rather than an error page, for shoppers returning
+  after the cleanup job has been through.
+- **Without JavaScript everything still works**: forms post and redirect, and the remove
+  button submits quantity 0. With htmx, adding swaps a small status block so the shopper
+  keeps their place, and quantity changes swap the cart body.
+- Deleting a variant in the admin **empties it from carts** (`ON DELETE CASCADE`), because an
+  abandoned cart must not stop the shop owner editing the catalog. `order_items` deliberately
+  does the opposite: purchase history is not rewritable.
 
 ### Theming
 
@@ -338,8 +391,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 2. **Catalog** — products and variants, seed command, admin CRUD ← *done*
 3. **Admin auth** — signed session cookie, `RequireAdmin`, `cmd/hashpw` ← *done*
 4. **Storefront reads** — `/products` pages and fragments, vendored htmx, CORS ← *done*
-5. Cart ← *next*
-6. Checkout + PayFast
+5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
+6. Checkout + PayFast ← *next*
 7. Order emails + admin orders
 8. Images (object storage)
 9. Hardening

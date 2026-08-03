@@ -156,8 +156,11 @@ func TestCSRF_DoesNotLeakItsCookieOutsideAdmin(t *testing.T) {
 	for _, c := range res.Cookies() {
 		if c.Name == "csrf_token" {
 			found = true
-			if c.Path != "/admin" {
-				t.Errorf("the CSRF cookie has Path %q, want /admin", c.Path)
+			// Path "/" because the protected group spans /admin and /cart. What
+			// keeps the catalog cookie-free is that those routes are served
+			// outside this handler, not the cookie's path.
+			if c.Path != "/" {
+				t.Errorf("the CSRF cookie has Path %q, want /", c.Path)
 			}
 			if !c.HttpOnly {
 				t.Error("the CSRF cookie is not HttpOnly")

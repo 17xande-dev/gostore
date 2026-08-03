@@ -1,0 +1,93 @@
+{{define "cart"}}
+{{template "head" .}}
+
+<p><a href="/products">← Continue shopping</a></p>
+<h1>Your cart</h1>
+<div id="cart">
+{{template "cart_items" .}}
+</div>
+
+{{template "foot" .}}
+{{end}}
+
+{{/*
+  The cart body, swapped in place when htmx drives a quantity change so the page
+  is not thrown away. hx-target points at the wrapper above, which this template
+  does not include — otherwise each swap would nest another copy of it.
+*/}}
+{{define "cart_items"}}
+{{with .Error}}<p><strong>{{.}}</strong></p>{{end}}
+{{with .Notice}}<p>{{.}}</p>{{end}}
+
+{{if .Cart.Empty}}
+  <p>Your cart is empty.</p>
+{{else}}
+<table border="1" cellpadding="4">
+  <thead>
+    <tr><th>Item</th><th>Price</th><th>Quantity</th><th>Line total</th><th></th></tr>
+  </thead>
+  <tbody>
+  {{range .Cart.Items}}
+    <tr>
+      <td>
+        <a href="/products/{{.ProductSlug}}">{{.ProductTitle}}</a>
+        {{with .Label}}<small>{{.}}</small>{{end}}
+        {{if not .Purchasable}}<br><small><strong>No longer for sale</strong></small>
+        {{else if not .InStock}}<br><small><strong>Only {{.StockQty}} left</strong></small>{{end}}
+      </td>
+      <td>{{$.Currency}} {{money .UnitPriceCents}}</td>
+      <td>
+        <form method="post" action="/cart/items/{{.VariantID}}"
+              hx-post="/cart/items/{{.VariantID}}" hx-target="#cart">
+          {{template "csrf" $.CSRFToken}}
+          <input type="number" name="quantity" value="{{.Quantity}}" min="0" max="99" size="3">
+          <button type="submit">Update</button>
+        </form>
+      </td>
+      <td>{{$.Currency}} {{money .LineTotalCents}}</td>
+      <td>
+        {{/*
+          Quantity zero is the no-JavaScript remove: the same endpoint, no extra
+          route. htmx sends a real DELETE instead.
+        */}}
+        <form method="post" action="/cart/items/{{.VariantID}}"
+              hx-delete="/cart/items/{{.VariantID}}" hx-target="#cart">
+          {{template "csrf" $.CSRFToken}}
+          <input type="hidden" name="quantity" value="0">
+          <button type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+  <tfoot>
+    <tr>
+      <th colspan="3">Total ({{.Cart.Count}} item{{if ne .Cart.Count 1}}s{{end}})</th>
+      <th colspan="2">{{.Currency}} {{money .Cart.TotalCents}}</th>
+    </tr>
+  </tfoot>
+</table>
+
+{{range .Cart.Problems}}<p><strong>{{.}}</strong></p>{{end}}
+
+{{if .Cart.Purchasable}}
+  {{/* Checkout arrives in the next phase; the button is deliberately not here yet. */}}
+  <p><small>Checkout is not built yet.</small></p>
+{{else}}
+  <p><small>Fix the problems above before checking out.</small></p>
+{{end}}
+{{end}}
+{{end}}
+
+{{/*
+  The small block a product page swaps after adding to the cart, so the shopper
+  keeps their place instead of being sent to the cart.
+*/}}
+{{define "cart_status"}}
+{{with .Error}}<p><strong>{{.}}</strong></p>{{end}}
+{{with .Notice}}<p>{{.}}</p>{{end}}
+{{if not .Cart.Empty}}
+  <p><a href="/cart">Your cart: {{.Cart.Count}} item{{if ne .Cart.Count 1}}s{{end}},
+    {{.Currency}} {{money .Cart.TotalCents}}</a></p>
+{{end}}
+{{end}}

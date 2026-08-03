@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/middleware"
@@ -22,29 +23,42 @@ type Handler struct {
 	log      *slog.Logger
 	tmpl     *Templates
 	cat      *catalog.Store
+	cart     *cart.Store
 	sessions *auth.Sessions
 }
 
-func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, sessions *auth.Sessions) *Handler {
-	return &Handler{cfg: cfg, log: log, tmpl: tmpl, cat: cat, sessions: sessions}
+func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store, sessions *auth.Sessions) *Handler {
+	return &Handler{cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts, sessions: sessions}
 }
 
-// AdminHandler returns the whole /admin subtree: the routes, plus CSRF
-// protection over them.
+// FirstPartyHandler returns everything that changes state — the admin and the
+// cart — behind CSRF protection. The admin routes additionally require a session;
+// the cart is anonymous.
 //
-// CSRF is scoped to this subtree rather than wrapped around the server's whole
+// CSRF is scoped to these routes rather than wrapped around the server's whole
 // mux, because nosurf sets a token cookie on every response it handles and the
-// embeddable catalog fragments must stay cookie-free to be droppable into
-// another origin's page. Scoping by group also means the payment callback is
+// embeddable catalog reads must stay cookie-free to be droppable into another
+// origin's page. Scoping by group also means the payment callback will be
 // CSRF-exempt by not being in the group at all, instead of by an exempt-path
 // string that has to keep matching the route.
-func (h *Handler) AdminHandler(protect middleware.Middleware) http.Handler {
+func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler {
 	mux := http.NewServeMux()
 	h.RegisterAdmin(mux, protect)
+	h.registerCart(mux)
+	return h.withCSRF(mux)
+}
 
-	csrf := nosurf.New(mux)
+// withCSRF wraps a handler in nosurf. It is one function so that every
+// CSRF-protected group — the admin, the cart, and the first-party catalog pages
+// that carry an add-to-cart form — shares a single configuration and a single
+// token pool.
+func (h *Handler) withCSRF(next http.Handler) http.Handler {
+	csrf := nosurf.New(next)
 	csrf.SetBaseCookie(http.Cookie{
-		Path:     "/admin",
+		// Path "/" because the protected routes span /admin, /cart, the
+		// first-party catalog pages — and /checkout next — and a cookie has only
+		// one path.
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,

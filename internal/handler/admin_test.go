@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
@@ -72,10 +73,16 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	}
 	log := slog.New(slog.DiscardHandler)
 	sessions := testSessions(t)
-	h := New(testConfig(), log, tmpl, store, sessions)
+	h := New(testConfig(), log, tmpl, store, cart.NewStore(pool), sessions)
 
 	mux := http.NewServeMux()
-	mux.Handle("/admin/", h.AdminHandler(middleware.RequireAdmin(sessions, log)))
+	// Everything main.go mounts, mounted the same way: the cart tests need the
+	// product pages, because an add-to-cart starts on one.
+	h.RegisterStorefront(mux)
+	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
+	mux.Handle("/admin/", firstParty)
+	mux.Handle("/cart", firstParty)
+	mux.Handle("/cart/", firstParty)
 
 	srv := httptest.NewServer(mux)
 	jar, err := cookiejar.New(nil)

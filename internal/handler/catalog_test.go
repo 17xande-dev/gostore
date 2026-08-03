@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
@@ -21,12 +22,13 @@ import (
 func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httptest.Server, *catalog.Store) {
 	t.Helper()
 
-	store := catalog.NewStore(dbtest.Pool(t))
+	pool := dbtest.Pool(t)
+	store := catalog.NewStore(pool)
 	tmpl, err := ParseTemplates(templateDir)
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, testSessions(t))
+	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool), testSessions(t))
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)
@@ -120,9 +122,19 @@ func TestStorefront_ProductDetail(t *testing.T) {
 		t.Error("the inactive variant is shown")
 	}
 
-	// Nothing on this page may change state: it is served cross-origin.
-	if strings.Contains(body, "<form") {
-		t.Error("the cross-origin detail page contains a form")
+	// The first-party page carries the add-to-cart form...
+	if !strings.Contains(body, `action="/cart/items"`) {
+		t.Error("the product page has no add-to-cart form")
+	}
+	// ...and the fragment served to an embedder does not. A cart form on another
+	// origin could not work anyway: SameSite=Lax withholds the cookie and the
+	// CSRF origin check would refuse the post.
+	fragment := getWith(t, srv, "/products/sample-tee", http.Header{"HX-Request": {"true"}})
+	if strings.Contains(fragment, "<form") {
+		t.Errorf("the cross-origin detail fragment contains a form: %s", fragment)
+	}
+	if !strings.Contains(fragment, "Sample Tee") {
+		t.Error("the fragment lost its content")
 	}
 }
 
@@ -165,18 +177,48 @@ func TestStorefront_HTMXGetsAFragment(t *testing.T) {
 	}
 }
 
-func TestStorefront_SetsNoCookies(t *testing.T) {
-	// The whole embedding design rests on this: the catalog is droppable into
-	// another origin's page because it needs no cookie, so nothing here may set
-	// one — not a session, not a CSRF token, not a cart.
+func TestStorefront_EmbeddedRequestsSetNoCookies(t *testing.T) {
+	// The whole embedding design rests on this: a catalog fetched from another
+	// origin's page must set no cookie of any kind, so the response is cacheable
+	// and carries nothing into the embedder's context.
+	cfg := testConfig()
+	cfg.EmbedOrigins = []string{"https://cms.example"}
+	srv, store := newStorefront(t, cfg, "")
+	stock(t, store)
+
+	embedded := http.Header{"Origin": {"https://cms.example"}, "HX-Request": {"true"}}
+	for _, path := range []string{"/products", "/products/sample-tee", "/static/htmx.min.js"} {
+		res := getResponse(t, srv, path, embedded)
+		if cookies := res.Cookies(); len(cookies) != 0 {
+			t.Errorf("embedded GET %s set cookies: %v", path, cookies)
+		}
+	}
+}
+
+func TestStorefront_FirstPartyPagesCarryOnlyACSRFCookie(t *testing.T) {
+	// A first-party visit does go through the CSRF layer, because the product
+	// page carries an add-to-cart form and a form needs a token. What it must
+	// never pick up here is a cart cookie: carts begin when something is added.
 	srv, store := newStorefront(t, testConfig(), "")
 	stock(t, store)
 
-	for _, path := range []string{"/products", "/products/sample-tee", "/static/htmx.min.js"} {
+	for _, path := range []string{"/products", "/products/sample-tee"} {
 		res, _ := get(t, srv, path)
-		if cookies := res.Cookies(); len(cookies) != 0 {
-			t.Errorf("GET %s set cookies: %v", path, cookies)
+		for _, c := range res.Cookies() {
+			switch c.Name {
+			case "csrf_token": // expected
+			case CartCookieName:
+				t.Errorf("GET %s issued a cart cookie", path)
+			default:
+				t.Errorf("GET %s set an unexpected cookie %q", path, c.Name)
+			}
 		}
+	}
+
+	// Static assets are outside all of it: nothing to protect, nothing to set.
+	res, _ := get(t, srv, "/static/htmx.min.js")
+	if cookies := res.Cookies(); len(cookies) != 0 {
+		t.Errorf("the vendored asset set cookies: %v", cookies)
 	}
 }
 

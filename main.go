@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
@@ -81,7 +82,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), sessions)
+	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool), sessions)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
@@ -131,11 +132,14 @@ func routes(cfg config.Config, h *handler.Handler, sessions *auth.Sessions, pool
 
 	h.RegisterStorefront(mux)
 
-	// The admin is mounted as a subtree so CSRF protection, and the cookie
-	// nosurf needs to set for it, apply there and nowhere else. Storefront
-	// routes stay outside it: the catalog reads are embeddable cross-origin,
-	// which means cookie-free.
-	mux.Handle("/admin/", h.AdminHandler(middleware.RequireAdmin(sessions, log)))
+	// Everything that changes state is mounted here, behind CSRF protection and
+	// the cookie nosurf needs to set for it. The catalog reads stay outside:
+	// they are embeddable cross-origin, which means cookie-free.
+	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
+	mux.Handle("/admin/", firstParty)
+	// Both patterns: one matches /cart exactly, the other everything below it.
+	mux.Handle("/cart", firstParty)
+	mux.Handle("/cart/", firstParty)
 
 	// Security headers wrap everything, including 404s and /healthz. The origins
 	// allowed to fetch the catalog are also the ones allowed to frame it.

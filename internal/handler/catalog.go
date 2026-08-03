@@ -27,20 +27,66 @@ type productPageData struct {
 	Product catalog.Product
 }
 
-// RegisterStorefront wires the public catalog routes. They take no session and
-// no CSRF token because they change nothing; CORS comes from config, so
-// embedding is off until an adopter names the origins allowed to do it.
+// RegisterStorefront wires the public catalog routes. They need no session and
+// change nothing; CORS comes from config, so embedding is off until an adopter
+// names the origins allowed to do it.
+//
+// Each route is served through one of two chains, chosen per request:
+//
+//   - **Embedded** (the request carries a foreign Origin): served bare, so no
+//     cookie of any kind is set and the response stays cacheable and safe to drop
+//     into another origin's page.
+//   - **First-party** (an ordinary visit to the store): served through the CSRF
+//     handler, because the product page carries an add-to-cart form and a form
+//     needs a token. Nothing else about the response differs.
+//
+// The alternative — leaving the whole storefront outside CSRF — renders that form
+// with an empty token, so every add-to-cart is refused with a 403. The
+// alternative in the other direction, putting the storefront wholly inside CSRF,
+// sets a cookie on the fragments that exist precisely to be cookie-free.
 func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	cors := middleware.CORS(h.cfg.EmbedOrigins)
 
-	mux.Handle("GET /products", cors(http.HandlerFunc(h.products)))
-	mux.Handle("GET /products/{slug}", cors(http.HandlerFunc(h.product)))
+	catalogMux := http.NewServeMux()
+	catalogMux.HandleFunc("GET /products", h.products)
+	catalogMux.HandleFunc("GET /products/{slug}", h.product)
 	// Preflight, for a cross-origin htmx fetch that sets HX-Request.
-	mux.Handle("OPTIONS /products", cors(http.HandlerFunc(notFound)))
-	mux.Handle("OPTIONS /products/{slug}", cors(http.HandlerFunc(notFound)))
+	catalogMux.HandleFunc("OPTIONS /products", notFound)
+	catalogMux.HandleFunc("OPTIONS /products/{slug}", notFound)
+
+	firstParty := h.withCSRF(catalogMux)
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.isEmbedded(r) {
+			catalogMux.ServeHTTP(w, r)
+			return
+		}
+		firstParty.ServeHTTP(w, r)
+	})
+
+	mux.Handle("GET /products", cors(dispatch))
+	mux.Handle("GET /products/{slug}", cors(dispatch))
+	mux.Handle("OPTIONS /products", cors(dispatch))
+	mux.Handle("OPTIONS /products/{slug}", cors(dispatch))
 
 	// Vendored htmx, served from the binary so the storefront needs no CDN.
 	mux.Handle("GET /static/", http.HandlerFunc(h.static))
+}
+
+// isEmbedded reports whether this request comes from a page on another origin,
+// which is when the response must carry no cookies.
+//
+// A browser sends Origin on a cross-origin fetch and omits it on an ordinary
+// same-origin navigation, so its presence and value is the signal. Sec-Fetch-Site
+// is checked too, for browsers that send Origin on same-origin fetches.
+func (h *Handler) isEmbedded(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return false
+	case "cross-site", "same-site":
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	return origin != "" && origin != h.cfg.BaseURL
 }
 
 func (h *Handler) products(w http.ResponseWriter, r *http.Request) {
