@@ -6,12 +6,13 @@ Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
-> storefront and the cart work. Checkout and the PayFast integration are next — see the
-> build order below.
+> storefront, the cart, and checkout against PayFast all work. Order confirmation emails
+> and the admin's order views are next — see the build order below.
 >
-> The compose stack ships a **published development password** (`gostore`) so `make up`
-> gives you a working admin. Replace it, and `SESSION_SECRET`, before anyone else can
-> reach the deployment — see [Admin](#admin).
+> The compose stack ships a **published development password** (`gostore`) and PayFast's
+> **published sandbox credentials**, so `make up` gives you a working admin and a working
+> checkout. Replace them, along with `SESSION_SECRET`, before anyone else can reach the
+> deployment — see [Admin](#admin) and [Payments](#payments).
 
 ## Why
 
@@ -61,6 +62,13 @@ list with defaults.
 | `SESSION_SECRET` | **yes** | — | 32+ random bytes, base64, signs the session cookie |
 | `SESSION_SECRET_PREVIOUS` | no | — | The outgoing secret during a rotation; still verifies, never signs |
 | `SESSION_TTL_HOURS` | no | `24` | How long a sign-in lasts |
+| `PAYFAST_MERCHANT_ID` | **yes** | — | From the PayFast dashboard |
+| `PAYFAST_MERCHANT_KEY` | **yes** | — | From the PayFast dashboard |
+| `PAYFAST_PASSPHRASE` | no | — | The account's salt passphrase; must match the dashboard exactly |
+| `PAYFAST_SANDBOX` | no | `true` | `false` takes real money |
+| `PAYFAST_NOTIFY_URL` | no | derived | Override when PayFast cannot reach `BASE_URL` (a tunnel) |
+| `PAYFAST_ALLOWED_CIDRS` | no | published ranges | Override the source ranges; `any` disables the check |
+| `TRUST_PROXY_IP` | no | `false` | Believe `X-Forwarded-For`; only with a proxy that replaces it |
 | `PORT` | no | `8080` | Listen port |
 | `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs |
 | `STORE_NAME` | no | `gostore` | Displayed store name |
@@ -70,7 +78,7 @@ list with defaults.
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
 
-PayFast and object-storage settings arrive with their phases.
+Object-storage settings arrive with their phase.
 
 ## Admin
 
@@ -268,6 +276,127 @@ Consequences worth knowing before changing any of it:
   abandoned cart must not stop the shop owner editing the catalog. `order_items` deliberately
   does the opposite: purchase history is not rewritable.
 
+## Checkout
+
+| Route | Does |
+|---|---|
+| `GET /cart/checkout` | The shipping form, alongside what is being bought |
+| `POST /cart/checkout` | Creates a **pending** order and hands over to the gateway |
+| `GET /cart/checkout/success` | The gateway's `return_url` — **informational only** |
+| `GET /cart/checkout/cancel` | The gateway's `cancel_url` |
+| `POST /payments/{gateway}/callback` | The only thing that can mark an order paid |
+
+**Checkout lives under `/cart`, not at `/checkout`.** The cart cookie is scoped to `/cart`
+so the catalog pages stay genuinely cookie-free and embeddable, and a page at `/checkout`
+would therefore never be sent the token identifying the basket it is meant to be checking
+out. Nesting it costs a URL segment; the alternatives were giving the catalog a cookie back
+or issuing a second one.
+
+The order of events matters more than the routes do:
+
+- **An order is a snapshot.** A cart holds quantities and prices everything live; an order
+  copies the title, options and unit price in as they were. A later price rise, rename or
+  withdrawal cannot rewrite what somebody bought.
+- **The total is computed from the catalog inside the transaction that creates the order**,
+  never from the figure the submitted page happened to be showing. That total is what the
+  gateway is asked for and what its notification is checked against, so it has to be a number
+  the database agrees with.
+- **Stock does not move at checkout.** It moves when the money arrives. An abandoned checkout
+  therefore holds no inventory, which is the right trade for a small shop: two people can
+  reach a payment page for the last item, and the second one is refunded rather than everyone
+  being blocked by carts nobody will pay for.
+- **The cart survives checkout** and is emptied when payment succeeds, so backing out of the
+  gateway's page leaves the basket intact.
+- **`/cart/checkout/success` grants nothing.** A shopper can navigate there without paying, so
+  it says the payment is being confirmed rather than that it succeeded. It names the order —
+  the cart cookie identifies it, and a reference is what a customer needs to quote.
+
+The hand-over to the gateway is a real cross-origin form post, not a redirect, which has two
+consequences worth knowing before touching the CSP: the gateway's origin must be in
+`form-action`, and the submit-on-load script is a **file** (`/static/redirect.js`) because
+`script-src 'self'` forbids the inline script that would otherwise do it. Without JavaScript
+the form's button is the whole mechanism, and it says so.
+
+## Payments
+
+PayFast is the only gateway, behind a small `payment.Gateway` interface so adding another is
+code and no migration — the order's `gateway_*` columns are deliberately gateway-neutral.
+
+### Setting it up
+
+1. Get a merchant id and key from the [PayFast dashboard](https://sandbox.payfast.co.za) —
+   the sandbox's have no relationship to a live account's.
+2. Set a **salt passphrase** in the dashboard and put the same value in
+   `PAYFAST_PASSPHRASE`. Set on one side only, every signature fails.
+3. Leave `PAYFAST_SANDBOX=true` until a full sandbox payment has worked end to end.
+4. Make sure PayFast's servers can reach the callback. `notify_url` is derived from
+   `BASE_URL`, which on a laptop is `localhost` and unreachable from the internet — so local
+   testing needs a tunnel, and `PAYFAST_NOTIFY_URL` is where its hostname goes.
+
+Then, in order: place an order, pay it on the sandbox, and check that the order is `paid` and
+stock has moved. Replaying the captured notification body with `curl` must not move stock a
+second time.
+
+### How a notification is authenticated
+
+The customer's browser returning to `return_url` proves nothing. The **ITN** — PayFast's
+form-encoded POST to `notify_url` — is the only statement about a payment this store trusts,
+and it passes four independent checks before anything happens:
+
+1. **The signature recomputes** over the fields exactly as received, in the order received.
+2. **The source IP** is one of PayFast's published ranges.
+3. **PayFast confirms it**, when the exact bytes received are posted back to
+   `/eng/query/validate`.
+4. **The merchant id** is ours.
+
+None of them is sufficient alone. The signature can be produced by anyone holding the
+passphrase, an IP can be spoofed or shared with whoever else is behind the same proxy, and the
+server-to-server check proves the data is PayFast's but not that it was meant for this store.
+
+Then the handler does what only it can: find the order, check the amount against the order's
+own total, and stop a replay from decrementing stock twice.
+
+**The callback always answers `200`.** A gateway retries anything else, and a notification
+that fails validation is not "try again later" — it is forged or broken, and neither improves
+on the third attempt. Rejections are logged in full, naming the check that failed, and
+dropped. It is also outside the CSRF group by *not being in it* rather than by an exempt-path
+string that has to keep matching the route.
+
+### The signature, and why it is spelled out in code
+
+Three details account for nearly every PayFast integration failure, and
+[`internal/payment/payfast`](internal/payment/payfast) says so in its package comment:
+
+- **The field order is the order they were submitted in, not alphabetical.** Sorting produces
+  a signature PayFast rejects. This is why `payment.Field` is a slice and never a map anywhere
+  near a signature.
+- **`urlencode` is PHP's**, which every reference implementation uses. Go's `url.QueryEscape`
+  is nearly the same and differs over `~`, and one character is a failed signature with no
+  diagnostic beyond "mismatch".
+- **Outgoing and incoming disagree about blank fields.** They are excluded when building the
+  redirect form and *included* when verifying a notification, because that is what PayFast's
+  own code does in each direction. Building the form sidesteps it by not submitting blanks at
+  all.
+
+`TestPayFast_SignatureMatchesKnownVector` pins both the parameter string and its digest.
+**Put that string through [PayFast's signature tool](https://developers.payfast.co.za) before
+taking real money** — no test suite can do that step, and the cost of skipping it is every
+payment being rejected.
+
+### Overselling
+
+Two people can pay for the last item, because stock is only taken at payment. When a
+decrement would go negative the order is still recorded paid — the money has been taken, and
+refusing to record it would lose the sale *and* still be oversold — and the event is logged at
+error level. Surfacing it in the admin's order view is part of the hardening phase.
+
+### Money
+
+Integer cents everywhere in Go and in the database; a decimal string only at the gateway
+boundary and in rendered pages. A float total rounded differently from a gateway's amount
+string is a real and hard-to-find class of bug, and the amount comparison in the callback is
+exactly where it would bite.
+
 ### Theming
 
 The default templates are plain, unstyled and meant to be replaced. Set `TEMPLATE_DIR` to
@@ -286,6 +415,14 @@ Asset URLs carry a hash of the file's contents (`/static/htmx.min.js?v=71ea67185
 served `immutable`, so upgrading the file invalidates every cached copy by itself. See
 [`internal/handler/static/README.md`](internal/handler/static/README.md) for the provenance
 of the vendored bytes and how to verify a replacement.
+
+`redirect.js` is ours rather than vendored: it submits the payment hand-over form on load,
+and it is a file for the same reason htmx is one — with no `'unsafe-inline'`, an inline script
+or an `onload` attribute would simply be blocked, leaving the shopper on a page waiting for
+something the browser refused to run.
+
+Files in that directory are served from an **explicit list**, so leaving a note or a
+half-finished experiment there does not publish it.
 
 ## Dependencies
 
@@ -322,8 +459,8 @@ Recorded here so they are decided deliberately rather than by default:
 
 | Decision | Candidate | When |
 |---|---|---|
-| Row scanning boilerplate | `pgx.CollectRows` + `RowToStructByName` — already in the tree, no new dependency | When `orders` lands; 18 columns of hand-written `Scan` is where it earns its keep |
-| Hand-written stores vs. generated queries | [`sqlc`](https://sqlc.dev) | Before `orders`, or never — retrofitting it afterwards is the expensive version |
+| Row scanning boilerplate | `pgx.CollectRows` + `RowToStructByName` — already in the tree, no new dependency | **Overdue.** `orders` has landed with a 17-column hand-written `Scan`, which is where this stops being tidy |
+| Hand-written stores vs. generated queries | [`sqlc`](https://sqlc.dev) | **Window closed.** The plan said before `orders` or never, and `orders` has landed; retrofitting it now is the expensive version |
 | Password hashing algorithm | argon2id, via [`alexedwards/argon2id`](https://github.com/alexedwards/argon2id) or `x/crypto/argon2` | OWASP puts argon2id first and bcrypt second. bcrypt at cost 12 is the current choice because its hash string is self-describing; revisit if that stops being a good enough reason |
 | Sending email | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Phase 7. `net/smtp` has no MIME or modern TLS ergonomics, and hand-rolling multipart text+HTML is exactly the fiddly-not-cryptographic category |
 | Per-IP rate limiting | `golang.org/x/time/rate` for the buckets, hand-written keying and eviction | Phase 9. The limiter is the deep part; a map with a sweep is not |
@@ -392,8 +529,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 3. **Admin auth** — signed session cookie, `RequireAdmin`, `cmd/hashpw` ← *done*
 4. **Storefront reads** — `/products` pages and fragments, vendored htmx, CORS ← *done*
 5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
-6. Checkout + PayFast ← *next*
-7. Order emails + admin orders
+6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
+7. Order emails + admin orders ← *next*
 8. Images (object storage)
 9. Hardening
 10. Publish

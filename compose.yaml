@@ -66,6 +66,18 @@ services:
       # for any deployment anyone else can reach — see the README.
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$2a$$12$$R7qEibIvKX01iVw8B/NaSeb2f5ZiAjrY5/5/622QP.kdHnUL3XbNK}
       SESSION_SECRET: ${SESSION_SECRET:-ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=}
+      # PayFast's own published sandbox credentials, so `make up` yields a
+      # working checkout. They are in PayFast's documentation and take no real
+      # money — but PAYFAST_SANDBOX must stay true for that to remain the case.
+      PAYFAST_MERCHANT_ID: ${PAYFAST_MERCHANT_ID:-10000100}
+      PAYFAST_MERCHANT_KEY: ${PAYFAST_MERCHANT_KEY:-46f0cd694581a}
+      PAYFAST_PASSPHRASE: ${PAYFAST_PASSPHRASE:-jt7NOE43FZPn}
+      PAYFAST_SANDBOX: ${PAYFAST_SANDBOX:-true}
+      # The sandbox does not necessarily notify from PayFast's published
+      # production ranges, and a local notification cannot arrive at all without
+      # a tunnel. Off here, never off in production.
+      PAYFAST_ALLOWED_CIDRS: ${PAYFAST_ALLOWED_CIDRS:-any}
+      PAYFAST_NOTIFY_URL: ${PAYFAST_NOTIFY_URL:-}
     ports:
       - "8080:8080"
     depends_on:
