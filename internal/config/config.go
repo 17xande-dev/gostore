@@ -68,11 +68,18 @@ type Config struct {
 	// the operator finds orders in /admin/orders instead.
 	OrderNotifyEmail string
 
-	// Blob is object storage for product images. Optional: with it unset the admin
-	// falls back to a pasted image URL, which is how the catalog worked for five
-	// phases and remains a perfectly good answer for a shop with a handful of
-	// photographs already hosted somewhere.
+	// Blob is object storage for product images.
 	Blob Blob
+
+	// ImageDir stores product images in a local directory served by this server,
+	// for a shop that wants no object storage at all. Mutually exclusive with Blob:
+	// two configured backends would leave "which one wins" to be guessed.
+	//
+	// A product image is only ever a bucket object or a file here. Pasting a URL
+	// from the general internet used to be allowed and no longer is: those bytes
+	// belong to somebody else, who can change or delete them, and a product page
+	// with a broken image is worse than one with none.
+	ImageDir string
 
 	// RateLimits are the per-IP limits on the three surfaces worth protecting.
 	// Defaults are deliberately loose enough that no real shopper or operator
@@ -151,8 +158,13 @@ type Blob struct {
 	PublicBaseURL string
 }
 
-// Configured reports whether image uploads can work.
+// Configured reports whether object storage is set up.
 func (b Blob) Configured() bool { return b.Endpoint != "" }
+
+// ImagesEnabled reports whether a product can have an image at all — by upload to
+// object storage or to a local directory. With neither, the admin says so rather
+// than offering a form that could only fail.
+func (c Config) ImagesEnabled() bool { return c.Blob.Configured() || c.ImageDir != "" }
 
 // RateLimits holds the per-IP limits. Each is a number of requests per minute
 // with a burst; see middleware.RateLimit for what the two mean together.
@@ -219,6 +231,7 @@ func Load() (Config, error) {
 			CallbackPerMinute: 120,
 		},
 		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
+		ImageDir:         strings.TrimSpace(os.Getenv("IMAGE_DIR")),
 		Blob: Blob{
 			Endpoint:      strings.TrimSpace(os.Getenv("BLOB_ENDPOINT")),
 			Bucket:        strings.TrimSpace(os.Getenv("BLOB_BUCKET")),
@@ -380,6 +393,13 @@ func Load() (Config, error) {
 	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
 		return Config{}, fmt.Errorf(
 			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
+	}
+
+	// One image backend at most. Both configured would leave which one wins to be
+	// guessed, and the guess would be wrong half the time.
+	if c.Blob.Configured() && c.ImageDir != "" {
+		return Config{}, fmt.Errorf(
+			"config: BLOB_ENDPOINT and IMAGE_DIR are both set; product images come from one or the other")
 	}
 
 	// Object storage is all-or-nothing: a partial configuration would fail at the

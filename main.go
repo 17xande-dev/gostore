@@ -233,9 +233,22 @@ func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
 // depends on this — the catalog, cart, checkout and payment path never touch it — so
 // a deployment without object storage is a complete shop that pastes image URLs.
 func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
+	// A directory this server serves itself: one binary, one volume, working
+	// photographs, and no object storage to run. Not for a deployment behind a load
+	// balancer or one that scales to zero — two instances do not share a directory.
+	if cfg.ImageDir != "" {
+		storage, err := blob.NewDisk(cfg.ImageDir)
+		if err != nil {
+			return nil, err
+		}
+		log.Info("product images stored on disk", "dir", storage.Dir(), "served_at", blob.ImagePrefix,
+			"note", "a single instance with a persistent volume; use BLOB_* for anything scaled out")
+		return storage, nil
+	}
+
 	if !cfg.Blob.Configured() {
-		log.Info("no object storage configured: product images are pasted URLs",
-			"enable", "set BLOB_ENDPOINT, BLOB_BUCKET, BLOB_ACCESS_KEY_ID, BLOB_SECRET_ACCESS_KEY and BLOB_PUBLIC_BASE_URL")
+		log.Warn("no image storage configured: products cannot have images",
+			"enable", "set IMAGE_DIR for a local directory, or the BLOB_* variables for object storage")
 		return blob.Unconfigured{}, nil
 	}
 
@@ -265,6 +278,17 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
 	h.RegisterStorefront(mux)
+
+	// Disk-backed images are served by this server, from the store's own origin —
+	// which is why they need no CSP allowance beyond 'self'. A bucket-backed store
+	// serves its own and this route does not exist.
+	if cfg.ImageDir != "" {
+		if err := h.RegisterImages(mux, cfg.ImageDir); err != nil {
+			// The directory was checked at startup by blob.NewDisk, so reaching this
+			// means it changed underneath us between then and now.
+			log.Error("cannot serve product images", "dir", cfg.ImageDir, "error", err)
+		}
+	}
 
 	// The gateway callback is mounted on this mux and not the first-party one, so
 	// it sits outside CSRF protection by not being in the group — a payment

@@ -59,7 +59,6 @@ func Product(p catalog.Product) FormErrors {
 	required(e, "kind", p.Kind)
 	maxLen(e, "kind", p.Kind, 50)
 	maxLen(e, "description", p.Description, 10_000)
-	maxLen(e, "image_url", p.ImageURL, 2_000)
 
 	switch {
 	case p.Slug == "":
@@ -70,9 +69,9 @@ func Product(p catalog.Product) FormErrors {
 		maxLen(e, "slug", p.Slug, 200)
 	}
 
-	if p.ImageURL != "" && !isHTTPURL(p.ImageURL) {
-		e.Add("image_url", "Must start with http:// or https://.")
-	}
+	// There is deliberately nothing here about the image. The product form does not
+	// carry one: an image arrives by upload and its URL is whatever storage says it
+	// is, so there is no user input to validate.
 	return e
 }
 
@@ -149,8 +148,4 @@ func maxLen(e FormErrors, field, value string, max int) {
 	if utf8.RuneCountInString(value) > max {
 		e.Add(field, "Too long.")
 	}
-}
-
-func isHTTPURL(s string) bool {
-	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }

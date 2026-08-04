@@ -31,19 +31,11 @@
     {{template "err" index .Errors "description"}}
   </p>
   {{/*
-    The image is either an object this store uploaded and owns, or a URL somebody
-    pasted — never both. When it owns one, this field is not shown at all, because
-    editing the URL of an uploaded object would leave the object orphaned and the
-    product pointing at something else. Remove it first, then paste.
+    No image field here on purpose. An image is bytes this store holds — uploaded
+    below — and never a URL typed in, because a URL to somebody else's server can
+    change or vanish and a product page with a broken picture is worse than one with
+    none.
   */}}
-  {{if not .Product.HasUploadedImage}}
-  <p>
-    <label>Image URL<br>
-      <input name="image_url" value="{{.Product.ImageURL}}" size="60">
-    </label>
-    {{template "err" index .Errors "image_url"}}
-  </p>
-  {{end}}
   <p>
     <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
   </p>
@@ -143,6 +135,22 @@
   <p>No image.</p>
 {{end}}
 
+{{/*
+  A row left from when pasting a URL was allowed. The store points at bytes it does
+  not hold and cannot delete, and the storefront's CSP no longer permits loading
+  them — so say so and offer to clear it, rather than a migration having silently
+  blanked somebody's catalog.
+*/}}
+{{if .Product.HasForeignImage}}
+<p><strong>This image is a URL pointing outside the store, which is no longer
+supported.</strong> It will not load on the storefront. Remove it and upload the
+image instead.</p>
+<form method="post" action="/admin/products/{{.Product.ID}}/image/delete">
+  {{template "csrf" .CSRFToken}}
+  <button type="submit">Remove this image</button>
+</form>
+{{end}}
+
 {{if .UploadsEnabled}}
   <form method="post" action="/admin/products/{{.Product.ID}}/image" enctype="multipart/form-data">
     {{template "csrf" .CSRFToken}}
@@ -157,18 +165,15 @@
     </p>
   </form>
 
-  {{/*
-    Only offered for an image this store owns. A pasted URL is cleared by emptying
-    the field in the product form above; there is no object to delete.
-  */}}
-  {{if .Product.HasUploadedImage}}
+  {{if .Product.HasImage}}
   <form method="post" action="/admin/products/{{.Product.ID}}/image/delete">
     {{template "csrf" .CSRFToken}}
     <button type="submit">Remove image</button>
   </form>
   {{end}}
 {{else}}
-  <p><small>Uploads are not configured on this deployment, so the image is whatever
-  URL is pasted above. Set the <code>BLOB_*</code> variables to upload instead.</small></p>
+  <p><small>No image storage is configured, so products cannot have images. Set
+  <code>IMAGE_DIR</code> to a directory this server can write to, or the
+  <code>BLOB_*</code> variables for object storage.</small></p>
 {{end}}
 {{end}}

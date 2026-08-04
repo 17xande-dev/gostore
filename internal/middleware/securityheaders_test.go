@@ -66,10 +66,10 @@ func TestSecurityHeaders_HSTSWhenAsked(t *testing.T) {
 	}
 }
 
-func TestSecurityHeaders_NamesTheImageBucket(t *testing.T) {
-	// The bucket is listed explicitly even though https: already covers it, so an
-	// adopter who tightens that blanket away does not silently break their own
-	// product photographs.
+func TestSecurityHeaders_ImagesComeFromHereOrTheBucketOnly(t *testing.T) {
+	// A product image is always bytes this store holds: an object in the bucket, or a
+	// file served from this origin. Pasting a URL from the general internet used to be
+	// allowed and no longer is, which is what lets this directive be closed.
 	h := SecurityHeaders(Policy{
 		ImgSources: []string{"https://images.example"},
 	})(http.HandlerFunc(ok))
@@ -78,13 +78,23 @@ func TestSecurityHeaders_NamesTheImageBucket(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
 
 	csp := w.Header().Get("Content-Security-Policy")
-	if !strings.Contains(csp, "img-src 'self' https://images.example") {
-		t.Errorf("img-src does not name the bucket: %s", csp)
+	if !strings.Contains(csp, "img-src 'self' https://images.example;") {
+		t.Errorf("img-src is not exactly 'self' plus the bucket: %s", csp)
 	}
-	// And a pasted image URL from anywhere still loads, which is the reason the
-	// blanket is still there.
-	if !strings.Contains(csp, "https: data:") {
-		t.Errorf("img-src no longer allows pasted URLs: %s", csp)
+	// No blanket and no data: URIs. An image from anywhere else is refused by the
+	// browser as well as by the admin.
+	for _, forbidden := range []string{"https:;", "https: ", "data:", "*"} {
+		if strings.Contains(csp, "img-src 'self' https://images.example "+forbidden) {
+			t.Errorf("img-src still allows %q: %s", forbidden, csp)
+		}
+	}
+
+	// And with no bucket — a disk-backed store — it is 'self' and nothing else.
+	h = SecurityHeaders(Policy{})(http.HandlerFunc(ok))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self';") {
+		t.Errorf("img-src with no bucket = %s, want exactly 'self'", csp)
 	}
 }
 

@@ -86,7 +86,8 @@ list with defaults.
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
 | `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
 | `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
-| `BLOB_ENDPOINT` | no² | — | Object storage host[:port], no scheme. Without it, images are pasted URLs |
+| `IMAGE_DIR` | no³ | — | Store images in this directory, served by this server |
+| `BLOB_ENDPOINT` | no³ | — | Object storage host[:port], no scheme |
 | `BLOB_BUCKET` | no² | — | Bucket name |
 | `BLOB_ACCESS_KEY_ID` / `BLOB_SECRET_ACCESS_KEY` | no² | — | Credentials |
 | `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
@@ -103,6 +104,10 @@ never arrives.
 
 ² The `BLOB_*` set is all-or-nothing for the same reason: `BLOB_ENDPOINT` with any of the
 others missing refuses to boot rather than failing at the first upload.
+
+³ `IMAGE_DIR` and `BLOB_ENDPOINT` are the two image backends and are mutually exclusive —
+both set refuses to boot, because which one wins would otherwise be a guess. With neither,
+products cannot have images and the admin says so.
 
 ## Admin
 
@@ -243,13 +248,10 @@ X-Content-Type-Options: nosniff
 Strict-Transport-Security: max-age=63072000; includeSubDomains   (https deployments only)
 ```
 
-The CSP was reviewed in this phase, and **two directives are looser than the rest on
-purpose**. Recording why matters more than tightening them would:
+`img-src` is `'self'` plus the bucket and nothing else, because a product image is always
+bytes this store holds. **One** directive is looser than the rest on purpose, and recording
+why matters more than tightening it would:
 
-- **`img-src ... https:`** — a product image may be a URL pasted into the admin, pointing
-  anywhere. Narrowing this to the bucket would break that path, which is the whole answer
-  for a shop whose photographs are already hosted somewhere. The bucket is *also* named
-  explicitly, so an adopter who only ever uploads can delete the blanket and keep working.
 - **`style-src 'unsafe-inline'`** — the point of `TEMPLATE_DIR` is that adopters restyle
   without forking, and there is no mechanism for them to add a stylesheet to the binary.
   Dropping this would leave restyling with no legal way to apply CSS at all. The risk it
@@ -301,44 +303,58 @@ Prices are **integer cents** everywhere in the code and the database. The decima
 exists only in forms and rendered pages, because a float total rounded differently from a
 payment gateway's amount string is a real and hard-to-find class of bug.
 
-Manage the catalog at `/admin/products`. `image_url` is a pasted URL for now;
-upload-to-object-storage arrives in a later phase.
+Manage the catalog at `/admin/products`.
 
 ### Product images
 
-Two ways to give a product a picture, and the store treats them as genuinely
-different things:
+**A product image is always bytes this store holds.** There is no way to point a product at
+a URL on somebody else's server: those bytes can change or vanish without warning, and a
+product page with a broken picture is worse than one with none. The admin has no URL field,
+and hand-crafting the parameter does nothing — `UpdateProduct` does not write either image
+column.
 
-- **A pasted URL.** Works with no configuration at all, and is a complete answer for a
-  shop whose photographs are already hosted somewhere. The store does not own those
-  bytes and will never try to delete them.
-- **An upload**, when the `BLOB_*` variables are set. The store owns the object and
-  deletes it when the image is replaced or removed.
+Two backends, mutually exclusive, both behind `blob.Storage`:
 
-`products.image_key` is what separates the two: empty for a pasted URL, set for an
-uploaded object. That is a column rather than a prefix-match on the URL because the first
-pasted URL that happened to sit under the same prefix would otherwise make the store
-delete somebody else's file. The admin form shows the pasted field *or* an upload plus a
-remove button, never both, so the two states cannot be mixed into one confusing third.
+| | Set | Image URL | Suits |
+|---|---|---|---|
+| **Object storage** | `BLOB_*` | the bucket's public hostname | anything scaled out; R2, GCS interop, MinIO |
+| **A local directory** | `IMAGE_DIR` | `/images/...`, served by this server | one instance with a persistent volume |
+| **Neither** | — | products have no images, and the admin says so | a catalog that does not need pictures |
 
-**Images are served straight from the bucket, never proxied through the store.** That is
-why the bucket has to be publicly readable at `BLOB_PUBLIC_BASE_URL`, and why the bytes
-never touch Go on a read — a CDN in front of the bucket does the work.
+`IMAGE_DIR` is the simpler shape: one binary, one directory, no object storage to run. Its
+limitation is worth stating plainly because it is the thing that will bite — **two instances
+do not share a directory.** Behind a load balancer, or on a platform that scales to zero and
+restarts elsewhere, an image uploaded by one instance is a 404 from the other. Use a bucket
+there.
+
+With a bucket, **images are served straight from it and never proxied through the store**,
+so the bucket must be publicly readable at `BLOB_PUBLIC_BASE_URL` and a CDN in front of it
+does the work. With `IMAGE_DIR` the server serves them itself, from a same-origin path — which
+is why `img-src` can be `'self'` with no external origin allowed at all.
+
+`products.image_key` is the storage key, which is what deletion needs since a URL is not
+something storage can be asked to remove. It is set whenever `image_url` is.
+
+**Upgrading from a version that allowed pasted URLs:** rows with a URL and no key still
+exist, and the admin flags each one on its edit page with a button to clear it. Nothing is
+migrated automatically — silently blanking somebody's catalog is worse than telling them.
+Those images will not load on the storefront, because the CSP no longer permits it.
 
 Two consequences worth knowing:
 
 - **Uploads are validated on their sniffed magic bytes**, not the filename and not the
   browser's `Content-Type`, and the stored extension comes from the sniffed type too. A
   publicly readable bucket that will serve `evil.html` because somebody named their upload
-  that is a cross-site scripting hole on a hostname you own. JPEG, PNG, GIF and WebP;
-  5 MB.
+  that is a cross-site scripting hole on a hostname you own — and the same is true of a
+  directory this server serves. JPEG, PNG, GIF and WebP; 5 MB.
 - **Replacing an image writes a new key**, so the new photograph is visible immediately.
   A stable key would need a CDN purge on every replacement — an operation this store has
   no credentials for and no way to verify — and until it happened the old picture would
   keep being served.
 
-`BLOB_ENDPOINT` and `BLOB_PUBLIC_BASE_URL` are separate values because the address a
-bucket is *written* through and the address it is *read* from are routinely different:
+With a bucket, `BLOB_ENDPOINT` and `BLOB_PUBLIC_BASE_URL` are separate values because the
+address a bucket is *written* through and the address it is *read* from are routinely
+different:
 R2 writes to `<account>.r2.cloudflarestorage.com` and reads from a custom domain, and in
 the compose stack the server writes to `minio:9000` while your browser reads from
 `localhost:9000`. Only the operator knows the second one, so it is not derived.
@@ -365,7 +381,6 @@ kilobytes and is logged.
     "slug": "the-quiet-machine",
     "title": "The Quiet Machine",
     "description": "Paperback, 248 pages.",
-    "image_url": "",
     "active": true,
     "variants": [
       { "sku": "BOOK-TQM-PB", "size": "", "color": "", "price_cents": 24900, "stock_qty": 12, "active": true }
@@ -379,6 +394,11 @@ match on `slug` and variants on `sku`, so a second run updates titles and prices
 than duplicating rows — and it leaves `stock_qty` on rows that already exist alone, since a
 fixture is a starting point and not the truth about inventory. Variants missing from the
 file are not deleted.
+
+**There is no `image_url` field**, and an unknown field is an error rather than being
+ignored — so a file carrying one is rejected with the field named. A fixture cannot upload
+bytes, so the only thing it could set is a URL to somebody else's server, which is exactly
+what is no longer allowed. Re-seeding therefore never disturbs an uploaded image.
 
 ```sh
 make seed                              # testdata/products.json

@@ -15,28 +15,45 @@ import (
 // say so; it is nil otherwise rather than empty, so "not loaded" and "no
 // variants" stay distinguishable at the call site.
 type Product struct {
-	ID          string    `json:"id,omitempty"`
-	Kind        string    `json:"kind"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	ImageURL    string    `json:"image_url"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"-"`
-	UpdatedAt   time.Time `json:"-"`
-	Variants    []Variant `json:"variants,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Kind        string `json:"kind"`
+	Slug        string `json:"slug"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// ImageURL is where the image is served from — a bucket URL, or a same-origin
+	// /images/ path when storage is a local directory. It is never a URL somebody
+	// typed: an image is always bytes this store holds, because a product page with
+	// a broken picture is worse than one with none, and a stranger's server is not
+	// somewhere to keep a shop's photographs.
+	//
+	// Not settable from JSON, so a seed file cannot point a product at bytes it
+	// never uploaded.
+	ImageURL  string    `json:"-"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"-"`
+	UpdatedAt time.Time `json:"-"`
+	Variants  []Variant `json:"variants,omitempty"`
 
-	// ImageKey names the object in blob storage that ImageURL points at, and is
-	// empty when the URL was pasted in by hand. The distinction decides whether
-	// this store owns those bytes and may delete them — see
-	// 0003_product_image_key.sql. It is not in the JSON, because a seed file has no
-	// business claiming ownership of an object it did not upload.
+	// ImageKey names the object that ImageURL serves — a bucket key, or a path
+	// relative to IMAGE_DIR. It is what deletion needs, since a URL is not
+	// something storage can be asked to remove.
+	//
+	// It is set whenever ImageURL is, for anything this store uploaded. A row with a
+	// URL and no key is an image pasted in before that stopped being allowed; see
+	// Product.HasForeignImage.
 	ImageKey string `json:"-"`
 }
 
-// HasUploadedImage reports whether the image is an object this store owns, as
-// opposed to a URL somebody pasted.
-func (p Product) HasUploadedImage() bool { return p.ImageKey != "" }
+// HasImage reports whether the product has a picture to show.
+func (p Product) HasImage() bool { return p.ImageURL != "" }
+
+// HasForeignImage reports a row left over from when the admin accepted a pasted
+// URL: an image the store points at but does not hold, and cannot delete from
+// storage because there is no object.
+//
+// It exists so the admin can say so and offer to clear it, rather than a migration
+// silently blanking somebody's catalog. Nothing creates one of these any more.
+func (p Product) HasForeignImage() bool { return p.ImageURL != "" && p.ImageKey == "" }
 
 // Variant is a purchasable, priced, stocked row under a product.
 type Variant struct {

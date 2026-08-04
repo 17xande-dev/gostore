@@ -45,8 +45,6 @@ func TestProduct(t *testing.T) {
 		{"slug with spaces", func(p *catalog.Product) { p.Slug = "a book" }, "slug"},
 		{"slug in capitals", func(p *catalog.Product) { p.Slug = "A-Book" }, "slug"},
 		{"long title", func(p *catalog.Product) { p.Title = strings.Repeat("x", 201) }, "title"},
-		{"relative image", func(p *catalog.Product) { p.ImageURL = "/images/a.png" }, "image_url"},
-		{"javascript image", func(p *catalog.Product) { p.ImageURL = "javascript:alert(1)" }, "image_url"},
 	}
 	for _, tc := range cases {
 		p := valid
@@ -54,6 +52,18 @@ func TestProduct(t *testing.T) {
 		errs := Product(p)
 		if _, ok := errs[tc.field]; !ok {
 			t.Errorf("%s: no error on %q, got %s", tc.name, tc.field, errs)
+		}
+	}
+
+	// The image is deliberately not validated here any more. It is not form input:
+	// an image arrives by upload and its URL is whatever storage says it is, so
+	// there is nothing a shop operator could type wrongly. Anything already in
+	// ImageURL passes, including a value no form could have produced.
+	for _, url := range []string{"/images/products/a/b.jpg", "https://images.example/a.jpg", "nonsense"} {
+		p := valid
+		p.ImageURL = url
+		if errs := Product(p); errs.Any() {
+			t.Errorf("ImageURL %q produced form errors %s", url, errs)
 		}
 	}
 }

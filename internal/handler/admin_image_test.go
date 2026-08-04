@@ -108,8 +108,11 @@ func TestProductImage_Upload(t *testing.T) {
 	if stored.ImageURL != s.images.URL(keys[0]) {
 		t.Errorf("ImageURL = %q, want the public URL %q", stored.ImageURL, s.images.URL(keys[0]))
 	}
-	if !stored.HasUploadedImage() {
-		t.Error("HasUploadedImage() is false after an upload")
+	if !stored.HasImage() {
+		t.Error("HasImage() is false after an upload")
+	}
+	if stored.HasForeignImage() {
+		t.Error("an uploaded image is reported as foreign")
 	}
 
 	// And the edit page shows it, with a remove button now that there is an object
@@ -121,9 +124,9 @@ func TestProductImage_Upload(t *testing.T) {
 	if !strings.Contains(page, "/image/delete") {
 		t.Error("the edit page offers no way to remove the image")
 	}
-	// The pasted-URL field is gone, because editing it would orphan the object.
+	// There is no image URL field at all any more.
 	if strings.Contains(page, `name="image_url"`) {
-		t.Error("the pasted URL field is still shown for an uploaded image")
+		t.Error("the product form offers an image URL field")
 	}
 }
 
@@ -248,10 +251,17 @@ func TestProductImage_Remove(t *testing.T) {
 	}
 }
 
-func TestProductImage_PastedURLIsNotOwned(t *testing.T) {
-	// A URL somebody typed in is not this store's to delete. The distinction is the
-	// whole reason image_key exists as a separate column.
+func TestProductImage_CannotBeSetByURL(t *testing.T) {
+	// Pasting a URL used to be allowed and is not any more: bytes on somebody else's
+	// server can change or vanish, and a product page with a broken picture is worse
+	// than one with none. The form offers no field, and hand-crafting the parameter
+	// must not work either.
 	s, p := uploadShop(t)
+
+	_, page := get(t, s.srv, "/admin/products/"+p.ID+"/edit")
+	if strings.Contains(page, `name="image_url"`) {
+		t.Error("the product form still offers an image URL field")
+	}
 
 	form := url.Values{
 		"title":     {p.Title},
@@ -268,31 +278,60 @@ func TestProductImage_PastedURLIsNotOwned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.ImageURL != "https://someone-elses-site.example/cover.jpg" {
-		t.Errorf("ImageURL = %q", stored.ImageURL)
+	if stored.ImageURL != "" {
+		t.Errorf("ImageURL = %q; a hand-crafted image_url parameter was accepted", stored.ImageURL)
 	}
-	if stored.ImageKey != "" {
-		t.Errorf("ImageKey = %q, want empty for a pasted URL", stored.ImageKey)
+	if stored.HasImage() {
+		t.Error("the product has an image it was never given")
 	}
-	if stored.HasUploadedImage() {
-		t.Error("a pasted URL is reported as an uploaded image")
+}
+
+func TestProductImage_ForeignImageIsFlaggedAndRemovable(t *testing.T) {
+	// A row from before pasting stopped being allowed: a URL with no object behind
+	// it. The store cannot delete those bytes and the CSP will not load them, so the
+	// admin says so and offers to clear it — rather than a migration having silently
+	// blanked somebody's catalog.
+	s, p := uploadShop(t)
+
+	if _, err := s.catalog.SetImage(t.Context(), p.ID, "https://someone-elses-site.example/cover.jpg", ""); err != nil {
+		t.Fatalf("SetImage: %v", err)
+	}
+	stored, err := s.catalog.Get(t.Context(), p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !stored.HasForeignImage() {
+		t.Fatal("a URL with no object is not reported as foreign")
 	}
 
-	// The edit page offers no remove button, because there is no object to remove.
+	// Matched on a phrase that does not straddle the template's line wrapping — the
+	// rendered HTML keeps the source's newlines, so "no longer supported" is split
+	// across two lines and would not be found.
 	_, page := get(t, s.srv, "/admin/products/"+p.ID+"/edit")
-	if strings.Contains(page, "/image/delete") {
-		t.Error("the page offers to remove an object that does not exist")
+	if !strings.Contains(page, "a URL pointing outside the store") {
+		t.Errorf("the edit page does not flag the foreign image: %s", page)
 	}
-	// And the field is still editable.
-	if !strings.Contains(page, `name="image_url"`) {
-		t.Error("the pasted URL field is missing for a pasted URL")
+
+	// Clearing it works and asks storage to delete nothing, since there is no object.
+	if res, body := post(t, s.srv, "/admin/products/"+p.ID+"/image/delete", url.Values{}); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("remove = %d %s", res.StatusCode, body)
+	}
+	cleared, err := s.catalog.Get(t.Context(), p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if cleared.HasImage() {
+		t.Errorf("the foreign image was not cleared: %q", cleared.ImageURL)
+	}
+	if deleted := s.images.Deleted(); len(deleted) != 0 {
+		t.Errorf("storage was asked to delete something for a URL it never held: %v", deleted)
 	}
 }
 
 func TestProductImage_FormSaveDoesNotClobberAnUpload(t *testing.T) {
-	// The product form does not render the image_url field once an object is owned,
-	// so an empty value in a submission means "not shown" rather than "cleared".
-	// Taking it at face value would blank the image and orphan the object.
+	// UpdateProduct does not write either image column, so saving the product form
+	// cannot disturb the picture whatever it submits. That replaced a
+	// read-then-preserve dance in the handler.
 	s, p := uploadShop(t)
 	if res, body := uploadImage(t, s, p.ID, "cover.jpg", testJPEG, "image/jpeg"); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("upload = %d %s", res.StatusCode, body)
@@ -307,7 +346,7 @@ func TestProductImage_FormSaveDoesNotClobberAnUpload(t *testing.T) {
 		"slug":   {p.Slug},
 		"kind":   {p.Kind},
 		"active": {"1"},
-		// image_url deliberately absent, as the rendered form omits it.
+		// image_url deliberately absent, as the form has no such field.
 	}
 	if res, body := post(t, s.srv, "/admin/products/"+p.ID, form); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("save = %d %s", res.StatusCode, body)
@@ -379,11 +418,12 @@ func TestProductImage_UnconfiguredStorageSaysSo(t *testing.T) {
 	if strings.Contains(page, `enctype="multipart/form-data"`) {
 		t.Error("an upload form is offered with no storage configured")
 	}
-	if !strings.Contains(page, "Uploads are not configured") {
+	if !strings.Contains(page, "No image storage is configured") {
 		t.Errorf("the page does not explain why: %s", page)
 	}
-	if !strings.Contains(page, `name="image_url"`) {
-		t.Error("the pasted URL fallback is missing")
+	// And there is no fallback to offer: with no storage, a product has no image.
+	if strings.Contains(page, `name="image_url"`) {
+		t.Error("the page offers an image URL field")
 	}
 }
 

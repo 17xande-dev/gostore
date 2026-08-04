@@ -35,8 +35,8 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (id, kind, slug, title, description, image_url, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+INSERT INTO products (id, kind, slug, title, description, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
 RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
 
@@ -45,18 +45,20 @@ type CreateProductParams struct {
 	Slug        string
 	Title       string
 	Description string
-	ImageURL    string
 	Active      bool
 }
 
 // The database generates the id, which is why no UUID library reaches the binary.
+//
+// image_url is absent: a new product has no image, and one only ever arrives by
+// upload through SetProductImage. There is no way to point a product at bytes this
+// store does not hold.
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.Kind,
 		arg.Slug,
 		arg.Title,
 		arg.Description,
-		arg.ImageURL,
 		arg.Active,
 	)
 	var i Product
@@ -467,8 +469,7 @@ func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams
 
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
-SET kind = $2, slug = $3, title = $4, description = $5, image_url = $6,
-    active = $7, updated_at = now()
+SET kind = $2, slug = $3, title = $4, description = $5, active = $6, updated_at = now()
 WHERE id = $1
 RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
@@ -479,16 +480,16 @@ type UpdateProductParams struct {
 	Slug        string
 	Title       string
 	Description string
-	ImageURL    string
 	Active      bool
 }
 
 // updated_at is maintained here rather than by a trigger, so the write is visible
 // in the query itself.
 //
-// image_key is deliberately absent: this is the product form, and the form has no
-// business reassigning which object in storage the product owns. Uploads go
-// through SetProductImage and removals through ClearProductImage.
+// Neither image column appears here: the product form does not touch the image, and
+// an image is only ever set by SetProductImage or cleared by ClearProductImage.
+// That is what makes an empty submission from a form that does not render an image
+// field harmless, rather than a silent way to blank the picture.
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
 		arg.ID,
@@ -496,7 +497,6 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		arg.Slug,
 		arg.Title,
 		arg.Description,
-		arg.ImageURL,
 		arg.Active,
 	)
 	var i Product
@@ -561,11 +561,11 @@ func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (P
 }
 
 const upsertProduct = `-- name: UpsertProduct :one
-INSERT INTO products (id, kind, slug, title, description, image_url, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+INSERT INTO products (id, kind, slug, title, description, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
 ON CONFLICT (slug) DO UPDATE
 SET kind = EXCLUDED.kind, title = EXCLUDED.title, description = EXCLUDED.description,
-    image_url = EXCLUDED.image_url, active = EXCLUDED.active, updated_at = now()
+    active = EXCLUDED.active, updated_at = now()
 RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
 `
 
@@ -574,19 +574,21 @@ type UpsertProductParams struct {
 	Slug        string
 	Title       string
 	Description string
-	ImageURL    string
 	Active      bool
 }
 
 // Upserts by natural key — slug for a product, SKU for a variant — which is what
 // makes cmd/seed rerunnable.
+// image_url is absent here too, so a seed file cannot claim a product's image. A
+// fixture has no way to upload bytes, so the only thing it could set is a URL
+// pointing somewhere this store does not control — which is exactly what is no
+// longer allowed. Re-seeding therefore leaves an uploaded image alone.
 func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, upsertProduct,
 		arg.Kind,
 		arg.Slug,
 		arg.Title,
 		arg.Description,
-		arg.ImageURL,
 		arg.Active,
 	)
 	var i Product

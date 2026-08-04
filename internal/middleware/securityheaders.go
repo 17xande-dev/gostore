@@ -20,10 +20,9 @@ type Policy struct {
 	// makes the browser block that — silently enough to cost an afternoon.
 	FormActions []string
 
-	// ImgSources are extra origins images may be loaded from — the object storage
-	// bucket, when one is configured. It is listed explicitly even though the
-	// policy also allows https: generally, so that an adopter who tightens that
-	// blanket away does not silently break their own product photographs.
+	// ImgSources are the origins images may be loaded from besides this one — the
+	// object storage bucket, when one is configured. Empty means 'self' only, which
+	// is what a store serving its images from a local directory needs.
 	ImgSources []string
 
 	// HSTS adds Strict-Transport-Security. Only ever true on an https deployment:
@@ -49,28 +48,25 @@ func SecurityHeaders(p Policy) Middleware {
 		formAction += " " + strings.Join(p.FormActions, " ")
 	}
 
-	// Reviewed in the hardening phase. Two directives are looser than the rest, and
-	// both are deliberate rather than left over:
+	// img-src is 'self' plus the bucket and nothing else. A product image is always
+	// bytes this store holds — an object in the bucket, or a file served from this
+	// origin — because pasting a URL from the general internet means the picture on a
+	// product page belongs to somebody who can change or delete it. That used to be
+	// allowed and no longer is, which is what lets this directive be closed.
 	//
-	//   img-src ... https:   A product image may be a URL pasted into the admin,
-	//                        pointing anywhere. Narrowing this to the bucket would
-	//                        break the pasted-URL path, which is the whole answer
-	//                        for a shop whose photographs are already hosted. The
-	//                        bucket is named explicitly as well, so an adopter who
-	//                        uses uploads only *can* remove the blanket.
+	// One directive is still looser than the rest, deliberately:
 	//
 	//   style-src 'unsafe-inline'
-	//                        The point of TEMPLATE_DIR is that adopters restyle
-	//                        without forking, and there is no mechanism for them to
-	//                        add a stylesheet to the binary. Dropping this would
-	//                        leave restyling with no legal way to apply CSS at all.
-	//                        The risk it carries — CSS-based exfiltration — needs
-	//                        markup injection first, which html/template's escaping
-	//                        is what prevents. One served template uses an inline
-	//                        style; the rest are in email bodies, which no CSP sees.
-	imgSrc := "'self' https: data:"
+	//        The point of TEMPLATE_DIR is that adopters restyle without forking, and
+	//        there is no mechanism for them to add a stylesheet to the binary.
+	//        Dropping this would leave restyling with no legal way to apply CSS at
+	//        all. The risk it carries — CSS-based exfiltration — needs markup
+	//        injection first, which html/template's escaping is what prevents. One
+	//        served template uses an inline style; the rest are in email bodies,
+	//        which no CSP sees.
+	imgSrc := "'self'"
 	if len(p.ImgSources) > 0 {
-		imgSrc = "'self' " + strings.Join(p.ImgSources, " ") + " https: data:"
+		imgSrc += " " + strings.Join(p.ImgSources, " ")
 	}
 
 	csp := strings.Join([]string{

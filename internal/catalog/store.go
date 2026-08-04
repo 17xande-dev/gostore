@@ -158,7 +158,6 @@ func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
 		Slug:        p.Slug,
 		Title:       p.Title,
 		Description: p.Description,
-		ImageURL:    p.ImageURL,
 		Active:      p.Active,
 	})
 	if err != nil {
@@ -175,7 +174,6 @@ func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 		Slug:        p.Slug,
 		Title:       p.Title,
 		Description: p.Description,
-		ImageURL:    p.ImageURL,
 		Active:      p.Active,
 	})
 	if err != nil {
@@ -294,7 +292,6 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		Slug:        p.Slug,
 		Title:       p.Title,
 		Description: p.Description,
-		ImageURL:    p.ImageURL,
 		Active:      p.Active,
 	})
 	if err != nil {

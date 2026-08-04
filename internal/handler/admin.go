@@ -292,19 +292,9 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	p.ID = r.PathValue("id")
 
-	// An uploaded image's URL is not the form's to change: the field is not even
-	// rendered in that case, so an empty submission here means "not shown" and not
-	// "cleared". Taking it at face value would orphan the object and blank the
-	// image.
-	existing, err := h.cat.Get(r.Context(), p.ID)
-	if err != nil {
-		h.storeError(w, r, err)
-		return
-	}
-	if existing.HasUploadedImage() {
-		p.ImageURL = existing.ImageURL
-	}
-
+	// Nothing here has to defend the image any more: UpdateProduct does not write
+	// either image column, so the form cannot touch the picture whatever it submits.
+	// That replaced a read-then-preserve dance in this function.
 	if errs := validate.Product(p); errs.Any() {
 		h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, errs)
 		return
@@ -423,8 +413,9 @@ func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request) (catalog.
 		Slug:        strings.TrimSpace(r.PostFormValue("slug")),
 		Title:       strings.TrimSpace(r.PostFormValue("title")),
 		Description: strings.TrimSpace(r.PostFormValue("description")),
-		ImageURL:    strings.TrimSpace(r.PostFormValue("image_url")),
-		Active:      r.PostFormValue("active") != "",
+		// No image_url: the form does not offer one, and reading it here would be a
+		// way to set it by hand-crafting a request. Images arrive by upload only.
+		Active: r.PostFormValue("active") != "",
 	}
 	if p.Slug == "" {
 		p.Slug = catalog.Slugify(p.Title)
@@ -486,7 +477,7 @@ func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, er
 		Product:        p,
 		Errors:         errs,
 		VariantForm:    variantForm{Active: true},
-		UploadsEnabled: h.cfg.Blob.Configured(),
+		UploadsEnabled: h.cfg.ImagesEnabled(),
 		AcceptTypes:    strings.Join(blob.SupportedTypes(), ","),
 		MaxUploadMB:    blob.MaxUploadBytes >> 20,
 	}
