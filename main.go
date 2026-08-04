@@ -100,8 +100,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), cart.NewStore(pool),
+	carts := cart.NewStore(pool)
+	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), carts,
 		orders.NewStore(pool), gateway, mail, images, sessions)
+
+	// Abandoned carts are swept in-process, on this context, so it stops with the
+	// server rather than outliving it.
+	startCartCleanup(ctx, carts, cfg.CartTTLDays, log)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
@@ -281,10 +286,18 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 	// allowed to fetch the catalog are also the ones allowed to frame it, and the
 	// gateway's origin has to be allowed as a form target or the browser blocks
 	// the hand-over to payment.
-	return middleware.Chain(mux, middleware.SecurityHeaders(middleware.Policy{
+	policy := middleware.Policy{
 		FrameAncestors: cfg.EmbedOrigins,
 		FormActions:    []string{gateway.FormActionOrigin()},
-	}))
+		// Only on an https deployment: a browser ignores HSTS over plain HTTP
+		// anyway, and sending it from localhost would pin a rule that makes the
+		// next plain-HTTP project on this port unreachable.
+		HSTS: cfg.CookieSecure,
+	}
+	if cfg.Blob.Configured() {
+		policy.ImgSources = []string{cfg.Blob.PublicBaseURL}
+	}
+	return middleware.Chain(mux, middleware.SecurityHeaders(policy))
 }
 
 // healthz reports readiness, including the database, so a container platform

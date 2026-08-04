@@ -6,9 +6,9 @@ Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
-> storefront, the cart, checkout against PayFast, order emails, the admin's order views and
-> product image uploads all work. Hardening — rate limits, a CSP review, the cart cleanup
-> job — is next; see the build order below.
+> storefront, the cart, checkout against PayFast, order emails, the admin's order views,
+> product image uploads and the hardening pass all work. What remains is the publishing
+> checklist — see the build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) and PayFast's
 > **published sandbox credentials**, so `make up` gives you a working admin and a working
@@ -60,7 +60,7 @@ list with defaults.
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | **yes** | — | Postgres connection string |
-| `ADMIN_PASSWORD_HASH` | **yes** | — | bcrypt hash of the admin password (`make hashpw`) |
+| `ADMIN_PASSWORD_HASH` | **yes** | — | argon2id hash of the admin password (`make hashpw`); a bcrypt one still verifies |
 | `SESSION_SECRET` | **yes** | — | 32+ random bytes, base64, signs the session cookie |
 | `SESSION_SECRET_PREVIOUS` | no | — | The outgoing secret during a rotation; still verifies, never signs |
 | `SESSION_TTL_HOURS` | no | `24` | How long a sign-in lasts |
@@ -92,6 +92,10 @@ list with defaults.
 | `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
 | `BLOB_REGION` | no | `auto` | What R2 wants; GCS and MinIO ignore it |
 | `BLOB_USE_TLS` | no | `true` | `false` only for a MinIO on the same machine |
+| `RATE_LIMIT_LOGIN_PER_MINUTE` | no | `10` | Per client IP; `0` disables |
+| `RATE_LIMIT_CHECKOUT_PER_MINUTE` | no | `20` | Per client IP; `0` disables |
+| `RATE_LIMIT_CALLBACK_PER_MINUTE` | no | `120` | Per client IP; `0` disables |
+| `CART_TTL_DAYS` | no | `60` | How long an untouched cart survives |
 
 ¹ `SMTP_HOST` and `EMAIL_FROM` are individually optional but must be set **together** — a
 half-configured relay is a boot failure, because the alternative is a receipt that silently
@@ -109,8 +113,9 @@ make hashpw            # prompts, echoes nothing, prints both vars
 ```
 
 Set them in the environment and restart. The plain password is never stored or
-configured — only its bcrypt hash — so a leaked env file or a `ps` listing does not hand
-over the credential.
+configured — only its argon2id hash — so a leaked env file or a `ps` listing does not hand
+over the credential. See [Hardening](#password-hashing) for the parameters and for why a
+bcrypt hash from an older deployment still works.
 
 **One operator, no sessions table.** A session is a cookie signed by
 [gorilla/securecookie](https://github.com/gorilla/securecookie) whose payload is the
@@ -135,8 +140,7 @@ Notes:
   fragments.
 - htmx requests that have lost their session get `401` and `HX-Refresh: true` instead of a
   redirect, because swapping a login page into a fragment produces a broken hybrid.
-- Login has no rate limit until the hardening phase. The bcrypt comparison makes each
-  attempt cost real time, which is not the same thing.
+- Login is rate limited to 10 attempts a minute per IP; see [Hardening](#hardening).
 
 ## CSRF
 
@@ -168,6 +172,123 @@ assumes is `https` unless told otherwise, so the scheme is taken from **`BASE_UR
 than from the connection: behind a TLS-terminating proxy the connection is plain HTTP while
 the browser's origin is `https`. Getting `BASE_URL` wrong therefore breaks every admin form
 with a `403`, not just absolute links.
+
+## Hardening
+
+### Rate limits
+
+Per client IP, on three surfaces, with a token bucket from
+[`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) and the keying and
+eviction written here — the algorithm is the part with the clock edge cases already found
+in it, and a bucket per client with bounded memory is where the decisions are.
+
+| Route | Default | Why |
+|---|---|---|
+| `POST /admin/login` | 10/min | Brute force. argon2id's cost makes each attempt expensive, but cost is not a limit |
+| `POST /cart/checkout` | 20/min | Order-row spam, loose enough that double-clicking never trips it |
+| `POST /payments/{gw}/callback` | 120/min | **The reason the limiter exists**: unauthenticated, and every accepted request makes the store POST to the gateway — an amplifier |
+
+The burst is a third of the allowance (minimum 2), so `10/min` means three attempts
+immediately and then one every six seconds. A refusal is `429` with `Retry-After`. Limits
+are applied on the line that registers each route, not wrapped around a prefix, for the
+same reason `RequireAdmin` is: a prefix wrapper is one refactor away from silently not
+covering a new route.
+
+**The callback's `429` is not a contradiction of the always-`200` rule.** `200` means
+*read and decided*, so a gateway does not retry a forgery. A throttled request has not
+been read, and a retry is exactly what should happen — hence the limiter sits in front of
+the handler and answers `429`, which PayFast reads and honours.
+
+Only the POST on `/admin/login` is limited. Limiting the GET would lock an operator out of
+the page carrying the message explaining why.
+
+Idle buckets are evicted on a lazy sweep during an ordinary request, so there is no
+goroutine to own and shut down for a map that is usually tiny, and the map cannot grow
+without bound as an attacker cycles addresses.
+
+### Password hashing
+
+argon2id, via `x/crypto/argon2` — no new dependency, since `x/crypto` was already here for
+bcrypt. Parameters are RFC 9106's second recommendation: 64 MiB, three passes, four lanes,
+encoded into the hash as a standard PHC string:
+
+```
+$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
+```
+
+Because the parameters live in the hash, raising them later needs no migration: existing
+hashes keep verifying at their own settings and the next `make hashpw` writes the new ones.
+
+**A bcrypt hash still verifies.** `CheckPassword` dispatches on the prefix, so an existing
+deployment's `ADMIN_PASSWORD_HASH` keeps working and moves to argon2id whenever the
+operator next runs `make hashpw`. New hashes are argon2id only.
+
+Two details that are defence rather than decoration:
+
+- Verification **caps the memory a stored hash may request** at 1 GiB. Without that, a
+  mistyped `ADMIN_PASSWORD_HASH` claiming `m=4194304` would try to allocate four gibibytes
+  on the first login attempt — a denial of service delivered by a typo.
+- The hash is **parsed at boot**, so an unreadable one is a startup failure naming the
+  problem instead of an admin who can never sign in and nothing in the logs to say why.
+
+### Response headers
+
+```
+Content-Security-Policy: default-src 'self'; img-src 'self' <bucket> https: data:;
+  style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self' <gateway>;
+  base-uri 'none'; object-src 'none'; frame-ancestors <embed origins or 'none'>
+Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
+Referrer-Policy: strict-origin-when-cross-origin
+X-Content-Type-Options: nosniff
+Strict-Transport-Security: max-age=63072000; includeSubDomains   (https deployments only)
+```
+
+The CSP was reviewed in this phase, and **two directives are looser than the rest on
+purpose**. Recording why matters more than tightening them would:
+
+- **`img-src ... https:`** — a product image may be a URL pasted into the admin, pointing
+  anywhere. Narrowing this to the bucket would break that path, which is the whole answer
+  for a shop whose photographs are already hosted somewhere. The bucket is *also* named
+  explicitly, so an adopter who only ever uploads can delete the blanket and keep working.
+- **`style-src 'unsafe-inline'`** — the point of `TEMPLATE_DIR` is that adopters restyle
+  without forking, and there is no mechanism for them to add a stylesheet to the binary.
+  Dropping this would leave restyling with no legal way to apply CSS at all. The risk it
+  carries, CSS-based exfiltration, needs markup injection first — which is what
+  `html/template`'s escaping prevents.
+
+HSTS is sent only when `BASE_URL` is `https://`: browsers ignore it over plain HTTP, and
+sending it from a development server would pin a rule making the next plain-HTTP project
+on that port unreachable. There is deliberately no `preload` directive — that list has a
+slow exit, and it is the operator's decision rather than this project's.
+
+### Overselling
+
+Stock is taken at payment, never reserved at checkout, so two shoppers can both reach a
+payment page for the last item and both pay. The second order is still recorded **paid** —
+the money was taken, and refusing to record it would lose the sale *and* still be oversold
+— and `orders.oversold` is set in the same transaction, so an order is never
+paid-but-unflagged.
+
+It shows as `OVERSOLD` in `/admin/orders` and as a prominent block on the order page, as
+well as in the owner's notification email. Before this phase it existed only in the logs
+and that email, which is the wrong place for something needing reconciliation: an email is
+read once and a log is not read at all.
+
+Nothing here refunds anything. Refunds happen in the gateway's dashboard, because this
+schema models a forward payment only — see the plan's note on when to reconsider
+off-the-shelf.
+
+### Cart cleanup
+
+Carts untouched for `CART_TTL_DAYS` are deleted on boot and then daily, by a goroutine in
+the server process. It runs in every instance rather than being elected to one, and that is
+fine because the work is a single idempotent `DELETE`: two instances produce the same end
+state as one, and the second finds nothing to do. Electing a leader would need coordination
+this store has no other use for, and a cron container would break the one-binary
+deployment story.
+
+A failed sweep is logged and retried at the next tick. A cleanup that fails is a table that
+grows a little longer, which is not worth waking anyone for.
 
 ## Catalog
 
@@ -573,7 +694,8 @@ question is the depth of the problem, not the size of the dependency.
 | [`pressly/goose/v3`](https://github.com/pressly/goose) | Migrations: advisory locking, `NO TRANSACTION` support, and a CLI for the day one needs hand-holding |
 | [`justinas/nosurf`](https://github.com/justinas/nosurf) | CSRF tokens and origin checks |
 | [`gorilla/securecookie`](https://github.com/gorilla/securecookie) | Signing the admin session cookie, including key rotation |
-| [`golang.org/x/crypto/bcrypt`](https://pkg.go.dev/golang.org/x/crypto/bcrypt) | Admin password hashing |
+| [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
+| [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Sending email: MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
 | [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, MinIO |
 
@@ -605,8 +727,6 @@ Recorded here so they are decided deliberately rather than by default:
 
 | Decision | Candidate | When |
 |---|---|---|
-| Password hashing algorithm | argon2id, via [`alexedwards/argon2id`](https://github.com/alexedwards/argon2id) or `x/crypto/argon2` | OWASP puts argon2id first and bcrypt second. bcrypt at cost 12 is the current choice because its hash string is self-describing; revisit if that stops being a good enough reason |
-| Per-IP rate limiting | `golang.org/x/time/rate` for the buckets, hand-written keying and eviction | Phase 9. The limiter is the deep part; a map with a sweep is not |
 | Server-side sessions | [`alexedwards/scs`](https://github.com/alexedwards/scs) | Only if a second admin or immediate revocation is ever needed — the same trigger as adding a `sessions` table |
 
 ## Deploying
@@ -720,8 +840,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
 7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
 8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
-9. Hardening ← *next*
-10. Publish
+9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
+10. Publish ← *next*
 
 ## Licence
 

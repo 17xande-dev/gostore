@@ -19,6 +19,18 @@ type Policy struct {
 	// shopper to it with a real form submission, and form-action 'self' alone
 	// makes the browser block that — silently enough to cost an afternoon.
 	FormActions []string
+
+	// ImgSources are extra origins images may be loaded from — the object storage
+	// bucket, when one is configured. It is listed explicitly even though the
+	// policy also allows https: generally, so that an adopter who tightens that
+	// blanket away does not silently break their own product photographs.
+	ImgSources []string
+
+	// HSTS adds Strict-Transport-Security. Only ever true on an https deployment:
+	// sending it over plain HTTP is ignored by browsers, and sending it from a
+	// development server on localhost would pin a rule that makes the next plain
+	// HTTP project on that port unreachable.
+	HSTS bool
 }
 
 // SecurityHeaders sets the response headers every page wants.
@@ -37,11 +49,33 @@ func SecurityHeaders(p Policy) Middleware {
 		formAction += " " + strings.Join(p.FormActions, " ")
 	}
 
+	// Reviewed in the hardening phase. Two directives are looser than the rest, and
+	// both are deliberate rather than left over:
+	//
+	//   img-src ... https:   A product image may be a URL pasted into the admin,
+	//                        pointing anywhere. Narrowing this to the bucket would
+	//                        break the pasted-URL path, which is the whole answer
+	//                        for a shop whose photographs are already hosted. The
+	//                        bucket is named explicitly as well, so an adopter who
+	//                        uses uploads only *can* remove the blanket.
+	//
+	//   style-src 'unsafe-inline'
+	//                        The point of TEMPLATE_DIR is that adopters restyle
+	//                        without forking, and there is no mechanism for them to
+	//                        add a stylesheet to the binary. Dropping this would
+	//                        leave restyling with no legal way to apply CSS at all.
+	//                        The risk it carries — CSS-based exfiltration — needs
+	//                        markup injection first, which html/template's escaping
+	//                        is what prevents. One served template uses an inline
+	//                        style; the rest are in email bodies, which no CSP sees.
+	imgSrc := "'self' https: data:"
+	if len(p.ImgSources) > 0 {
+		imgSrc = "'self' " + strings.Join(p.ImgSources, " ") + " https: data:"
+	}
+
 	csp := strings.Join([]string{
 		"default-src 'self'",
-		// Product images are pasted URLs until object storage lands, so https
-		// and data: are allowed for images and nothing else.
-		"img-src 'self' https: data:",
+		"img-src " + imgSrc,
 		"style-src 'self' 'unsafe-inline'",
 		"script-src 'self'",
 		"form-action " + formAction,
@@ -56,6 +90,16 @@ func SecurityHeaders(p Policy) Middleware {
 			h.Set("Content-Security-Policy", csp)
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			// Nothing here uses a camera, a microphone or a location, and a store
+			// that takes card details should not be able to start doing so through
+			// an injected iframe.
+			h.Set("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=()")
+			if p.HSTS {
+				// Two years, subdomains included. No preload directive: getting onto
+				// the preload list is a decision with a slow exit, and it is the
+				// operator's to make rather than this project's to make for them.
+				h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

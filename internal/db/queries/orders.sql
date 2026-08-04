@@ -63,6 +63,11 @@ SET status = $2, paid_at = now(), gateway = $3, gateway_ref = $4,
     gateway_status = $5, gateway_amount = $6, gateway_payload = $7
 WHERE id = $1;
 
+-- Set inside the same transaction as MarkOrderPaid when a stock decrement found
+-- nothing left to decrement. The order stays paid; this is what tells a human.
+-- name: FlagOrderOversold :exec
+UPDATE orders SET oversold = TRUE WHERE id = $1;
+
 -- The stock_qty >= $1 guard is what makes this safe rather than the transaction
 -- alone: it turns "would go negative" into zero rows affected, a fact the caller
 -- can act on, instead of a constraint violation that would abort a transaction

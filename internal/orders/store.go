@@ -311,6 +311,14 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 		}
 	}
 
+	// Flagged in the same transaction that recorded the payment, so an order can
+	// never be paid-but-unflagged: the two facts commit together or not at all.
+	if len(result.Oversold) > 0 {
+		if err := q.FlagOrderOversold(ctx, id); err != nil {
+			return PaidResult{}, fmt.Errorf("orders: flag oversold: %w", err)
+		}
+	}
+
 	// The basket has become an order, so empty it. The cart row itself stays, so
 	// the shopper's cookie keeps working for their next visit.
 	if err := q.ClearCartForOrder(ctx, id); err != nil {
@@ -413,6 +421,7 @@ func order(r gen.Order) Order {
 		GatewayAmount:  r.GatewayAmount,
 		GatewayPayload: r.GatewayPayload,
 		Emailed:        r.Emailed,
+		Oversold:       r.Oversold,
 		CreatedAt:      r.CreatedAt,
 	}
 	if r.CartID != nil {

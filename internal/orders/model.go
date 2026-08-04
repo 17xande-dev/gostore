@@ -120,6 +120,13 @@ type Order struct {
 	// mail server having a bad afternoon can never lose a sale.
 	Emailed bool
 
+	// Oversold means this order was paid but its stock could not be decremented —
+	// somebody else bought the last one between checkout and payment. The order
+	// stands, because the money was taken; this needs a human to fulfil late or
+	// refund. Set in the same transaction that records the payment, so an order is
+	// never paid-but-unflagged.
+	Oversold bool
+
 	CreatedAt time.Time
 	// PaidAt is zero until an authenticated notification says otherwise.
 	PaidAt time.Time

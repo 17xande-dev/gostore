@@ -34,6 +34,58 @@ func TestSecurityHeaders(t *testing.T) {
 	if w.Header().Get("Referrer-Policy") == "" {
 		t.Error("Referrer-Policy is not set")
 	}
+	// Nothing here uses a camera, a microphone or a location.
+	pp := w.Header().Get("Permissions-Policy")
+	for _, want := range []string{"geolocation=()", "camera=()", "microphone=()"} {
+		if !strings.Contains(pp, want) {
+			t.Errorf("Permissions-Policy is missing %q: %s", want, pp)
+		}
+	}
+	// HSTS is off unless asked for: a browser ignores it over plain HTTP, and
+	// sending it from localhost would pin a rule that breaks the next plain-HTTP
+	// project on this port.
+	if got := w.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q on a non-HSTS policy", got)
+	}
+}
+
+func TestSecurityHeaders_HSTSWhenAsked(t *testing.T) {
+	h := SecurityHeaders(Policy{HSTS: true})(http.HandlerFunc(ok))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
+
+	hsts := w.Header().Get("Strict-Transport-Security")
+	if !strings.Contains(hsts, "max-age=") || !strings.Contains(hsts, "includeSubDomains") {
+		t.Errorf("Strict-Transport-Security = %q", hsts)
+	}
+	// No preload: getting onto that list is a decision with a slow exit, and it is
+	// the operator's to make rather than this project's to make for them.
+	if strings.Contains(hsts, "preload") {
+		t.Errorf("HSTS asks for preload, which this project should not decide: %q", hsts)
+	}
+}
+
+func TestSecurityHeaders_NamesTheImageBucket(t *testing.T) {
+	// The bucket is listed explicitly even though https: already covers it, so an
+	// adopter who tightens that blanket away does not silently break their own
+	// product photographs.
+	h := SecurityHeaders(Policy{
+		ImgSources: []string{"https://images.example"},
+	})(http.HandlerFunc(ok))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
+
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "img-src 'self' https://images.example") {
+		t.Errorf("img-src does not name the bucket: %s", csp)
+	}
+	// And a pasted image URL from anywhere still loads, which is the reason the
+	// blanket is still there.
+	if !strings.Contains(csp, "https: data:") {
+		t.Errorf("img-src no longer allows pasted URLs: %s", csp)
+	}
 }
 
 func TestSecurityHeaders_FrameAncestorsFollowEmbedOrigins(t *testing.T) {

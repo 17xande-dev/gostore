@@ -39,6 +39,7 @@ type Order struct {
 	Emailed         bool
 	CreatedAt       time.Time
 	PaidAt          *time.Time
+	Oversold        bool
 }
 
 type OrderItem struct {

@@ -25,7 +25,14 @@
         A pending order is the normal resting state of an abandoned checkout, so it
         is not marked as a problem. Only paid orders need packing.
       */}}
-      <td>{{if .Paid}}<strong>paid</strong>{{else}}{{.Status}}{{end}}</td>
+      <td>
+        {{if .Paid}}<strong>paid</strong>{{else}}{{.Status}}{{end}}
+        {{/*
+          An oversold order is the one row on this page that needs a decision, so
+          it is marked here rather than only on the detail page.
+        */}}
+        {{if .Oversold}}<br><strong>OVERSOLD</strong>{{end}}
+      </td>
       <td>{{if .Emailed}}yes{{else}}no{{end}}</td>
     </tr>
   {{end}}

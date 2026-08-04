@@ -19,6 +19,19 @@
   · Confirmation email {{if .Order.Emailed}}sent{{else}}not sent{{end}}
 </p>
 
+{{/*
+  Above everything else, because it is the one thing on this page that has to be
+  decided before the parcel is packed.
+*/}}
+{{if .Order.Oversold}}
+<p><strong>OVERSOLD — this order was paid but there was not enough stock left.</strong></p>
+<p>Stock was left as it stands rather than driven negative, so the counts under
+Products are still right for what is physically on the shelf. Somebody has to
+decide whether to fulfil this late or refund it. Nothing here does that for you:
+refunds happen in the {{.Order.Gateway}} dashboard, because this store models a
+forward payment only.</p>
+{{end}}
+
 <h2>Pack</h2>
 <table border="1" cellpadding="4">
   <thead>
