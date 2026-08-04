@@ -75,7 +75,9 @@ type checkoutForm struct {
 
 func (h *Handler) registerCheckout(mux *http.ServeMux) {
 	mux.HandleFunc("GET /cart/checkout", h.checkoutShow)
-	mux.HandleFunc("POST /cart/checkout", h.checkoutSubmit)
+	// Rate limited, because this is the route that writes order rows. Loose enough
+	// that a shopper who double-clicks the pay button never meets it.
+	mux.Handle("POST /cart/checkout", h.limits.checkout(http.HandlerFunc(h.checkoutSubmit)))
 	mux.HandleFunc("GET /cart/checkout/success", h.checkoutSuccess)
 	mux.HandleFunc("GET /cart/checkout/cancel", h.checkoutCancel)
 }

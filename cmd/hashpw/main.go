@@ -36,7 +36,7 @@ func run() error {
 		return err
 	}
 
-	hash, err := auth.HashPassword(password, auth.HashCost)
+	hash, err := auth.HashPassword(password, auth.DefaultParams)
 	if err != nil {
 		return err
 	}

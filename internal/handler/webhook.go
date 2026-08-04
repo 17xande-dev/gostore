@@ -40,7 +40,16 @@ const maxCallbackBytes = 64 << 10
 // RegisterPayments wires the gateway callback. It takes its own mux registration
 // on purpose — see the comment above.
 func (h *Handler) RegisterPayments(mux *http.ServeMux) {
-	mux.HandleFunc("POST /payments/{gateway}/callback", h.paymentCallback)
+	// Rate limited, and this is the surface the limiter exists for: unauthenticated,
+	// and every accepted request makes the store POST to the gateway to validate it,
+	// which is an amplifier.
+	//
+	// The limiter answers 429, which looks like it contradicts this handler's
+	// always-200 rule. It does not: 200 means "read and decided", so a gateway does
+	// not retry a forgery. A throttled request has not been read, and a retry is
+	// exactly what should happen — hence 429 with Retry-After, from in front of the
+	// handler rather than inside it.
+	mux.Handle("POST /payments/{gateway}/callback", h.limits.callback(http.HandlerFunc(h.paymentCallback)))
 }
 
 func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {

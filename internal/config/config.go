@@ -36,10 +36,11 @@ type Config struct {
 	// embedded defaults, so adopters can restyle without forking.
 	TemplateDir string
 
-	// Admin authentication. The password is stored only as a bcrypt hash, so a
-	// leaked env file or a process listing does not hand over the credential —
-	// which matters more than usual for a project others will copy as an
-	// example. Generate one with `go run ./cmd/hashpw`.
+	// Admin authentication. The password is stored only as an argon2id hash — a
+	// bcrypt one from an older deployment still verifies — so a leaked env file or
+	// a process listing does not hand over the credential, which matters more than
+	// usual for a project others will copy as an example. Generate one with
+	// `go run ./cmd/hashpw`.
 	AdminPasswordHash string
 	SessionSecret     []byte
 	SessionTTL        time.Duration
@@ -72,6 +73,15 @@ type Config struct {
 	// phases and remains a perfectly good answer for a shop with a handful of
 	// photographs already hosted somewhere.
 	Blob Blob
+
+	// RateLimits are the per-IP limits on the three surfaces worth protecting.
+	// Defaults are deliberately loose enough that no real shopper or operator
+	// meets one — a limit that fires on ordinary use gets turned off.
+	RateLimits RateLimits
+
+	// CartTTLDays is how long an untouched cart survives before the cleanup job
+	// removes it, keeping the carts table bounded.
+	CartTTLDays int
 
 	// TrustProxyIP makes the server believe X-Forwarded-For. It must be false
 	// unless something in front of the server is actually setting that header,
@@ -144,6 +154,22 @@ type Blob struct {
 // Configured reports whether image uploads can work.
 func (b Blob) Configured() bool { return b.Endpoint != "" }
 
+// RateLimits holds the per-IP limits. Each is a number of requests per minute
+// with a burst; see middleware.RateLimit for what the two mean together.
+type RateLimits struct {
+	// LoginPerMinute guards the admin password against brute force. Low, because
+	// an operator signs in once.
+	LoginPerMinute int
+	// CheckoutPerMinute guards order creation. Loose, because refusing a real
+	// shopper costs a sale and double-clicking is normal.
+	CheckoutPerMinute int
+	// CallbackPerMinute guards the payment callback, which is unauthenticated and
+	// makes the store POST to the gateway for every request it accepts. Generous:
+	// a throttled notification is retried, but throttling a busy shop's genuine
+	// traffic delays real payments.
+	CallbackPerMinute int
+}
+
 // SMTP is the mail relay's configuration. Username and Password may be empty, for
 // a relay that authenticates by network address — mailpit in development being the
 // case that matters here.
@@ -186,7 +212,13 @@ func Load() (Config, error) {
 		SessionTTL:        24 * time.Hour,
 		ShutdownTimeout:   15 * time.Second,
 		TrustProxyIP:      boolEnv("TRUST_PROXY_IP", false),
-		OrderNotifyEmail:  strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
+		CartTTLDays:       60,
+		RateLimits: RateLimits{
+			LoginPerMinute:    10,
+			CheckoutPerMinute: 20,
+			CallbackPerMinute: 120,
+		},
+		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
 		Blob: Blob{
 			Endpoint:      strings.TrimSpace(os.Getenv("BLOB_ENDPOINT")),
 			Bucket:        strings.TrimSpace(os.Getenv("BLOB_BUCKET")),
@@ -240,6 +272,13 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
 	}
 
+	// A hash the server cannot read is an admin who can never sign in, with nothing
+	// in the logs to explain it. Checked here so it is a boot failure naming the
+	// problem instead.
+	if err := auth.ParsePasswordHash(c.AdminPasswordHash); err != nil {
+		return Config{}, fmt.Errorf("config: ADMIN_PASSWORD_HASH: %w", err)
+	}
+
 	decoded, err := decodeSecret("SESSION_SECRET", secret)
 	if err != nil {
 		return Config{}, err
@@ -289,6 +328,35 @@ func Load() (Config, error) {
 			}
 		}
 		c.EmbedOrigins = append(c.EmbedOrigins, origin)
+	}
+
+	// The limits are configurable because the right number depends on a shop's
+	// traffic, and 0 means "no limit on this surface" — spelled out rather than
+	// implied by an empty value, since switching a protection off should be
+	// something an operator typed.
+	for _, l := range []struct {
+		key string
+		dst *int
+	}{
+		{"RATE_LIMIT_LOGIN_PER_MINUTE", &c.RateLimits.LoginPerMinute},
+		{"RATE_LIMIT_CHECKOUT_PER_MINUTE", &c.RateLimits.CheckoutPerMinute},
+		{"RATE_LIMIT_CALLBACK_PER_MINUTE", &c.RateLimits.CallbackPerMinute},
+	} {
+		if v, ok := os.LookupEnv(l.key); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return Config{}, fmt.Errorf("config: %s must be a non-negative integer, got %q", l.key, v)
+			}
+			*l.dst = n
+		}
+	}
+
+	if v, ok := os.LookupEnv("CART_TTL_DAYS"); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: CART_TTL_DAYS must be a positive integer, got %q", v)
+		}
+		c.CartTTLDays = n
 	}
 
 	// Mail is validated whenever any of it is set, so a half-configured relay is a

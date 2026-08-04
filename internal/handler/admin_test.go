@@ -25,17 +25,17 @@ import (
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // testPassword is the admin password every test in this package signs in with.
 const testPassword = "correct horse battery staple"
 
-// testHash is bcrypt at its cheapest: these tests assert on authentication
-// behaviour, not on how expensive the hash is, and the production cost would add
-// a quarter of a second to every sign-in here.
+// testHash is argon2id at its cheapest: these tests assert on authentication
+// behaviour, not on how expensive the hash is, and DefaultParams would add 64 MiB
+// and a tenth of a second to every sign-in here.
 var testHash = sync.OnceValue(func() string {
-	h, err := auth.HashPassword(testPassword, bcrypt.MinCost)
+	h, err := auth.HashPassword(testPassword,
+		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
 	if err != nil {
 		panic(err)
 	}

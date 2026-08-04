@@ -81,7 +81,11 @@ services:
       # Development credentials, published on purpose so `make up` yields a
       # working admin: the password is "gostore". Both values MUST be replaced
       # for any deployment anyone else can reach — see the README.
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$2a$$12$$R7qEibIvKX01iVw8B/NaSeb2f5ZiAjrY5/5/622QP.kdHnUL3XbNK}
+      #
+      # argon2id, in the standard PHC encoding. Every `$` is doubled because
+      # compose would otherwise try to interpolate it. A `$2a$` bcrypt hash from
+      # an older deployment still verifies, so upgrading needs no change here.
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$argon2id$$v=19$$m=65536,t=3,p=4$$yfEWKr5x66MgQhGsKGkGqQ$$pzrCItWG+8g7Gv9rpUaBuG2vnTquuRCC0KU+fafR9T4}
       SESSION_SECRET: ${SESSION_SECRET:-ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=}
       # PayFast's own published sandbox credentials, so `make up` yields a
       # working checkout. They are in PayFast's documentation and take no real

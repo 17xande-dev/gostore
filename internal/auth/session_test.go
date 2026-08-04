@@ -3,12 +3,10 @@ package auth
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/securecookie"
-	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -170,49 +168,7 @@ func TestTTL(t *testing.T) {
 	}
 }
 
-func TestPassword(t *testing.T) {
-	hash, err := HashPassword("correct horse battery staple", bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	if strings.Contains(hash, "correct horse") {
-		t.Fatal("the hash contains the password")
-	}
-
-	if !CheckPassword(hash, "correct horse battery staple") {
-		t.Error("the correct password was rejected")
-	}
-	for _, wrong := range []string{"", "correct horse battery stapl", "Correct Horse Battery Staple"} {
-		if CheckPassword(hash, wrong) {
-			t.Errorf("password %q was accepted", wrong)
-		}
-	}
-
-	// A missing or malformed ADMIN_PASSWORD_HASH must fail closed, not open.
-	for _, badHash := range []string{"", "not-a-bcrypt-hash", "$2a$10$tooshort"} {
-		if CheckPassword(badHash, "anything") {
-			t.Errorf("hash %q accepted a password", badHash)
-		}
-	}
-
-	if _, err := HashPassword("", bcrypt.MinCost); err == nil {
-		t.Error("HashPassword accepted an empty password")
-	}
-}
-
-func TestHashPassword_IsSalted(t *testing.T) {
-	a, err := HashPassword("same", bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	b, err := HashPassword("same", bcrypt.MinCost)
-	if err != nil {
-		t.Fatalf("HashPassword: %v", err)
-	}
-	if a == b {
-		t.Error("two hashes of the same password are identical; the salt is not doing its job")
-	}
-}
+// Password tests live in password_test.go.
 
 // decodeUnderName verifies a cookie value as if it had come from a differently
 // named cookie, which is what the name-binding test needs and the package's own

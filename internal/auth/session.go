@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/gorilla/securecookie"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // CookieName is the admin session cookie. It is scoped to /admin by the
@@ -29,11 +28,6 @@ import (
 // also part of the signed payload, so a value lifted from another cookie will
 // not verify here.
 const CookieName = "admin_session"
-
-// HashCost is the bcrypt cost for admin passwords. Higher than bcrypt's default
-// because this hash guards everything and is verified at most a few times a
-// day, so the cost is paid by an attacker far more often than by the operator.
-const HashCost = 12
 
 // MinSecretLen is the shortest session secret accepted. HMAC-SHA256 gains
 // nothing from a key longer than its 32-byte block, and loses meaningfully to
@@ -130,21 +124,4 @@ func (s *Sessions) Verify(value string, now time.Time) (time.Time, error) {
 	return expiry, nil
 }
 
-// HashPassword returns a bcrypt hash for storing in ADMIN_PASSWORD_HASH. Tests
-// pass a lower cost; everything else should pass HashCost.
-func HashPassword(password string, cost int) (string, error) {
-	if password == "" {
-		return "", errors.New("auth: password must not be empty")
-	}
-	h, err := bcrypt.GenerateFromPassword([]byte(password), cost)
-	if err != nil {
-		return "", fmt.Errorf("auth: hash password: %w", err)
-	}
-	return string(h), nil
-}
-
-// CheckPassword reports whether password matches the stored bcrypt hash.
-// bcrypt's comparison is constant time in the parts that matter.
-func CheckPassword(hash, password string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
-}
+// Password hashing lives in password.go.

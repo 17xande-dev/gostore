@@ -4,7 +4,7 @@ TEST_DATABASE_URL ?= postgres://gostore:gostore@localhost:5432/gostore?sslmode=d
 # Development-only admin credentials for the host-side targets below, matching
 # the ones in compose.yaml: the password is "gostore". Override them in the
 # environment for anything that is not a local sandbox.
-ADMIN_PASSWORD_HASH ?= $$2a$$12$$R7qEibIvKX01iVw8B/NaSeb2f5ZiAjrY5/5/622QP.kdHnUL3XbNK
+ADMIN_PASSWORD_HASH ?= $$argon2id$$v=19$$m=65536,t=3,p=4$$yfEWKr5x66MgQhGsKGkGqQ$$pzrCItWG+8g7Gv9rpUaBuG2vnTquuRCC0KU+fafR9T4
 SESSION_SECRET ?= ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=
 # Recipes using DEV_ENV are prefixed with @ so an overridden, real
 # ADMIN_PASSWORD_HASH is not echoed into a terminal or a CI log.

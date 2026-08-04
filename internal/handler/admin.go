@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
@@ -33,6 +34,36 @@ type Handler struct {
 	mail     email.Sender
 	blob     blob.Storage
 	sessions *auth.Sessions
+
+	// limits are built here from cfg rather than passed in, so that a rate limit is
+	// applied on the line that registers the route it protects — the same reasoning
+	// as RequireAdmin. A limiter wrapped around a prefix by the caller is one
+	// refactor away from silently not covering a new route.
+	limits limiters
+}
+
+// limiters are the per-surface rate limits. A zero limit means the surface is
+// unlimited, which is what the test configuration uses and what an operator gets
+// by setting RATE_LIMIT_*_PER_MINUTE=0.
+type limiters struct {
+	login    middleware.Middleware
+	checkout middleware.Middleware
+	callback middleware.Middleware
+}
+
+// perMinute builds a limiter allowing n requests a minute, or a pass-through when
+// n is zero. Burst is a third of the allowance, minimum two, so a shopper who
+// double-clicks is never the one who trips it.
+func perMinute(name string, n int, trustProxy bool, log *slog.Logger) middleware.Middleware {
+	if n <= 0 {
+		log.Warn("rate limiting is disabled for a surface that has one available", "limiter", name)
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return middleware.RateLimit(middleware.RateLimitConfig{
+		Name:  name,
+		Every: time.Minute / time.Duration(n),
+		Burst: max(2, n/3),
+	}, trustProxy, log)
 }
 
 func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
@@ -41,6 +72,11 @@ func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Stor
 	return &Handler{
 		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
 		orders: ord, gateway: gateway, mail: mail, blob: images, sessions: sessions,
+		limits: limiters{
+			login:    perMinute("admin login", cfg.RateLimits.LoginPerMinute, cfg.TrustProxyIP, log),
+			checkout: perMinute("checkout", cfg.RateLimits.CheckoutPerMinute, cfg.TrustProxyIP, log),
+			callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.TrustProxyIP, log),
+		},
 	}
 }
 
@@ -109,7 +145,10 @@ func (h *Handler) csrfFailed(w http.ResponseWriter, r *http.Request) {
 // in this list is visible on the line that registers it.
 func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middleware) {
 	mux.HandleFunc("GET /admin/login", h.adminLoginForm)
-	mux.HandleFunc("POST /admin/login", h.adminLogin)
+	// Rate limited, and only the POST: the form itself is harmless, and limiting a
+	// GET would lock an operator out of the page they need to read the message on.
+	// argon2id's cost already makes each attempt expensive, but cost is not a limit.
+	mux.Handle("POST /admin/login", h.limits.login(http.HandlerFunc(h.adminLogin)))
 	mux.HandleFunc("POST /admin/logout", h.adminLogout)
 
 	admin := func(pattern string, handler http.HandlerFunc) {

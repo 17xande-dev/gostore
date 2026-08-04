@@ -36,11 +36,17 @@ func TestReadPassword(t *testing.T) {
 func TestHashedPasswordVerifies(t *testing.T) {
 	// The hash this command prints must be one the server accepts, which is the
 	// whole point of the command existing.
-	hash, err := auth.HashPassword("correct horse battery staple", 4)
+	// Cheap parameters: this asserts the round trip, not how expensive the hash is.
+	cheap := auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}
+	hash, err := auth.HashPassword("correct horse battery staple", cheap)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
 	if !auth.CheckPassword(hash, "correct horse battery staple") {
 		t.Error("the generated hash does not verify the password it was made from")
+	}
+	// And it is a hash the server will accept at boot rather than refuse.
+	if err := auth.ParsePasswordHash(hash); err != nil {
+		t.Errorf("the generated hash would fail the boot-time check: %v", err)
 	}
 }
