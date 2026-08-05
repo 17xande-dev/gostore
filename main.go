@@ -329,7 +329,10 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 		HSTS: cfg.CookieSecure,
 	}
 	if cfg.Blob.Configured() {
-		policy.ImgSources = []string{cfg.Blob.PublicBaseURL}
+		// The origin, not the base URL: a CSP source carrying a path matches that
+		// path exactly, which would permit the bucket root and refuse every image
+		// under it. See Blob.PublicOrigin.
+		policy.ImgSources = []string{cfg.Blob.PublicOrigin()}
 	}
 	return middleware.Chain(mux, middleware.SecurityHeaders(policy))
 }

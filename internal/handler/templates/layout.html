@@ -1,7 +1,12 @@
 {{/*
-  The default templates are deliberately plain and unstyled: they are meant to
-  be readable, correct, and replaced. Point TEMPLATE_DIR at a directory with a
-  file of the same name to override any of them without forking.
+  The default templates are meant to be readable, correct, and replaced. Point
+  TEMPLATE_DIR at a directory with a file of the same name to override any of them,
+  and STATIC_DIR at one holding your own styles.css or logo.svg — neither needs a
+  rebuild.
+
+  Class names are the contract between these templates and styles.css. Overriding one
+  and not the other works as long as the names hold, which is why they describe what
+  a thing *is* — .product-card, .site-header — rather than how it looks.
 */}}
 
 {{define "head"}}<!doctype html>
@@ -10,26 +15,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — {{.StoreName}}</title>
-{{/* Vendored, served from the binary: no CDN, so the CSP stays 'self'. */}}
+{{/*
+  Both bundled, both served from this origin: no CDN, so the CSP stays 'self' for
+  scripts and styles alike and no third-party server sits on the payment path.
+*/}}
+<link rel="stylesheet" href="{{asset "styles.css"}}">
 <script src="{{asset "htmx.min.js"}}" defer></script>
 </head>
 <body>
-<header>
-  {{/*
-    The mark is a bundled asset, so it needs no CSP allowance beyond 'self'. Drop
-    your own logo.svg into STATIC_DIR to replace it without a rebuild — the URL
-    carries a hash of the file, so the new one appears immediately.
-  */}}
-  <a href="/products">
-    <img src="{{asset "logo.svg"}}" alt="" width="24" height="24">
-    <strong>{{.StoreName}}</strong>
-  </a>
+<header class="site-header">
+  <div class="inner">
+    {{/*
+      The mark is a bundled asset. Drop your own logo.svg into STATIC_DIR to replace
+      it — the URL carries a hash of the file, so the new one appears immediately
+      rather than after a cache expires.
+    */}}
+    <a class="brand" href="/products">
+      <img src="{{asset "logo.svg"}}" alt="" width="28" height="28">
+      {{.StoreName}}
+    </a>
+    <nav>
+      <a href="/products">Shop</a>
+      <a href="/cart">Cart</a>
+    </nav>
+  </div>
 </header>
 <main>
+<div class="inner">
 {{end}}
 
 {{define "foot"}}
+</div>
 </main>
+<footer class="site-footer">
+  <div class="inner columns">
+    <div>
+      <strong>{{.StoreName}}</strong>
+      <p class="muted"><small>Powered by gostore.</small></p>
+    </div>
+    <nav>
+      <a href="/products">All products</a>
+      <a href="/cart">Your cart</a>
+    </nav>
+  </div>
+</footer>
 </body>
 </html>
 {{end}}

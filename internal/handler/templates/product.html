@@ -11,9 +11,20 @@
 {{define "product"}}
 {{template "head" .}}
 
-<p><a href="/products" hx-boost="true">← All products</a></p>
-{{template "product_detail" .}}
-{{template "add_to_cart" .}}
+<a class="back" href="/products" hx-boost="true">← All products</a>
+{{/*
+  The detail fragment lays itself out in two columns, so it looks right on its own
+  when an embedder fetches it. On this page it is flattened into the grid below
+  (styles.css uses display:contents) so the buying form lands under the prices
+  rather than under the photograph — otherwise the eye has to go right for the price
+  and back left to buy.
+*/}}
+<div class="product-page">
+  {{template "product_detail" .}}
+  <div class="buy">
+    {{template "add_to_cart" .}}
+  </div>
+</div>
 
 {{template "foot" .}}
 {{end}}
@@ -33,6 +44,7 @@
   {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
     <input type="hidden" name="variant_id" value="{{(index .Variants 0).ID}}">
   {{else}}
+    <div class="field">
     <label>Option
       <select name="variant_id" required>
         {{range .Variants}}
@@ -42,9 +54,14 @@
         {{end}}
       </select>
     </label>
+    </div>
   {{end}}
 
-  <label>Quantity <input type="number" name="quantity" value="1" min="1" max="99" size="3"></label>
+  <div class="field">
+    <label class="inline">Quantity
+      <input type="number" name="quantity" value="1" min="1" max="99" size="3">
+    </label>
+  </div>
   <button type="submit">Add to cart</button>
 </form>
 
@@ -57,49 +74,57 @@
 */}}
 <div id="cart-status" hx-get="/cart/status" hx-trigger="load"></div>
 {{else}}
-<p>Sold out.</p>
+<p class="badge sold-out">Sold out.</p>
 {{end}}
 {{end}}
 {{end}}
 
 {{define "product_detail"}}
 {{with .Product}}
-<article>
-  <h1>{{.Title}}</h1>
-  {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" width="320">
-  {{else}}<img src="{{asset "placeholder.svg"}}" alt="" width="320">{{end}}
-  {{with .Description}}<p>{{.}}</p>{{end}}
+{{/*
+  Two columns where there is room, one where there is not — decided by the grid in
+  styles.css rather than by a breakpoint here.
+*/}}
+<article class="product-detail">
+  <span class="frame">
+    {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}">
+    {{else}}<img src="{{asset "placeholder.svg"}}" alt="">{{end}}
+  </span>
+  <div class="info">
+    <h1>{{.Title}}</h1>
+    {{with .Description}}<p>{{.}}</p>{{end}}
 
-  {{/*
-    One variant with no options is a product with nothing to choose — a book,
-    typically — so it shows a price rather than a selector nobody needs. The
-    data model does not branch here; only the presentation does.
-  */}}
-  {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
-    {{with index .Variants 0}}
-      <p>{{$.Currency}} {{money .PriceCents}}</p>
-      <p>{{if .InStock}}In stock{{else}}Sold out{{end}}</p>
-    {{end}}
-  {{else}}
-    <table border="1" cellpadding="4">
-      <thead><tr><th>Option</th><th>Price</th><th>Availability</th></tr></thead>
-      <tbody>
-      {{range .Variants}}
-        <tr>
-          <td>{{.Label}}</td>
-          <td>{{$.Currency}} {{money .PriceCents}}</td>
-          <td>{{if .InStock}}In stock{{else}}Sold out{{end}}</td>
-        </tr>
+    {{/*
+      One variant with no options is a product with nothing to choose — a book,
+      typically — so it shows a price rather than a selector nobody needs. The
+      data model does not branch here; only the presentation does.
+    */}}
+    {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
+      {{with index .Variants 0}}
+        <p class="price-lead">{{$.Currency}} {{money .PriceCents}}</p>
+        <p class="muted">{{if .InStock}}In stock{{else}}Sold out{{end}}</p>
       {{end}}
-      </tbody>
-    </table>
-  {{end}}
+    {{else}}
+      <table>
+        <thead><tr><th>Option</th><th class="num">Price</th><th>Availability</th></tr></thead>
+        <tbody>
+        {{range .Variants}}
+          <tr>
+            <td>{{.Label}}</td>
+            <td class="num">{{$.Currency}} {{money .PriceCents}}</td>
+            <td>{{if .InStock}}In stock{{else}}<span class="muted">Sold out</span>{{end}}</td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{end}}
 
-  {{/*
-    The add-to-cart form is deliberately not in here: this template is what gets
-    served cross-origin, and anything that changes state has to be first-party on
-    the store's own domain. See "add_to_cart" above.
-  */}}
+    {{/*
+      The add-to-cart form is deliberately not in here: this template is what gets
+      served cross-origin, and anything that changes state has to be first-party on
+      the store's own domain. See "add_to_cart" above.
+    */}}
+  </div>
 </article>
 {{end}}
 {{end}}

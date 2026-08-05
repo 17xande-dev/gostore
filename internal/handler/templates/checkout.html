@@ -17,7 +17,7 @@
 {{define "checkout_form"}}
 {{with .Error}}<p><strong>{{.}}</strong></p>{{end}}
 
-<table border="1" cellpadding="4">
+<table>
   <thead><tr><th>Item</th><th>Quantity</th><th>Line total</th></tr></thead>
   <tbody>
   {{range .Cart.Items}}
@@ -111,7 +111,7 @@
     <p>We are waiting for the payment to be confirmed. This usually takes a few
     seconds, and you will get an email once it is done — you do not need to pay again.</p>
   {{end}}
-  <table border="1" cellpadding="4">
+  <table>
     <tbody>
     {{range .Order.Items}}
       <tr>

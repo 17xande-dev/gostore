@@ -322,6 +322,30 @@ func TestLoad_Blob(t *testing.T) {
 	}
 }
 
+func TestBlob_PublicOrigin(t *testing.T) {
+	// The CSP source has to be the origin alone. A source carrying a path matches
+	// that path *exactly*, so listing the bucket base would permit the bucket root
+	// and refuse every image beneath it — which is invisible outside a browser,
+	// because the image itself still returns 200.
+	cases := map[string]string{
+		"http://localhost:9000/gostore-images": "http://localhost:9000",
+		"https://images.example":               "https://images.example",
+		"https://images.example/":              "https://images.example",
+		"https://pub-abc.r2.dev/bucket/nested": "https://pub-abc.r2.dev",
+		"not a url":                            "",
+		"":                                     "",
+	}
+	for base, want := range cases {
+		got := Blob{PublicBaseURL: base}.PublicOrigin()
+		if got != want {
+			t.Errorf("Blob{%q}.PublicOrigin() = %q, want %q", base, got, want)
+		}
+		if strings.Count(got, "/") > 2 {
+			t.Errorf("PublicOrigin() = %q still carries a path", got)
+		}
+	}
+}
+
 func TestLoad_TrustProxyIP(t *testing.T) {
 	setRequired(t)
 

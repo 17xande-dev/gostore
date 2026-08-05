@@ -23,10 +23,17 @@ func TestSecurityHeaders(t *testing.T) {
 		"base-uri 'none'",
 		"frame-ancestors 'none'",
 		"form-action 'self'",
+		// The theme is a bundled stylesheet and STATIC_DIR replaces it, so no served
+		// template needs a style attribute and this directive is closed. It carried
+		// 'unsafe-inline' until there was a stylesheet to put those rules in.
+		"style-src 'self'",
 	} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP is missing %q: %s", want, csp)
 		}
+	}
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("the CSP has regained an unsafe- directive: %s", csp)
 	}
 	if w.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("X-Content-Type-Options is not set")

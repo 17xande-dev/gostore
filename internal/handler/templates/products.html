@@ -14,27 +14,45 @@
 
 {{define "products_list"}}
 {{if not .Products}}
-  <p>Nothing for sale yet.</p>
+  <p class="muted">Nothing for sale yet.</p>
 {{else}}
-<ul>
+{{/*
+  A grid that reflows on its own: styles.css asks for as many columns as fit above a
+  minimum width, so there are no breakpoints here and none in the CSS either.
+*/}}
+<ul class="products">
   {{range .Products}}
   <li>
     {{/*
-      Every card gets an image, so a catalog of mixed products does not reflow into a
-      mess where some have pictures and some do not. The placeholder is a bundled
-      asset; the real one is the key resolved against whichever backend is running.
+      The whole card is the link, so the target is the card rather than a few words
+      of title.
     */}}
-    {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" width="120">
-    {{else}}<img src="{{asset "placeholder.svg"}}" alt="" width="120">{{end}}
-    <a href="/products/{{.Slug}}" hx-boost="true">{{.Title}}</a>
-    <span>
-      {{if .OnePrice}}
-        {{$.Currency}} {{money .MinPriceCents}}
-      {{else}}
-        {{$.Currency}} {{money .MinPriceCents}} – {{money .MaxPriceCents}}
-      {{end}}
-    </span>
-    {{if not .InStock}}<span>Sold out</span>{{end}}
+    <a class="product-card" href="/products/{{.Slug}}" hx-boost="true">
+      {{/*
+        The fixed-ratio frame is what makes a catalog of differently-sized
+        photographs line up, and what stops a product with no picture yet from being
+        a shorter card than its neighbours. The placeholder carries no alt text: the
+        title directly below already says what the thing is, so announcing "no image"
+        to a screen reader would be noise.
+      */}}
+      <span class="frame">
+        {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" loading="lazy">
+        {{else}}<img src="{{asset "placeholder.svg"}}" alt="" loading="lazy">{{end}}
+      </span>
+      <span class="title">{{.Title}}</span>
+      <span class="price">
+        {{if .OnePrice}}
+          {{$.Currency}} {{money .MinPriceCents}}
+        {{else}}
+          {{$.Currency}} {{money .MinPriceCents}} – {{money .MaxPriceCents}}
+        {{end}}
+      </span>
+      {{/*
+        Sold out is shown rather than the product being hidden: somebody looking for
+        it should find out it exists and is gone, not conclude the shop never had it.
+      */}}
+      {{if not .InStock}}<span class="badge sold-out">Sold out</span>{{end}}
+    </a>
   </li>
   {{end}}
 </ul>

@@ -28,6 +28,7 @@ func TestAssets_BundledImagesAreServed(t *testing.T) {
 		"logo.svg":        "image/svg+xml",
 		"placeholder.svg": "image/svg+xml",
 		"htmx.min.js":     "javascript",
+		"styles.css":      "text/css",
 	} {
 		url := assetURL(name)
 		if strings.Contains(url, "missing") || strings.Contains(url, "unavailable") {
@@ -171,5 +172,54 @@ func TestAssets_PlaceholderShownForAProductWithNoImage(t *testing.T) {
 	_, page := get(t, srv, "/products/sample-tee")
 	if !strings.Contains(page, placeholder) {
 		t.Errorf("the detail page shows no placeholder: %s", page)
+	}
+}
+
+func TestAssets_ThemeIsLinkedAndSelfHosted(t *testing.T) {
+	withStaticDir(t, "")
+	srv, store := newStorefront(t, testConfig(), "")
+	stock(t, store)
+
+	_, page := get(t, srv, "/products")
+
+	// The stylesheet is linked with its content-hashed URL, so replacing it through
+	// STATIC_DIR takes effect without waiting for a cache to expire.
+	if !strings.Contains(page, `rel="stylesheet" href="/static/styles.css?v=`) {
+		t.Errorf("the page does not link the bundled stylesheet: %s", page)
+	}
+	// Nothing is fetched from anywhere else. A web font or a CDN stylesheet would
+	// mean widening style-src and putting a request to somebody else's server on
+	// every page — including the ones in the payment path.
+	for _, forbidden := range []string{"https://fonts.", "cdn.", "//unpkg", "//cdnjs"} {
+		if strings.Contains(page, forbidden) {
+			t.Errorf("the page references an external origin %q", forbidden)
+		}
+	}
+	// And no style attribute survives, which is what lets style-src stay closed.
+	if strings.Contains(page, "style=\"") {
+		t.Errorf("the page carries an inline style attribute, which the CSP now forbids: %s", page)
+	}
+}
+
+func TestAssets_EveryServedTemplateIsFreeOfInlineStyles(t *testing.T) {
+	// The CSP dropped 'unsafe-inline' from style-src, so a style attribute anywhere in
+	// a *served* page is now a silently broken element rather than a cosmetic choice.
+	// Email bodies are exempt: no CSP has ever applied to them.
+	withStaticDir(t, "")
+	s := newCheckoutShop(t)
+	signIn(t, s.srv)
+	addToCart(t, s.srv, s.variants["S"].ID, 1)
+
+	for _, path := range []string{
+		"/products", "/products/tee", "/cart", "/cart/checkout",
+		"/admin/products", "/admin/orders", "/admin/login",
+	} {
+		res, page := get(t, s.srv, path)
+		if res.StatusCode != http.StatusOK {
+			continue // a redirect or a 404 here is another test's business
+		}
+		if strings.Contains(page, "style=\"") {
+			t.Errorf("GET %s carries an inline style attribute", path)
+		}
 	}
 }

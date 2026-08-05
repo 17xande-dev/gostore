@@ -54,16 +54,14 @@ func SecurityHeaders(p Policy) Middleware {
 	// product page belongs to somebody who can change or delete it. That used to be
 	// allowed and no longer is, which is what lets this directive be closed.
 	//
-	// One directive is still looser than the rest, deliberately:
+	// Every directive is now closed to this origin plus, for images, the bucket.
 	//
-	//   style-src 'unsafe-inline'
-	//        The point of TEMPLATE_DIR is that adopters restyle without forking, and
-	//        there is no mechanism for them to add a stylesheet to the binary.
-	//        Dropping this would leave restyling with no legal way to apply CSS at
-	//        all. The risk it carries — CSS-based exfiltration — needs markup
-	//        injection first, which html/template's escaping is what prevents. One
-	//        served template uses an inline style; the rest are in email bodies,
-	//        which no CSP sees.
+	// style-src used to carry 'unsafe-inline', because restyling through TEMPLATE_DIR
+	// had no other legal way to apply CSS — there was no stylesheet and no mechanism
+	// for an adopter to add one. Both exist now: the theme is a bundled styles.css and
+	// STATIC_DIR replaces it. No served template contains a style attribute, so the
+	// concession is gone. The remaining inline styles are in email bodies, which no
+	// CSP has ever applied to.
 	imgSrc := "'self'"
 	if len(p.ImgSources) > 0 {
 		imgSrc += " " + strings.Join(p.ImgSources, " ")
@@ -72,7 +70,7 @@ func SecurityHeaders(p Policy) Middleware {
 	csp := strings.Join([]string{
 		"default-src 'self'",
 		"img-src " + imgSrc,
-		"style-src 'self' 'unsafe-inline'",
+		"style-src 'self'",
 		"script-src 'self'",
 		"form-action " + formAction,
 		"base-uri 'none'",

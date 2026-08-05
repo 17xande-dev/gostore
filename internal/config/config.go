@@ -167,6 +167,25 @@ type Blob struct {
 // Configured reports whether object storage is set up.
 func (b Blob) Configured() bool { return b.Endpoint != "" }
 
+// PublicOrigin is the scheme and host images are served from, with any path
+// stripped — which is what a Content-Security-Policy source has to be.
+//
+// This is not fussiness. A CSP source whose path does not end in "/" must match a
+// URL's path *exactly*, so listing "http://host:9000/bucket" permits that one URL
+// and refuses "http://host:9000/bucket/products/x.jpg" — every actual image. MinIO
+// and any path-style bucket URL hit this, and the failure is invisible outside a
+// browser: the image returns 200 to curl, the markup is correct, and the page shows
+// a broken image with a console warning nothing else surfaces.
+func (b Blob) PublicOrigin() string {
+	u, err := url.Parse(b.PublicBaseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		// Load has already rejected this, so reaching here means the value changed
+		// underneath us. An empty source is safe: it permits nothing.
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // ImagesEnabled reports whether a product can have an image at all — by upload to
 // object storage or to a local directory. With neither, the admin says so rather
 // than offering a form that could only fail.

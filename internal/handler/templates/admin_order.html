@@ -33,7 +33,7 @@ forward payment only.</p>
 {{end}}
 
 <h2>Pack</h2>
-<table border="1" cellpadding="4">
+<table>
   <thead>
     <tr><th>Item</th><th>Options</th><th>Unit</th><th>Qty</th><th>Line total</th></tr>
   </thead>
@@ -72,7 +72,7 @@ forward payment only.</p>
 </p>
 
 <h2>Payment</h2>
-<table border="1" cellpadding="4">
+<table>
   <tbody>
     <tr><th>Gateway</th><td>{{with .Order.Gateway}}{{.}}{{else}}—{{end}}</td></tr>
     <tr><th>Gateway reference</th><td>{{with .Order.GatewayRef}}{{.}}{{else}}—{{end}}</td></tr>
@@ -89,7 +89,7 @@ forward payment only.</p>
 */}}
 {{with .Order.GatewayPayload}}
 <h3>Raw gateway notification</h3>
-<pre style="white-space: pre-wrap; word-break: break-all;">{{.}}</pre>
+<pre class="raw">{{.}}</pre>
 {{end}}
 
 {{template "foot" .}}
