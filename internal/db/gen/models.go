@@ -59,7 +59,6 @@ type Product struct {
 	Slug        string
 	Title       string
 	Description string
-	ImageURL    string
 	Active      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

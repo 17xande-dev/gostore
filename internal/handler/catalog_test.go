@@ -28,13 +28,14 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 
 	pool := dbtest.Pool(t)
 	store := catalog.NewStore(pool)
-	tmpl, err := ParseTemplates(templateDir)
+	images := blob.NewFake()
+	tmpl, err := ParseTemplates(templateDir, images)
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	gateway := payment.NewFake()
 	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool),
-		orders.NewStore(pool), gateway, email.NewFake(), blob.NewFake(), testSessions(t))
+		orders.NewStore(pool), gateway, email.NewFake(), images, testSessions(t))
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)

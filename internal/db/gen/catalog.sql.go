@@ -11,9 +11,9 @@ import (
 
 const clearProductImage = `-- name: ClearProductImage :one
 UPDATE products
-SET image_url = '', image_key = '', updated_at = now()
+SET image_key = '', updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
 `
 
 func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, error) {
@@ -25,7 +25,6 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -37,7 +36,7 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 const createProduct = `-- name: CreateProduct :one
 INSERT INTO products (id, kind, slug, title, description, active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
 `
 
 type CreateProductParams struct {
@@ -50,9 +49,9 @@ type CreateProductParams struct {
 
 // The database generates the id, which is why no UUID library reaches the binary.
 //
-// image_url is absent: a new product has no image, and one only ever arrives by
-// upload through SetProductImage. There is no way to point a product at bytes this
-// store does not hold.
+// A new product has no image; one only ever arrives by upload through
+// SetProductImage. There is no way to point a product at bytes this store does not
+// hold.
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, createProduct,
 		arg.Kind,
@@ -68,7 +67,6 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -149,7 +147,7 @@ func (q *Queries) DeleteVariant(ctx context.Context, arg DeleteVariantParams) (i
 }
 
 const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE slug = $1 AND active
+SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE slug = $1 AND active
 `
 
 func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -161,7 +159,6 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -171,7 +168,7 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE id = $1
+SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
@@ -183,7 +180,6 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -193,7 +189,7 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products WHERE slug = $1
+SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE slug = $1
 `
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -205,7 +201,6 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -215,7 +210,7 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 }
 
 const listActiveProducts = `-- name: ListActiveProducts :many
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products p
+SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
 ORDER BY p.title
@@ -238,7 +233,6 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]Product, error) {
 			&i.Slug,
 			&i.Title,
 			&i.Description,
-			&i.ImageURL,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -361,7 +355,7 @@ func (q *Queries) ListAllVariants(ctx context.Context) ([]ProductVariant, error)
 
 const listProducts = `-- name: ListProducts :many
 
-SELECT id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key FROM products ORDER BY title
+SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products ORDER BY title
 `
 
 // Queries behind internal/catalog. See sqlc.yaml; regenerate with `make sqlc`.
@@ -384,7 +378,6 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.Slug,
 			&i.Title,
 			&i.Description,
-			&i.ImageURL,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -435,22 +428,25 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 
 const setProductImage = `-- name: SetProductImage :one
 UPDATE products
-SET image_url = $2, image_key = $3, updated_at = now()
+SET image_key = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
 `
 
 type SetProductImageParams struct {
 	ID       string
-	ImageURL string
 	ImageKey string
 }
 
 // Points a product at an uploaded object. The caller deletes the previous object,
 // if there was one, *after* this commits: an orphaned object costs a few kilobytes,
 // while a deleted object still referenced by a live row is a broken image.
+//
+// Only the key is stored. The URL it is served at depends on which backend is
+// configured and is computed when a page is rendered, so the same row works on a
+// development machine and in production.
 func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams) (Product, error) {
-	row := q.db.QueryRow(ctx, setProductImage, arg.ID, arg.ImageURL, arg.ImageKey)
+	row := q.db.QueryRow(ctx, setProductImage, arg.ID, arg.ImageKey)
 	var i Product
 	err := row.Scan(
 		&i.ID,
@@ -458,7 +454,6 @@ func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -471,7 +466,7 @@ const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
 SET kind = $2, slug = $3, title = $4, description = $5, active = $6, updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
 `
 
 type UpdateProductParams struct {
@@ -486,10 +481,10 @@ type UpdateProductParams struct {
 // updated_at is maintained here rather than by a trigger, so the write is visible
 // in the query itself.
 //
-// Neither image column appears here: the product form does not touch the image, and
-// an image is only ever set by SetProductImage or cleared by ClearProductImage.
-// That is what makes an empty submission from a form that does not render an image
-// field harmless, rather than a silent way to blank the picture.
+// image_key does not appear here: the product form does not touch the image, and an
+// image is only ever set by SetProductImage or cleared by ClearProductImage. That is
+// what makes a submission from a form with no image field harmless, rather than a
+// silent way to blank the picture.
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
 		arg.ID,
@@ -506,7 +501,6 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -566,7 +560,7 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
 ON CONFLICT (slug) DO UPDATE
 SET kind = EXCLUDED.kind, title = EXCLUDED.title, description = EXCLUDED.description,
     active = EXCLUDED.active, updated_at = now()
-RETURNING id, kind, slug, title, description, image_url, active, created_at, updated_at, image_key
+RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
 `
 
 type UpsertProductParams struct {
@@ -579,10 +573,8 @@ type UpsertProductParams struct {
 
 // Upserts by natural key — slug for a product, SKU for a variant — which is what
 // makes cmd/seed rerunnable.
-// image_url is absent here too, so a seed file cannot claim a product's image. A
-// fixture has no way to upload bytes, so the only thing it could set is a URL
-// pointing somewhere this store does not control — which is exactly what is no
-// longer allowed. Re-seeding therefore leaves an uploaded image alone.
+// No image column here either, so a seed file cannot claim a product's image: a
+// fixture has no way to upload bytes. Re-seeding leaves an uploaded image alone.
 func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, upsertProduct,
 		arg.Kind,
@@ -598,7 +590,6 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		&i.Slug,
 		&i.Title,
 		&i.Description,
-		&i.ImageURL,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,

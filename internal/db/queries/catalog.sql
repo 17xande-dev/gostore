@@ -44,9 +44,9 @@ SELECT * FROM product_variants WHERE product_id = $1 ORDER BY size, color, sku;
 
 -- The database generates the id, which is why no UUID library reaches the binary.
 --
--- image_url is absent: a new product has no image, and one only ever arrives by
--- upload through SetProductImage. There is no way to point a product at bytes this
--- store does not hold.
+-- A new product has no image; one only ever arrives by upload through
+-- SetProductImage. There is no way to point a product at bytes this store does not
+-- hold.
 -- name: CreateProduct :one
 INSERT INTO products (id, kind, slug, title, description, active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
@@ -55,10 +55,10 @@ RETURNING *;
 -- updated_at is maintained here rather than by a trigger, so the write is visible
 -- in the query itself.
 --
--- Neither image column appears here: the product form does not touch the image, and
--- an image is only ever set by SetProductImage or cleared by ClearProductImage.
--- That is what makes an empty submission from a form that does not render an image
--- field harmless, rather than a silent way to blank the picture.
+-- image_key does not appear here: the product form does not touch the image, and an
+-- image is only ever set by SetProductImage or cleared by ClearProductImage. That is
+-- what makes a submission from a form with no image field harmless, rather than a
+-- silent way to blank the picture.
 -- name: UpdateProduct :one
 UPDATE products
 SET kind = $2, slug = $3, title = $4, description = $5, active = $6, updated_at = now()
@@ -68,15 +68,19 @@ RETURNING *;
 -- Points a product at an uploaded object. The caller deletes the previous object,
 -- if there was one, *after* this commits: an orphaned object costs a few kilobytes,
 -- while a deleted object still referenced by a live row is a broken image.
+--
+-- Only the key is stored. The URL it is served at depends on which backend is
+-- configured and is computed when a page is rendered, so the same row works on a
+-- development machine and in production.
 -- name: SetProductImage :one
 UPDATE products
-SET image_url = $2, image_key = $3, updated_at = now()
+SET image_key = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
 -- name: ClearProductImage :one
 UPDATE products
-SET image_url = '', image_key = '', updated_at = now()
+SET image_key = '', updated_at = now()
 WHERE id = $1
 RETURNING *;
 
@@ -103,10 +107,8 @@ DELETE FROM product_variants WHERE id = $1 AND product_id = $2;
 
 -- Upserts by natural key — slug for a product, SKU for a variant — which is what
 -- makes cmd/seed rerunnable.
--- image_url is absent here too, so a seed file cannot claim a product's image. A
--- fixture has no way to upload bytes, so the only thing it could set is a URL
--- pointing somewhere this store does not control — which is exactly what is no
--- longer allowed. Re-seeding therefore leaves an uploaded image alone.
+-- No image column here either, so a seed file cannot claim a product's image: a
+-- fixture has no way to upload bytes. Re-seeding leaves an uploaded image alone.
 -- name: UpsertProduct :one
 INSERT INTO products (id, kind, slug, title, description, active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)

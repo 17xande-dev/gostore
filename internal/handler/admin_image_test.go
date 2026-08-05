@@ -96,8 +96,8 @@ func TestProductImage_Upload(t *testing.T) {
 		t.Errorf("stored content type = %q", obj.ContentType)
 	}
 
-	// The product now owns the object: both the URL to serve it from and the key
-	// that says this store may delete it.
+	// The product now holds the object's key — the only thing stored, since the URL
+	// depends on which backend is running.
 	stored, err := s.catalog.Get(t.Context(), p.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -105,20 +105,14 @@ func TestProductImage_Upload(t *testing.T) {
 	if stored.ImageKey != keys[0] {
 		t.Errorf("ImageKey = %q, want %q", stored.ImageKey, keys[0])
 	}
-	if stored.ImageURL != s.images.URL(keys[0]) {
-		t.Errorf("ImageURL = %q, want the public URL %q", stored.ImageURL, s.images.URL(keys[0]))
-	}
 	if !stored.HasImage() {
 		t.Error("HasImage() is false after an upload")
 	}
-	if stored.HasForeignImage() {
-		t.Error("an uploaded image is reported as foreign")
-	}
 
-	// And the edit page shows it, with a remove button now that there is an object
-	// to remove.
+	// The edit page shows it with a remove button, at a URL resolved from the key at
+	// render time rather than read from the row.
 	_, page := get(t, s.srv, "/admin/products/"+p.ID+"/edit")
-	if !strings.Contains(page, `src="`+stored.ImageURL+`"`) {
+	if !strings.Contains(page, `src="`+s.images.URL(stored.ImageKey)+`"`) {
 		t.Errorf("the edit page does not show the image: %s", page)
 	}
 	if !strings.Contains(page, "/image/delete") {
@@ -193,7 +187,7 @@ func TestProductImage_RefusesAnythingThatIsNotAnImage(t *testing.T) {
 	if keys := s.images.Keys(); len(keys) != 0 {
 		t.Errorf("a refused upload reached storage: %v", keys)
 	}
-	if stored, err := s.catalog.Get(t.Context(), p.ID); err != nil || stored.ImageURL != "" {
+	if stored, err := s.catalog.Get(t.Context(), p.ID); err != nil || stored.HasImage() {
 		t.Errorf("a refused upload changed the product: %+v, %v", stored, err)
 	}
 }
@@ -240,7 +234,7 @@ func TestProductImage_Remove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.ImageURL != "" || stored.ImageKey != "" {
+	if stored.HasImage() {
 		t.Errorf("the product still references an image: %+v", stored)
 	}
 	if deleted := s.images.Deleted(); len(deleted) != 1 || deleted[0] != uploaded.ImageKey {
@@ -278,53 +272,8 @@ func TestProductImage_CannotBeSetByURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if stored.ImageURL != "" {
-		t.Errorf("ImageURL = %q; a hand-crafted image_url parameter was accepted", stored.ImageURL)
-	}
 	if stored.HasImage() {
-		t.Error("the product has an image it was never given")
-	}
-}
-
-func TestProductImage_ForeignImageIsFlaggedAndRemovable(t *testing.T) {
-	// A row from before pasting stopped being allowed: a URL with no object behind
-	// it. The store cannot delete those bytes and the CSP will not load them, so the
-	// admin says so and offers to clear it — rather than a migration having silently
-	// blanked somebody's catalog.
-	s, p := uploadShop(t)
-
-	if _, err := s.catalog.SetImage(t.Context(), p.ID, "https://someone-elses-site.example/cover.jpg", ""); err != nil {
-		t.Fatalf("SetImage: %v", err)
-	}
-	stored, err := s.catalog.Get(t.Context(), p.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if !stored.HasForeignImage() {
-		t.Fatal("a URL with no object is not reported as foreign")
-	}
-
-	// Matched on a phrase that does not straddle the template's line wrapping — the
-	// rendered HTML keeps the source's newlines, so "no longer supported" is split
-	// across two lines and would not be found.
-	_, page := get(t, s.srv, "/admin/products/"+p.ID+"/edit")
-	if !strings.Contains(page, "a URL pointing outside the store") {
-		t.Errorf("the edit page does not flag the foreign image: %s", page)
-	}
-
-	// Clearing it works and asks storage to delete nothing, since there is no object.
-	if res, body := post(t, s.srv, "/admin/products/"+p.ID+"/image/delete", url.Values{}); res.StatusCode != http.StatusSeeOther {
-		t.Fatalf("remove = %d %s", res.StatusCode, body)
-	}
-	cleared, err := s.catalog.Get(t.Context(), p.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if cleared.HasImage() {
-		t.Errorf("the foreign image was not cleared: %q", cleared.ImageURL)
-	}
-	if deleted := s.images.Deleted(); len(deleted) != 0 {
-		t.Errorf("storage was asked to delete something for a URL it never held: %v", deleted)
+		t.Errorf("the product has an image it was never given: key %q", stored.ImageKey)
 	}
 }
 
@@ -359,9 +308,9 @@ func TestProductImage_FormSaveDoesNotClobberAnUpload(t *testing.T) {
 	if stored.Title != "A Renamed Book" {
 		t.Errorf("the edit did not apply: Title = %q", stored.Title)
 	}
-	if stored.ImageURL != uploaded.ImageURL || stored.ImageKey != uploaded.ImageKey {
-		t.Errorf("saving the product form lost the image: %q %q, want %q %q",
-			stored.ImageURL, stored.ImageKey, uploaded.ImageURL, uploaded.ImageKey)
+	if stored.ImageKey != uploaded.ImageKey {
+		t.Errorf("saving the product form lost the image: key %q, want %q",
+			stored.ImageKey, uploaded.ImageKey)
 	}
 	if keys := s.images.Keys(); len(keys) != 1 {
 		t.Errorf("the object was disturbed: %v", keys)
@@ -456,10 +405,12 @@ func TestProductImage_StorefrontShowsTheUploadedImage(t *testing.T) {
 	// The storefront links straight at the bucket's public URL — the bytes never
 	// come through Go, which is the whole point of a public bucket.
 	_, page := get(t, s.srv, "/products/a-book")
-	if !strings.Contains(page, `src="`+stored.ImageURL+`"`) {
+	if !strings.Contains(page, `src="`+s.images.URL(stored.ImageKey)+`"`) {
 		t.Errorf("the product page does not show the uploaded image: %s", page)
 	}
-	if !strings.Contains(stored.ImageURL, "https://images.example/") {
-		t.Errorf("ImageURL = %q, want the public base", stored.ImageURL)
+	// Resolved against the configured backend's public base, which is what makes the
+	// same row work in development and in production.
+	if !strings.Contains(s.images.URL(stored.ImageKey), "https://images.example/") {
+		t.Errorf("resolved URL = %q, want the public base", s.images.URL(stored.ImageKey))
 	}
 }

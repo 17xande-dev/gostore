@@ -15,7 +15,15 @@
 </head>
 <body>
 <header>
-  <strong><a href="/products">{{.StoreName}}</a></strong>
+  {{/*
+    The mark is a bundled asset, so it needs no CSP allowance beyond 'self'. Drop
+    your own logo.svg into STATIC_DIR to replace it without a rebuild — the URL
+    carries a hash of the file, so the new one appears immediately.
+  */}}
+  <a href="/products">
+    <img src="{{asset "logo.svg"}}" alt="" width="24" height="24">
+    <strong>{{.StoreName}}</strong>
+  </a>
 </header>
 <main>
 {{end}}

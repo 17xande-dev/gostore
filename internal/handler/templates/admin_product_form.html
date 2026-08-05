@@ -128,34 +128,20 @@
 
 {{template "err" index .Errors "image"}}
 
-{{with .Product.ImageURL}}
-  <p><img src="{{.}}" alt="{{$.Product.Title}}" width="240"></p>
-  <p><small><code>{{.}}</code></small></p>
+{{if .Product.HasImage}}
+  <p><img src="{{image .Product.ImageKey}}" alt="{{.Product.Title}}" width="240"></p>
+  {{/* The key and where it currently resolves to, since both are worth seeing when
+       an image is not appearing. */}}
+  <p><small><code>{{.Product.ImageKey}}</code><br>{{image .Product.ImageKey}}</small></p>
 {{else}}
   <p>No image.</p>
-{{end}}
-
-{{/*
-  A row left from when pasting a URL was allowed. The store points at bytes it does
-  not hold and cannot delete, and the storefront's CSP no longer permits loading
-  them — so say so and offer to clear it, rather than a migration having silently
-  blanked somebody's catalog.
-*/}}
-{{if .Product.HasForeignImage}}
-<p><strong>This image is a URL pointing outside the store, which is no longer
-supported.</strong> It will not load on the storefront. Remove it and upload the
-image instead.</p>
-<form method="post" action="/admin/products/{{.Product.ID}}/image/delete">
-  {{template "csrf" .CSRFToken}}
-  <button type="submit">Remove this image</button>
-</form>
 {{end}}
 
 {{if .UploadsEnabled}}
   <form method="post" action="/admin/products/{{.Product.ID}}/image" enctype="multipart/form-data">
     {{template "csrf" .CSRFToken}}
     <p>
-      <label>{{if .Product.ImageURL}}Replace{{else}}Upload{{end}} image
+      <label>{{if .Product.HasImage}}Replace{{else}}Upload{{end}} image
         <input type="file" name="image" accept="{{.AcceptTypes}}" required>
       </label>
     </p>

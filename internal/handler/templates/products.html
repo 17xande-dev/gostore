@@ -19,7 +19,13 @@
 <ul>
   {{range .Products}}
   <li>
-    {{if .ImageURL}}<img src="{{.ImageURL}}" alt="{{.Title}}" width="120">{{end}}
+    {{/*
+      Every card gets an image, so a catalog of mixed products does not reflow into a
+      mess where some have pictures and some do not. The placeholder is a bundled
+      asset; the real one is the key resolved against whichever backend is running.
+    */}}
+    {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" width="120">
+    {{else}}<img src="{{asset "placeholder.svg"}}" alt="" width="120">{{end}}
     <a href="/products/{{.Slug}}" hx-boost="true">{{.Title}}</a>
     <span>
       {{if .OnePrice}}

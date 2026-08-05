@@ -27,8 +27,7 @@ func TestFormErrors(t *testing.T) {
 
 func TestProduct(t *testing.T) {
 	valid := catalog.Product{
-		Kind: "book", Slug: "a-book", Title: "A Book",
-		Description: "Fine.", ImageURL: "https://example.com/a.png",
+		Kind: "book", Slug: "a-book", Title: "A Book", Description: "Fine.",
 	}
 	if errs := Product(valid); errs.Any() {
 		t.Errorf("a valid product was rejected: %s", errs)
@@ -55,15 +54,14 @@ func TestProduct(t *testing.T) {
 		}
 	}
 
-	// The image is deliberately not validated here any more. It is not form input:
-	// an image arrives by upload and its URL is whatever storage says it is, so
-	// there is nothing a shop operator could type wrongly. Anything already in
-	// ImageURL passes, including a value no form could have produced.
-	for _, url := range []string{"/images/products/a/b.jpg", "https://images.example/a.jpg", "nonsense"} {
+	// The image is deliberately not validated here any more, and there is no longer
+	// even a URL to validate: a product stores only the storage key of something it
+	// uploaded, and the key is generated rather than typed.
+	for _, key := range []string{"products/a/b.jpg", "", "anything at all"} {
 		p := valid
-		p.ImageURL = url
+		p.ImageKey = key
 		if errs := Product(p); errs.Any() {
-			t.Errorf("ImageURL %q produced form errors %s", url, errs)
+			t.Errorf("ImageKey %q produced form errors %s", key, errs)
 		}
 	}
 }

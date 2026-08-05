@@ -12,6 +12,7 @@ import (
 	"strings"
 	texttemplate "text/template"
 
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/catalog"
 )
 
@@ -38,12 +39,15 @@ type Templates struct {
 //
 // Overrides are read at startup, so changing a file needs a restart but never a
 // rebuild.
-func ParseTemplates(overrideDir string) (*Templates, error) {
-	t, err := template.New("gostore").Funcs(funcs()).ParseFS(templatesFS, "templates/*.html")
+// images resolves a product's image key to the URL it is served at. It is the
+// storage backend, so a template can render an image without the row having
+// recorded where the bytes happen to live today.
+func ParseTemplates(overrideDir string, images blob.Storage) (*Templates, error) {
+	t, err := template.New("gostore").Funcs(funcs(images)).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("handler: parse embedded templates: %w", err)
 	}
-	text, err := texttemplate.New("gostore").Funcs(funcs()).ParseFS(templatesFS, "templates/*.txt")
+	text, err := texttemplate.New("gostore").Funcs(funcs(images)).ParseFS(templatesFS, "templates/*.txt")
 	if err != nil {
 		return nil, fmt.Errorf("handler: parse embedded text templates: %w", err)
 	}
@@ -82,13 +86,23 @@ func overlay(dir, pattern string, parse func([]string) error) error {
 	return nil
 }
 
-func funcs() template.FuncMap {
+func funcs(images blob.Storage) template.FuncMap {
 	return template.FuncMap{
 		// Amounts are cents everywhere in Go; the decimal point exists only in
 		// the rendered page.
 		"money": catalog.FormatPrice,
-		// asset resolves a vendored file to its content-addressed URL.
+		// asset resolves a bundled file to its content-addressed URL.
 		"asset": assetURL,
+		// image resolves a product's image key to where it is served from. A
+		// function rather than a field on the product, so it cannot be forgotten:
+		// there is nothing for a handler to populate and therefore nothing to leave
+		// unpopulated.
+		"image": func(key string) string {
+			if key == "" {
+				return ""
+			}
+			return images.URL(key)
+		},
 		// linebreaks renders multi-line text — an address, typed into a textarea —
 		// as HTML.
 		"linebreaks": linebreaks,

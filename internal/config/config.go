@@ -36,6 +36,12 @@ type Config struct {
 	// embedded defaults, so adopters can restyle without forking.
 	TemplateDir string
 
+	// StaticDir is TemplateDir's counterpart for assets: a file there shadows a
+	// bundled one of the same name, and a new name is served too. Replacing the logo
+	// is dropping a logo.svg into it — restyling without a way to supply an image
+	// would be half a feature.
+	StaticDir string
+
 	// Admin authentication. The password is stored only as an argon2id hash — a
 	// bcrypt one from an older deployment still verifies — so a leaked env file or
 	// a process listing does not hand over the credential, which matters more than
@@ -219,6 +225,7 @@ func Load() (Config, error) {
 		StoreName:         env("STORE_NAME", "gostore"),
 		Currency:          env("CURRENCY", "ZAR"),
 		TemplateDir:       os.Getenv("TEMPLATE_DIR"),
+		StaticDir:         strings.TrimSpace(os.Getenv("STATIC_DIR")),
 		LogLevel:          env("LOG_LEVEL", "info"),
 		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		SessionTTL:        24 * time.Hour,
@@ -452,11 +459,17 @@ func Load() (Config, error) {
 		}
 	}
 
-	if c.TemplateDir != "" {
-		if fi, err := os.Stat(c.TemplateDir); err != nil {
-			return Config{}, fmt.Errorf("config: TEMPLATE_DIR %q: %w", c.TemplateDir, err)
+	for _, d := range []struct{ key, path string }{
+		{"TEMPLATE_DIR", c.TemplateDir},
+		{"STATIC_DIR", c.StaticDir},
+	} {
+		if d.path == "" {
+			continue
+		}
+		if fi, err := os.Stat(d.path); err != nil {
+			return Config{}, fmt.Errorf("config: %s %q: %w", d.key, d.path, err)
 		} else if !fi.IsDir() {
-			return Config{}, fmt.Errorf("config: TEMPLATE_DIR %q is not a directory", c.TemplateDir)
+			return Config{}, fmt.Errorf("config: %s %q is not a directory", d.key, d.path)
 		}
 	}
 

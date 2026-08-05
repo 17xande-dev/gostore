@@ -186,9 +186,12 @@ func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 // stored. The caller deletes the object that was there before, if any, *after*
 // this returns: an orphaned object costs a few kilobytes, while an object deleted
 // out from under a live row is a broken image on the storefront.
-func (s *Store) SetImage(ctx context.Context, id, imageURL, imageKey string) (Product, error) {
+//
+// Only the key is given, because the URL is not a stored fact — it is the key
+// resolved against whichever backend is running.
+func (s *Store) SetImage(ctx context.Context, id, imageKey string) (Product, error) {
 	row, err := s.q.SetProductImage(ctx, gen.SetProductImageParams{
-		ID: id, ImageURL: imageURL, ImageKey: imageKey,
+		ID: id, ImageKey: imageKey,
 	})
 	if err != nil {
 		return Product{}, translate(fmt.Errorf("catalog: set product image: %w", err))
@@ -350,7 +353,6 @@ func product(r gen.Product) Product {
 		Slug:        r.Slug,
 		Title:       r.Title,
 		Description: r.Description,
-		ImageURL:    r.ImageURL,
 		Active:      r.Active,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,

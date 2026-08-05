@@ -99,8 +99,7 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	url, err := h.blob.Put(r.Context(), key, bytes.NewReader(body), int64(len(body)), contentType)
-	if err != nil {
+	if _, err := h.blob.Put(r.Context(), key, bytes.NewReader(body), int64(len(body)), contentType); err != nil {
 		if errors.Is(err, blob.ErrNotConfigured) {
 			h.imageProblem(w, r, p.ID, "Image uploads are not configured on this deployment. "+
 				"Set the BLOB_* variables, or paste an image URL instead.")
@@ -113,7 +112,7 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 	}
 
 	previous := p.ImageKey
-	if _, err := h.cat.SetImage(r.Context(), p.ID, url, key); err != nil {
+	if _, err := h.cat.SetImage(r.Context(), p.ID, key); err != nil {
 		// The object is stored but nothing references it. Logged as an orphan rather
 		// than deleted, because a delete here could just as easily fail and the
 		// operator's next attempt should not be racing this one.

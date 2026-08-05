@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/17xande-dev/gostore/internal/blob"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestParseTemplates_EmbeddedDefaultsRender(t *testing.T) {
-	tmpl, err := ParseTemplates("")
+	tmpl, err := ParseTemplates("", blob.NewFake())
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 		t.Fatalf("write override: %v", err)
 	}
 
-	tmpl, err := ParseTemplates(dir)
+	tmpl, err := ParseTemplates(dir, blob.NewFake())
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 }
 
 func TestRender_UnknownTemplateWritesNothing(t *testing.T) {
-	tmpl, err := ParseTemplates("")
+	tmpl, err := ParseTemplates("", blob.NewFake())
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}

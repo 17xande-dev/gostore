@@ -104,7 +104,10 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	store := catalog.NewStore(pool)
 	orderStore := orders.NewStore(pool)
 
-	tmpl, err := ParseTemplates("")
+	// One storage fake, shared: the templates resolve a product's image key through
+	// the same backend the upload handler wrote to, exactly as in production.
+	images := blob.NewFake()
+	tmpl, err := ParseTemplates("", images)
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
@@ -112,7 +115,6 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	sessions := testSessions(t)
 	gateway := payment.NewFake()
 	mail := email.NewFake()
-	images := blob.NewFake()
 	h := New(cfg, log, tmpl, store, cart.NewStore(pool), orderStore, gateway, mail, images, sessions)
 
 	mux := http.NewServeMux()

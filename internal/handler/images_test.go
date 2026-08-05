@@ -34,7 +34,7 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 	cfg.ImageDir = dir
 
 	pool := dbtest.Pool(t)
-	tmpl, err := ParseTemplates("")
+	tmpl, err := ParseTemplates("", storage)
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}

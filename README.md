@@ -77,6 +77,7 @@ list with defaults.
 | `CURRENCY` | no | `ZAR` | Currency code (PayFast requires `ZAR`) |
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
 | `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
+| `STATIC_DIR` | no | — | Directory of assets that override the bundled ones (logo, placeholder, CSS) |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
 | `SMTP_HOST` | no¹ | — | Mail relay. With no mail configured, receipts are logged and dropped |
@@ -332,13 +333,14 @@ so the bucket must be publicly readable at `BLOB_PUBLIC_BASE_URL` and a CDN in f
 does the work. With `IMAGE_DIR` the server serves them itself, from a same-origin path — which
 is why `img-src` can be `'self'` with no external origin allowed at all.
 
-`products.image_key` is the storage key, which is what deletion needs since a URL is not
-something storage can be asked to remove. It is set whenever `image_url` is.
+**`products.image_key` is the only thing stored** — the URL is computed when a page is
+rendered, by resolving the key against whichever backend is running. That is what makes the
+same row work on a development machine serving from a directory and in production serving
+from R2: **switching backends needs no data migration.** Storing the URL as well would bake
+one deployment's answer into every row.
 
-**Upgrading from a version that allowed pasted URLs:** rows with a URL and no key still
-exist, and the admin flags each one on its edit page with a button to clear it. Nothing is
-migrated automatically — silently blanking somebody's catalog is worse than telling them.
-Those images will not load on the storefront, because the CSP no longer permits it.
+A product with no image gets a bundled placeholder rather than a gap, so a catalog of mixed
+products keeps its shape while photographs are still being taken.
 
 Two consequences worth knowing:
 
@@ -675,22 +677,38 @@ change needs a restart but never a rebuild.
 Overriding is per *template*, not per page: a file defining `{{define "products_list"}}`
 replaces the catalog listing wherever it appears, including inside the default full page.
 
-### Static assets
+### Bundled assets
 
-htmx is vendored into the binary rather than loaded from a CDN, so the store works offline,
-the CSP stays `script-src 'self'`, and no third-party origin sits near the payment path.
-Asset URLs carry a hash of the file's contents (`/static/htmx.min.js?v=71ea67185bfa`) and are
-served `immutable`, so upgrading the file invalidates every cached copy by itself. See
-[`internal/handler/static/README.md`](internal/handler/static/README.md) for the provenance
-of the vendored bytes and how to verify a replacement.
+Four things ship inside the binary: htmx, `redirect.js`, a `logo.svg` and a
+`placeholder.svg`. A store with no configuration at all therefore has a mark in its header
+and a picture on every product card.
 
-`redirect.js` is ours rather than vendored: it submits the payment hand-over form on load,
-and it is a file for the same reason htmx is one — with no `'unsafe-inline'`, an inline script
-or an `onload` attribute would simply be blocked, leaving the shopper on a page waiting for
-something the browser refused to run.
+These are **not** product images. A product image is uploaded, keyed and deleted by the
+application; these are replaced by an operator. Keeping them apart means a sweep over
+uploaded objects can never consider a logo an orphan.
 
-Files in that directory are served from an **explicit list**, so leaving a note or a
-half-finished experiment there does not publish it.
+**Override any of them with `STATIC_DIR`**, which is to assets what `TEMPLATE_DIR` is to
+templates: a file there shadows a bundled one of the same name, and a new name is served
+too — so an overridden template can reference its own `hero.png`. Read at startup, so a
+change needs a restart and never a rebuild. Rebranding is dropping a `logo.svg` into a
+directory.
+
+The defaults are deliberately generic: the logo has no text, because the store's name comes
+from `STORE_NAME` and a name baked into a logo would be wrong for every adopter but one.
+
+Everything is served from this origin, which is why the CSP needs no allowance beyond
+`'self'` for any of it. htmx in particular is vendored rather than loaded from a CDN, so the
+store works offline and no third-party origin sits near the payment path. `redirect.js` is a
+file for the same reason: with no `'unsafe-inline'`, an inline script would simply be
+blocked, leaving the shopper on a page waiting for something the browser refused to run.
+
+Asset URLs carry a hash of the contents (`/static/logo.svg?v=fc1508f97297`) and are served
+`immutable`, so a replacement appears immediately rather than after a cache expires.
+
+**Only extensions in the content-type map are served** — images, CSS, JS and fonts. That is
+what keeps a note left in either directory from becoming a URL, and it applies to
+`STATIC_DIR` too, so an `.html` or a `.php` dropped there is not published. See
+[`internal/handler/static/README.md`](internal/handler/static/README.md).
 
 ## Dependencies
 

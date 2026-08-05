@@ -77,12 +77,6 @@ func run() error {
 		return nil
 	}
 
-	// Templates are parsed once at startup, so a broken override fails the boot
-	// rather than the first request that happens to hit it.
-	tmpl, err := handler.ParseTemplates(cfg.TemplateDir)
-	if err != nil {
-		return err
-	}
 	sessions, err := auth.NewSessions(cfg.SessionSecret, cfg.SessionSecretPrevious, cfg.SessionTTL)
 	if err != nil {
 		return err
@@ -96,7 +90,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Image storage is built before the templates because a template resolves a
+	// product's image key through it.
 	images, err := newBlobStorage(cfg, log)
+	if err != nil {
+		return err
+	}
+
+	// Assets and templates are both read once at startup, so a broken override
+	// fails the boot rather than the first request that happens to hit it.
+	handler.SetStaticDir(cfg.StaticDir)
+	if err := handler.CheckAssets(); err != nil {
+		return err
+	}
+	if cfg.StaticDir != "" {
+		log.Info("static assets may be overridden from disk", "dir", cfg.StaticDir)
+	}
+	tmpl, err := handler.ParseTemplates(cfg.TemplateDir, images)
 	if err != nil {
 		return err
 	}
