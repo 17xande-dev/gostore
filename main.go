@@ -38,20 +38,42 @@ func main() {
 }
 
 func run() error {
-	// Two operational escape hatches, so migrations don't have to be a side
-	// effect of starting the server: `-migrate` runs them as its own deploy
-	// step, `-migrate-status` answers "is this database up to date?".
+	// Operational escape hatches, so migrations don't have to be a side effect of
+	// starting the server: `-migrate` runs them as its own deploy step,
+	// `-migrate-status` answers "is this database up to date?", and
+	// `-check-config` validates the environment without touching anything.
 	migrateOnly := flag.Bool("migrate", false, "apply pending migrations and exit")
 	migrateStatus := flag.Bool("migrate-status", false, "print migration status and exit")
+	checkConfig := flag.Bool("check-config", false, "validate the full server configuration and exit")
 	flag.Parse()
 
-	cfg, err := config.Load()
+	// The migration modes load only DATABASE_URL. A schema change has no gateway
+	// and no session, so a migration job should not have to be trusted with the
+	// merchant key and the session secret to run one — see config.LoadTool.
+	//
+	// What that gives up is the accident that a broken payment config used to
+	// fail at the migration step, before the schema moved. -check-config is that
+	// same check, asked for on purpose: run it in the deploy alongside -migrate
+	// to fail before the database changes rather than after.
+	// -check-config wins over the migration modes, so that asking for the full
+	// check and a migration in one command cannot report "ok" having validated
+	// nothing but DATABASE_URL.
+	load := config.Load
+	if (*migrateOnly || *migrateStatus) && !*checkConfig {
+		load = config.LoadTool
+	}
+	cfg, err := load()
 	if err != nil {
 		return err
 	}
 
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
+
+	if *checkConfig {
+		fmt.Println("config: ok")
+		return nil
+	}
 
 	// Signals cancel this context, which unblocks the wait below and triggers
 	// a graceful shutdown.

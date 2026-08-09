@@ -6,11 +6,23 @@ TEST_DATABASE_URL ?= postgres://gostore:gostore@localhost:5432/gostore?sslmode=d
 # environment for anything that is not a local sandbox.
 ADMIN_PASSWORD_HASH ?= $$argon2id$$v=19$$m=65536,t=3,p=4$$yfEWKr5x66MgQhGsKGkGqQ$$pzrCItWG+8g7Gv9rpUaBuG2vnTquuRCC0KU+fafR9T4
 SESSION_SECRET ?= ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=
+# PayFast's own published sandbox credentials, matching compose.yaml, so that
+# `make run`, `make migrate` and `make seed` work on a clean checkout with no
+# .env at all. They are in PayFast's documentation and take no real money —
+# but PAYFAST_SANDBOX must stay true for that to remain the case.
+PAYFAST_MERCHANT_ID ?= 10000100
+PAYFAST_MERCHANT_KEY ?= 46f0cd694581a
+PAYFAST_PASSPHRASE ?= jt7NOE43FZPn
+PAYFAST_SANDBOX ?= true
 # Recipes using DEV_ENV are prefixed with @ so an overridden, real
 # ADMIN_PASSWORD_HASH is not echoed into a terminal or a CI log.
 DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 	ADMIN_PASSWORD_HASH='$(ADMIN_PASSWORD_HASH)' \
-	SESSION_SECRET="$(SESSION_SECRET)"
+	SESSION_SECRET="$(SESSION_SECRET)" \
+	PAYFAST_MERCHANT_ID="$(PAYFAST_MERCHANT_ID)" \
+	PAYFAST_MERCHANT_KEY="$(PAYFAST_MERCHANT_KEY)" \
+	PAYFAST_PASSPHRASE="$(PAYFAST_PASSPHRASE)" \
+	PAYFAST_SANDBOX="$(PAYFAST_SANDBOX)"
 
 SEED_FILE ?= testdata/products.json
 
@@ -22,7 +34,7 @@ SQLC_VERSION ?= v1.31.1
 SQLC ?= sqlc
 
 .PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
-	sqlc sqlc-check sqlc-install
+	check-config sqlc sqlc-check sqlc-install
 
 ## up: build and start the whole local stack
 up:
@@ -57,6 +69,13 @@ seed: migrate
 ## migrate-status: show which migrations have been applied
 migrate-status:
 	@$(DEV_ENV) go run . -migrate-status
+
+## check-config: validate the full server configuration without starting anything
+# The migration targets deliberately need only DATABASE_URL, so this is what
+# catches a missing payment credential or an unreadable password hash — run it
+# in a deploy before -migrate, to fail before the schema moves rather than after.
+check-config:
+	@$(DEV_ENV) go run . -check-config
 
 ## hashpw: read a password from the terminal and print ADMIN_PASSWORD_HASH + SESSION_SECRET
 # The password is never echoed and never becomes a command-line argument, so it

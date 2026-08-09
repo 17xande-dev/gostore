@@ -346,10 +346,8 @@ func Load() (Config, error) {
 		c.ShutdownTimeout = time.Duration(n) * time.Second
 	}
 
-	switch c.LogLevel {
-	case "debug", "info", "warn", "error":
-	default:
-		return Config{}, fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error; got %q", c.LogLevel)
+	if err := checkLogLevel(c.LogLevel); err != nil {
+		return Config{}, err
 	}
 
 	// Origins are compared literally against the browser's Origin header, so a
@@ -507,10 +505,16 @@ func decodeSecret(name, value string) ([]byte, error) {
 	return decoded, nil
 }
 
-// LoadTool loads what a database-only command-line tool needs, which is just
-// DATABASE_URL. Tools like cmd/seed serve no HTTP and hold no session, so
-// requiring the server's admin secrets before they will load a JSON file would
-// be an obstacle with nothing behind it.
+// LoadTool loads what a database-only operation needs, which is just
+// DATABASE_URL. cmd/seed and the server's own -migrate and -migrate-status
+// modes serve no HTTP and hold no session, so requiring the admin and payment
+// secrets before they will touch the schema would be an obstacle with nothing
+// behind it — and worse, it would mean handing a deploy pipeline's migration
+// step the live merchant key to run an ALTER TABLE.
+//
+// The tradeoff is that a deployment whose payment or session config is broken
+// no longer discovers it when migrations run. Run the binary with -check-config
+// for that, which is the same check made deliberate.
 func LoadTool() (Config, error) {
 	c := Config{
 		DatabaseURL: os.Getenv("DATABASE_URL"),
@@ -519,7 +523,19 @@ func LoadTool() (Config, error) {
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: required env vars not set: DATABASE_URL")
 	}
+	if err := checkLogLevel(c.LogLevel); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+func checkLogLevel(level string) error {
+	switch level {
+	case "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error; got %q", level)
+	}
 }
 
 // boolEnv reads a flag. Only the obvious spellings count as true, and anything

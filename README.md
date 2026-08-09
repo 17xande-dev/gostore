@@ -50,6 +50,7 @@ Other useful targets:
 | `make logs` | Follow the server logs |
 | `make migrate` | Apply pending migrations without starting the server |
 | `make migrate-status` | Show which migrations have been applied |
+| `make check-config` | Validate the full server configuration and exit |
 | `make sqlc` | Regenerate the stores' query code after editing SQL (`make sqlc-install` first) |
 
 ## Configuration
@@ -778,6 +779,21 @@ Migrations run on boot, before the server accepts traffic, guarded by a Postgres
 lock so several instances starting at once cannot race. Where you would rather migrate as
 its own deploy step, run the same image with `-migrate` first and start the server after
 it exits; `-migrate-status` prints what has been applied.
+
+`-migrate` and `-migrate-status` read `DATABASE_URL` and nothing else. A schema change has
+no payment gateway and no session, so a migration job — a CI step, an init container, a
+release command — should not have to be trusted with the live merchant key and the session
+secret in order to run an `ALTER TABLE`. Give that step the database URL alone.
+
+The cost of that is real and worth knowing: a deployment whose payment or admin config is
+broken no longer finds out when migrations run, but when the server starts, with the schema
+already moved. `-check-config` is that check made deliberate — it validates the whole
+environment, touches nothing, and exits. Run it *before* `-migrate` in a deploy and a
+missing `PAYFAST_MERCHANT_KEY` fails while the database is still untouched:
+
+```sh
+gostore -check-config && gostore -migrate && exec gostore
+```
 
 ## Development
 

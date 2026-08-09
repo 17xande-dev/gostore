@@ -393,3 +393,52 @@ func TestLoad_SessionTTL(t *testing.T) {
 		}
 	}
 }
+
+// LoadTool is what cmd/seed and the server's migration modes use. The point of
+// it is what it does *not* require: a migration job gets the database URL and
+// none of the secrets, so these assertions are the security property, not a
+// convenience.
+func TestLoadTool_NeedsOnlyDatabaseURL(t *testing.T) {
+	for _, key := range []string{
+		"ADMIN_PASSWORD_HASH", "SESSION_SECRET",
+		"PAYFAST_MERCHANT_ID", "PAYFAST_MERCHANT_KEY",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/gostore")
+
+	c, err := LoadTool()
+	if err != nil {
+		t.Fatalf("LoadTool with only DATABASE_URL: %v", err)
+	}
+	if c.DatabaseURL == "" {
+		t.Error("DatabaseURL is empty")
+	}
+	if c.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want the info default", c.LogLevel)
+	}
+}
+
+func TestLoadTool_RequiresDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	_, err := LoadTool()
+	if err == nil {
+		t.Fatal("DATABASE_URL unset: expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("error %q does not name DATABASE_URL", err)
+	}
+}
+
+// A bad LOG_LEVEL is rejected on both paths. It was once checked only in Load,
+// which meant a typo'd level was a startup failure for the server and silently
+// accepted by every tool.
+func TestLoadTool_RejectsBadLogLevel(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/gostore")
+	t.Setenv("LOG_LEVEL", "verbose")
+
+	if _, err := LoadTool(); err == nil {
+		t.Error("LOG_LEVEL=verbose was accepted")
+	}
+}
