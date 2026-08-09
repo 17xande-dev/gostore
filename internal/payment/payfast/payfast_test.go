@@ -2,6 +2,7 @@ package payfast
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -287,5 +288,47 @@ func TestPayFast_DefaultCIDRsParse(t *testing.T) {
 	g := testGateway(t, nil)
 	if len(g.allowed) != len(DefaultAllowedCIDRs) {
 		t.Fatalf("%d parsed prefixes, want %d", len(g.allowed), len(DefaultAllowedCIDRs))
+	}
+}
+
+// TestPayFast_URLEncodeMatchesPHPForEveryByte pins the encoding against PHP's
+// rule stated directly, rather than against whatever urlencode happens to do.
+//
+// It exists because urlencode delegates to url.QueryEscape and patches a single
+// character. That is only correct while the stdlib's idea of an unreserved
+// character stays where it is, and a change there would otherwise surface as a
+// rejected payment rather than a failed test.
+func TestPayFast_URLEncodeMatchesPHPForEveryByte(t *testing.T) {
+	// PHP: alphanumerics and -_. pass through, space becomes +, everything else
+	// becomes %XX in uppercase hex.
+	php := func(c byte) string {
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '_', c == '.':
+			return string(c)
+		case c == ' ':
+			return "+"
+		default:
+			return fmt.Sprintf("%%%02X", c)
+		}
+	}
+	for i := range 256 {
+		c := byte(i)
+		if got, want := urlencode(string([]byte{c})), php(c); got != want {
+			t.Errorf("urlencode(%q) = %q, want %q", string([]byte{c}), got, want)
+		}
+	}
+
+	// Bytes in company, since the escaping of one must not depend on the last.
+	// 0x7E next to a percent-escape is the pairing the tilde patch could get
+	// wrong: %7E must never be produced by rewriting an escape's own text.
+	for _, s := range []string{"~", "~~", "a~b", "%7E", "~%7E~", "ü~ü", " ~ "} {
+		var want strings.Builder
+		for i := 0; i < len(s); i++ {
+			want.WriteString(php(s[i]))
+		}
+		if got := urlencode(s); got != want.String() {
+			t.Errorf("urlencode(%q) = %q, want %q", s, got, want.String())
+		}
 	}
 }

@@ -35,6 +35,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -295,36 +296,25 @@ func signatureString(fields []payment.Field, passphrase string) string {
 	return b.String()
 }
 
-const upperhex = "0123456789ABCDEF"
-
 // urlencode is PHP's urlencode, because that is the function every PayFast
 // reference implementation uses and therefore the one the signature is defined
 // in terms of: alphanumerics and -_. pass through, a space becomes '+', and
 // everything else becomes %XX with uppercase hex.
 //
-// url.QueryEscape is nearly this and not quite: Go treats '~' as unreserved and
-// leaves it alone, PHP escapes it to %7E. A tilde in a URL or a name would then
-// produce a signature PayFast disagrees with, over one character, with no
-// diagnostic beyond "signature mismatch" — which is a good enough reason to
-// spell the encoding out here.
+// url.QueryEscape is that function in every respect but one: Go follows RFC 3986
+// and treats '~' as unreserved, PHP escapes it to %7E. So the stdlib does the
+// encoding and the one disagreement is patched afterwards, which is safe because
+// the only literal '~' that can appear in QueryEscape's output came from a
+// literal '~' in the input — everything else is already %XX, and '~' cannot
+// occur inside a percent-escape.
+//
+// Getting this wrong is worth one character of care in both directions. Outgoing,
+// a tilde in a name or a return URL produces a form PayFast rejects; incoming, it
+// produces ErrSignature on a real payment that has already been taken, which is
+// indistinguishable in the log from a forgery.
+// TestPayFast_URLEncodeMatchesPHPForEveryByte pins the behaviour byte by byte.
 func urlencode(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '-', c == '_', c == '.':
-			b.WriteByte(c)
-		case c == ' ':
-			b.WriteByte('+')
-		default:
-			b.WriteByte('%')
-			b.WriteByte(upperhex[c>>4])
-			b.WriteByte(upperhex[c&0x0f])
-		}
-	}
-	return b.String()
+	return strings.ReplaceAll(url.QueryEscape(s), "~", "%7E")
 }
 
 func truncate(s string, max int) string {
