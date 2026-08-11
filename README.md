@@ -265,7 +265,25 @@ bytes this store holds. Every other directive is closed to this origin, with no
   inline styles, because no CSP has ever applied to them.)
 - **`script-src 'self'`** — same rule for scripts. A theme's JavaScript is a `.js` file in
   `STATIC_DIR`, referenced with `{{asset "yours.js"}}`; an inline `<script>` is simply not
-  run.
+  run. This is also why the store uses no `hx-on:` attributes and no `js:` filters: htmx
+  compiles those with `new Function`, which needs `'unsafe-eval'` — a wider concession than
+  the one it looks like. htmx's own behaviour is driven from `.js` files instead.
+
+**If something inline is ever genuinely needed, the answer is a nonce, not
+`'unsafe-inline'`.** Recorded here as a decision rather than left to whoever meets the first
+library that injects a `<style>` tag: `'unsafe-inline'` cannot be scoped to the code that
+asked for it — it is one switch for the whole origin, and the browser cannot tell an
+intended inline block from an injected one, which is the entire threat the directive exists
+to stop. A per-response nonce keeps that distinction and still lets the store's own inline
+content run. The cost, and htmx's part in it, is written up in
+[`securityheaders.go`](internal/middleware/securityheaders.go).
+
+One consequence worth knowing before it puzzles you: **htmx injects a `<style>` block for
+its indicator classes** at load, and this policy blocks it — silently, and *open*, leaving
+an `hx-indicator` permanently visible rather than hidden. So the default theme turns that
+injection off with `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
+and ships the `.htmx-indicator` rules in `styles.css` instead, where a theme can restyle
+them. Keep both halves, or drop both.
 
 HSTS is sent only when `BASE_URL` is `https://`: browsers ignore it over plain HTTP, and
 sending it from a development server would pin a rule making the next plain-HTTP project

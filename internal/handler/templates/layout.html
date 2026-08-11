@@ -16,6 +16,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — {{.StoreName}}</title>
 {{/*
+  htmx injects a <style> block for the indicator classes as soon as it loads, and
+  style-src 'self' blocks it — silently, apart from a console warning, and it fails
+  open: the rule that hides an hx-indicator never applies, leaving a spinner
+  permanently visible. So the injection is off and styles.css carries those rules
+  instead. A meta tag is how htmx is configured without inline script.
+
+  Keep this if you override "head", and keep the .htmx-indicator rules if you
+  replace styles.css. The two halves go together.
+*/}}
+<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
+{{/*
   Both bundled, both served from this origin: no CDN, so the CSP stays 'self' for
   scripts and styles alike and no third-party server sits on the payment path.
 */}}

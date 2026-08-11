@@ -62,6 +62,44 @@ func SecurityHeaders(p Policy) Middleware {
 	// STATIC_DIR replaces it. No served template contains a style attribute, so the
 	// concession is gone. The remaining inline styles are in email bodies, which no
 	// CSP has ever applied to.
+	//
+	// # If something inline is ever genuinely needed, add a nonce — not 'unsafe-inline'
+	//
+	// A decision made once, so it is not remade under pressure by whoever hits the
+	// first library that injects a <style> or a <script>: the answer is a per-response
+	// nonce.
+	//
+	// 'unsafe-inline' cannot be scoped to the code that asked for it. It is one switch
+	// for the whole origin, and the browser cannot tell an intended inline block from
+	// an injected one — which is the entire threat it exists to stop. On script-src it
+	// would turn any future escaping slip into a live compromise of the admin session:
+	// customer-typed text reaches an authenticated page (the address in
+	// admin_order.html), html/template is what keeps it inert, and this directive is
+	// the backstop for the day something returns template.HTML without escaping first.
+	// A nonce keeps that backstop while still letting the store's own inline content
+	// run: fresh random value per response, in the header and on the tag, unguessable
+	// by an injection.
+	//
+	// What that would cost here, so the estimate is not rediscovered:
+	//
+	//   - The value must be minted per request and reach every render's data, which
+	//     means every overridable "head" template has to carry it. A theme that forgets
+	//     it fails the same silent way an inline block does today.
+	//   - htmx takes it as configuration: inlineStyleNonce for the indicator block it
+	//     injects, inlineScriptNonce for scripts arriving in swapped fragments — both
+	//     set through the htmx-config meta tag, interpolated per response.
+	//   - Prefer inlineStyleNonce alone. inlineScriptNonce tells htmx to stamp the
+	//     valid nonce onto *every* script in *any* fragment, which downgrades the
+	//     guarantee from "the server authorised this block" to "the server authorised
+	//     whatever it emitted" — the assumption an escaping bug breaks, and close to
+	//     'unsafe-inline' with extra steps.
+	//   - Nothing may cache an HTML response, or it serves a stale nonce. Nothing does
+	//     today; a page cache added later would have to reckon with this.
+	//
+	// Two things that look like they need it and do not: styling set through the CSSOM
+	// (element.style.x, sheet.insertRule) is not covered by CSP at all, and hx-on /
+	// js: filters need 'unsafe-eval' rather than 'unsafe-inline' — which is why the
+	// store's htmx-driven code lives in .js files under STATIC_DIR instead.
 	imgSrc := "'self'"
 	if len(p.ImgSources) > 0 {
 		imgSrc += " " + strings.Join(p.ImgSources, " ")

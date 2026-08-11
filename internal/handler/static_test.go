@@ -62,6 +62,28 @@ func TestAssets_BundledImagesAreServed(t *testing.T) {
 	}
 }
 
+// htmx injects a <style> block for the indicator classes at load, which style-src
+// 'self' blocks — silently, and open: the rule that hides an hx-indicator never
+// applies and a spinner stays visible. The injection is therefore turned off in the
+// page and the rules ship in the stylesheet. Neither half works alone, so both are
+// asserted here rather than trusted to survive an edit to one file.
+func TestTheme_HtmxIndicatorStylesReplaceTheInjectedBlock(t *testing.T) {
+	withStaticDir(t, "")
+	srv, _ := newStorefront(t, testConfig(), "")
+
+	_, page := get(t, srv, "/products")
+	if !strings.Contains(page, `"includeIndicatorStyles":false`) {
+		t.Error("the page does not disable htmx's injected indicator styles, which the CSP blocks")
+	}
+
+	_, css := get(t, srv, assetURL("styles.css"))
+	for _, rule := range []string{".htmx-indicator", ".htmx-request .htmx-indicator"} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("styles.css does not define %s, so an indicator would never be hidden", rule)
+		}
+	}
+}
+
 func TestAssets_UnlistedExtensionsAreNotServed(t *testing.T) {
 	withStaticDir(t, "")
 	srv, _ := newStorefront(t, testConfig(), "")
