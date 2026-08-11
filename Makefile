@@ -26,6 +26,10 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 
 SEED_FILE ?= testdata/products.json
 
+# `make run` serves ./theme and re-reads it on every request, so a theme edit
+# needs a page refresh rather than a restart. Never on in a deployment.
+THEME_RELOAD ?= true
+
 # sqlc generates the row structs and scan code for the stores. It is pinned here
 # rather than as a `go tool` directive in go.mod, so that go.mod keeps stating the
 # dependencies of the *binary* — sqlc adds about forty indirect modules and never
@@ -51,9 +55,13 @@ logs:
 	$(COMPOSE) logs -f server
 
 ## run: run the server on the host against the compose Postgres
+# Themed from ./theme with reloading on, matching the compose stack: edit a file
+# there and refresh, no restart. THEME_RELOAD=false for the read-once behaviour a
+# deployment has.
 run:
 	$(COMPOSE) up -d postgres
-	@$(DEV_ENV) go run .
+	@$(DEV_ENV) TEMPLATE_DIR=theme/templates STATIC_DIR=theme/static \
+		THEME_RELOAD="$(THEME_RELOAD)" go run .
 
 ## migrate: apply pending migrations without starting the server
 migrate:

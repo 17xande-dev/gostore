@@ -120,7 +120,9 @@ func run() error {
 	}
 
 	// Assets and templates are both read once at startup, so a broken override
-	// fails the boot rather than the first request that happens to hit it.
+	// fails the boot rather than the first request that happens to hit it. The
+	// overrides are still validated here when THEME_RELOAD is on — a theme that is
+	// broken before the first request should still fail the boot.
 	handler.SetStaticDir(cfg.StaticDir)
 	if err := handler.CheckAssets(); err != nil {
 		return err
@@ -131,6 +133,14 @@ func run() error {
 	tmpl, err := handler.ParseTemplates(cfg.TemplateDir, images)
 	if err != nil {
 		return err
+	}
+	if cfg.ThemeReload {
+		// Loud, because it is a per-request cost and a production deployment that
+		// has it on by accident should say so in its logs.
+		log.Warn("THEME_RELOAD is on: templates and assets are re-read on every request; development only",
+			"template_dir", cfg.TemplateDir, "static_dir", cfg.StaticDir)
+		handler.SetAssetReload(true)
+		tmpl.SetReload(true)
 	}
 	carts := cart.NewStore(pool)
 	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), carts,

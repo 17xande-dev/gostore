@@ -69,6 +69,102 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 	}
 }
 
+// The point of THEME_RELOAD: editing a template in the override directory shows on
+// the next refresh, without a restart.
+func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "admin_products.html")
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
+		t.Fatalf("write override: %v", err)
+	}
+
+	tmpl, err := ParseTemplates(dir, blob.NewFake())
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+	tmpl.SetReload(true)
+
+	if got := render(t, tmpl, "admin_products"); got != "FIRST" {
+		t.Fatalf("body = %q, want FIRST", got)
+	}
+
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}SECOND{{end}}`), 0o600); err != nil {
+		t.Fatalf("rewrite override: %v", err)
+	}
+	if got := render(t, tmpl, "admin_products"); got != "SECOND" {
+		t.Errorf("body = %q, want SECOND: the edit needed a restart to appear", got)
+	}
+}
+
+// Without it, the set is what was read at startup — which is what a deployment
+// wants, and what makes a broken override a boot failure rather than a 500.
+func TestParseTemplates_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "admin_products.html")
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
+		t.Fatalf("write override: %v", err)
+	}
+
+	tmpl, err := ParseTemplates(dir, blob.NewFake())
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}SECOND{{end}}`), 0o600); err != nil {
+		t.Fatalf("rewrite override: %v", err)
+	}
+	if got := render(t, tmpl, "admin_products"); got != "FIRST" {
+		t.Errorf("body = %q, want the set read at startup", got)
+	}
+}
+
+// A theme being edited is a theme that is broken half the time. A save mid-edit is
+// an error on that request — never a half-written page — and fixing the file is the
+// whole recovery.
+func TestSetReload_ABrokenEditIsAnErrorAndRecoversOnTheNextSave(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "admin_products.html")
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}GOOD{{end}}`), 0o600); err != nil {
+		t.Fatalf("write override: %v", err)
+	}
+
+	tmpl, err := ParseTemplates(dir, blob.NewFake())
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+	tmpl.SetReload(true)
+	if got := render(t, tmpl, "admin_products"); got != "GOOD" {
+		t.Fatalf("body = %q, want GOOD", got)
+	}
+
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}{{if}}`), 0o600); err != nil {
+		t.Fatalf("write broken override: %v", err)
+	}
+	w := httptest.NewRecorder()
+	if err := tmpl.Render(w, http.StatusOK, "admin_products", productsPage{}); err == nil {
+		t.Error("a template that does not parse rendered without an error")
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("body = %q, want nothing written", w.Body.String())
+	}
+
+	// Fixing the file is all it takes; nothing has to be restarted to recover.
+	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIXED{{end}}`), 0o600); err != nil {
+		t.Fatalf("write fixed override: %v", err)
+	}
+	if got := render(t, tmpl, "admin_products"); got != "FIXED" {
+		t.Errorf("body = %q, want FIXED", got)
+	}
+}
+
+func render(t *testing.T, tmpl *Templates, name string) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	if err := tmpl.Render(w, http.StatusOK, name, productsPage{}); err != nil {
+		t.Fatalf("render %s: %v", name, err)
+	}
+	return strings.TrimSpace(w.Body.String())
+}
+
 func TestRender_UnknownTemplateWritesNothing(t *testing.T) {
 	tmpl, err := ParseTemplates("", blob.NewFake())
 	if err != nil {

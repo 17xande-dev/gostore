@@ -28,7 +28,8 @@ import (
 // STATIC_DIR is to assets what TEMPLATE_DIR is to templates. A file there shadows a
 // bundled one of the same name, and a new name is served too — so rebranding is
 // dropping a logo.svg into a directory, not forking the project. Read at startup, so
-// a change needs a restart and never a rebuild.
+// a change needs a restart and never a rebuild — unless SetAssetReload is on, which
+// is what the development stack does so that a refresh is enough.
 //
 // Everything is served from this origin, which is why the CSP needs no allowance
 // beyond 'self' for any of it.
@@ -74,6 +75,11 @@ var assets = sync.OnceValues(loadAssets)
 // function with no place to thread configuration through.
 var staticDir string
 
+// reloadAssets re-reads the whole set on every lookup instead of once, so editing a
+// styles.css in STATIC_DIR and refreshing shows it. Development only: it is a read
+// of every asset per request. Set at startup, like staticDir.
+var reloadAssets bool
+
 // SetStaticDir names the override directory and discards anything already loaded.
 //
 // It must be called before the server starts serving — main does it while building
@@ -82,6 +88,22 @@ var staticDir string
 func SetStaticDir(dir string) {
 	staticDir = dir
 	assets = sync.OnceValues(loadAssets)
+}
+
+// SetAssetReload turns per-request reloading on. Call it before serving, with the
+// same caveat as SetStaticDir. See reloadAssets.
+func SetAssetReload(on bool) {
+	reloadAssets = on
+}
+
+// currentAssets is the set as of now: reloaded if that is on, otherwise the one
+// loaded at startup. loadAssets builds a fresh map every time and nothing mutates
+// one afterwards, so a concurrent reader is reading a map no writer can reach.
+func currentAssets() (map[string]staticAsset, error) {
+	if reloadAssets {
+		return loadAssets()
+	}
+	return assets()
 }
 
 func loadAssets() (map[string]staticAsset, error) {
@@ -153,7 +175,7 @@ func newAsset(name string, body []byte) (staticAsset, bool) {
 
 // assetURL is the template function behind {{asset "logo.svg"}}.
 func assetURL(name string) string {
-	set, err := assets()
+	set, err := currentAssets()
 	if err != nil {
 		// Loading failed at startup and was reported there; a template should not be
 		// the place this surfaces a second time.
@@ -171,13 +193,13 @@ func assetURL(name string) string {
 // CheckAssets reports a problem loading the asset set, so a bad STATIC_DIR is a
 // boot failure rather than a page full of broken links.
 func CheckAssets() error {
-	_, err := assets()
+	_, err := currentAssets()
 	return err
 }
 
 func (h *Handler) static(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/static/")
-	set, err := assets()
+	set, err := currentAssets()
 	if err != nil {
 		h.serverError(w, r, err)
 		return

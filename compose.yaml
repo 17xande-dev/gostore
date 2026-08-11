@@ -119,6 +119,22 @@ services:
       BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-gostore123}
       BLOB_USE_TLS: ${BLOB_USE_TLS:-false}
       BLOB_PUBLIC_BASE_URL: ${BLOB_PUBLIC_BASE_URL:-http://localhost:9000/gostore-images}
+      # Theming. The paths are the container's and so are deliberately not
+      # interpolated, for the same reason DATABASE_URL is not: a local .env
+      # pointing TEMPLATE_DIR at a host-relative ./theme/templates for `make run`
+      # must not become a path that does not exist in here.
+      #
+      # Both directories are empty on a clean checkout, so this changes nothing
+      # until a file is put in one. With THEME_RELOAD the server re-reads them on
+      # every request, which is what makes editing a template or a stylesheet and
+      # refreshing the page enough — no restart, no rebuild. Development only: set
+      # THEME_RELOAD=false to get production's read-once behaviour back.
+      TEMPLATE_DIR: /theme/templates
+      STATIC_DIR: /theme/static
+      THEME_RELOAD: ${THEME_RELOAD:-true}
+    volumes:
+      # Read-only: the store renders a theme, it never writes one.
+      - ./theme:/theme:ro
     ports:
       - "8080:8080"
     depends_on:

@@ -18,6 +18,15 @@ func withStaticDir(t *testing.T, dir string) {
 	t.Cleanup(func() { SetStaticDir(previous) })
 }
 
+// Reloading is likewise a process-wide flag set once at startup, so a test that
+// wants it has to put it back.
+func withAssetReload(t *testing.T, on bool) {
+	t.Helper()
+	previous := reloadAssets
+	SetAssetReload(on)
+	t.Cleanup(func() { SetAssetReload(previous) })
+}
+
 func TestAssets_BundledImagesAreServed(t *testing.T) {
 	withStaticDir(t, "")
 	srv, _ := newStorefront(t, testConfig(), "")
@@ -100,6 +109,61 @@ func TestAssets_StaticDirShadowsABundledFile(t *testing.T) {
 	_, page := get(t, srv, "/products")
 	if !strings.Contains(page, overriddenURL) {
 		t.Errorf("the page does not reference the overridden logo: %s", page)
+	}
+}
+
+// THEME_RELOAD's asset half: editing a stylesheet in STATIC_DIR and refreshing is
+// enough. The URL is content-addressed, so the refreshed page asks for a URL no
+// cache has, which is what makes the edit visible rather than merely served.
+func TestAssets_ReloadPicksUpAnEdit(t *testing.T) {
+	dir := t.TempDir()
+	css := filepath.Join(dir, "styles.css")
+	if err := os.WriteFile(css, []byte("body{color:red}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	withStaticDir(t, dir)
+	withAssetReload(t, true)
+	srv, _ := newStorefront(t, testConfig(), "")
+
+	first := assetURL("styles.css")
+	if err := os.WriteFile(css, []byte("body{color:blue}"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	second := assetURL("styles.css")
+	if second == first {
+		t.Fatal("the edited stylesheet has the URL of the old one, so the browser would keep the cached copy")
+	}
+	res, body := get(t, srv, second)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d", second, res.StatusCode)
+	}
+	if !strings.Contains(body, "blue") {
+		t.Errorf("served the stale stylesheet: %s", body)
+	}
+	// And the page points at the new one, so a refresh is the whole operation.
+	if _, page := get(t, srv, "/products"); !strings.Contains(page, second) {
+		t.Error("the page still references the stylesheet from before the edit")
+	}
+}
+
+func TestAssets_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
+	// A deployment reads the set once. Anything else would be a disk read per
+	// request for a directory nobody is editing.
+	dir := t.TempDir()
+	css := filepath.Join(dir, "styles.css")
+	if err := os.WriteFile(css, []byte("body{color:red}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	withStaticDir(t, dir)
+	withAssetReload(t, false)
+
+	first := assetURL("styles.css")
+	if err := os.WriteFile(css, []byte("body{color:blue}"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if got := assetURL("styles.css"); got != first {
+		t.Errorf("assetURL = %q, want the URL of the set read at startup (%q)", got, first)
 	}
 }
 

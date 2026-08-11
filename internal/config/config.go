@@ -42,6 +42,14 @@ type Config struct {
 	// would be half a feature.
 	StaticDir string
 
+	// ThemeReload re-reads TemplateDir and StaticDir on every request instead of
+	// once at startup, so editing a theme file and refreshing the page is enough to
+	// see it. It is for writing a theme and nothing else: it costs a parse of every
+	// template and a read of every asset per request, and it turns a typo in a
+	// template into a 500 at request time rather than a boot failure. Off unless
+	// THEME_RELOAD says otherwise; the compose stack sets it.
+	ThemeReload bool
+
 	// Admin authentication. The password is stored only as an argon2id hash — a
 	// bcrypt one from an older deployment still verifies — so a leaked env file or
 	// a process listing does not hand over the credential, which matters more than
@@ -245,6 +253,7 @@ func Load() (Config, error) {
 		Currency:          env("CURRENCY", "ZAR"),
 		TemplateDir:       os.Getenv("TEMPLATE_DIR"),
 		StaticDir:         strings.TrimSpace(os.Getenv("STATIC_DIR")),
+		ThemeReload:       boolEnv("THEME_RELOAD", false),
 		LogLevel:          env("LOG_LEVEL", "info"),
 		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		SessionTTL:        24 * time.Hour,

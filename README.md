@@ -35,7 +35,9 @@ open http://localhost:8080/admin      # sign in with the development password: g
 
 `make up` starts Postgres, [mailpit](http://localhost:8025) (captures outgoing email),
 [MinIO](http://localhost:9001) (S3-compatible object storage) and the server. Migrations
-are applied automatically on boot.
+are applied automatically on boot. It also mounts [`theme/`](theme) into the server with
+reloading on, so a stylesheet or template dropped in there takes effect on the next page
+refresh — see [Theming](#theming).
 
 Other useful targets:
 
@@ -79,6 +81,7 @@ list with defaults.
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
 | `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
 | `STATIC_DIR` | no | — | Directory of assets that override the bundled ones (logo, placeholder, CSS) |
+| `THEME_RELOAD` | no | `false` | Re-read those two directories on every request, so a theme edit needs a refresh and not a restart. Development only |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
 | `SMTP_HOST` | no¹ | — | Mail relay. With no mail configured, receipts are logged and dropped |
@@ -251,14 +254,18 @@ Strict-Transport-Security: max-age=63072000; includeSubDomains   (https deployme
 ```
 
 `img-src` is `'self'` plus the bucket and nothing else, because a product image is always
-bytes this store holds. **One** directive is looser than the rest on purpose, and recording
-why matters more than tightening it would:
+bytes this store holds. Every other directive is closed to this origin, with no
+`'unsafe-inline'` anywhere — which is worth knowing before writing a theme:
 
-- **`style-src 'unsafe-inline'`** — the point of `TEMPLATE_DIR` is that adopters restyle
-  without forking, and there is no mechanism for them to add a stylesheet to the binary.
-  Dropping this would leave restyling with no legal way to apply CSS at all. The risk it
-  carries, CSS-based exfiltration, needs markup injection first — which is what
-  `html/template`'s escaping prevents.
+- **`style-src 'self'`** — it used to carry `'unsafe-inline'`, because restyling through
+  `TEMPLATE_DIR` had no other legal way to apply CSS: there was no stylesheet and no way for
+  an adopter to add one. Both exist now — a bundled `styles.css` and `STATIC_DIR` to replace
+  it — so the concession is gone. **An overriding template cannot use `style` attributes or
+  `<style>` blocks**; put the CSS in a stylesheet in `STATIC_DIR`. (Email bodies still use
+  inline styles, because no CSP has ever applied to them.)
+- **`script-src 'self'`** — same rule for scripts. A theme's JavaScript is a `.js` file in
+  `STATIC_DIR`, referenced with `{{asset "yours.js"}}`; an inline `<script>` is simply not
+  run.
 
 HSTS is sent only when `BASE_URL` is `https://`: browsers ignore it over plain HTTP, and
 sending it from a development server would pin a rule making the next plain-HTTP project
@@ -670,13 +677,120 @@ exactly where it would bite.
 
 ### Theming
 
-The default templates are plain, unstyled and meant to be replaced. Set `TEMPLATE_DIR` to
-a directory containing `*.html` files; any file whose name matches an embedded template
-replaces it, and the rest fall back to the defaults. Overrides are read at startup, so a
-change needs a restart but never a rebuild.
+A theme is two directories: templates that override the embedded ones by name, and assets
+that override the bundled ones by name. Nothing is forked, nothing is rebuilt, and anything
+you do not override keeps coming from the binary.
 
-Overriding is per *template*, not per page: a file defining `{{define "products_list"}}`
-replaces the catalog listing wherever it appears, including inside the default full page.
+| | Points at | Overrides |
+|---|---|---|
+| `TEMPLATE_DIR` | a directory of `*.html` and `*.txt` files | templates, by the name they `{{define}}` |
+| `STATIC_DIR` | a directory of assets | bundled files, by filename |
+
+`make up` and `make run` already set both, at [`theme/templates`](theme) and
+[`theme/static`](theme), with **`THEME_RELOAD=true`** — so writing a theme is editing a file
+and refreshing the page. Both directories are empty on a clean checkout, which is why the
+store looks the same until you put something in one.
+
+#### Writing one
+
+Start from a default rather than from nothing — the defaults are meant to be read:
+
+```sh
+cp internal/handler/static/styles.css theme/static/styles.css     # restyle
+cp internal/handler/templates/products.html theme/templates/      # re-mark-up the catalog
+```
+
+Then edit and refresh. Deleting your copy puts the default back, also without a restart.
+
+Most themes never need a template at all. **The CSS is the intended level to work at**:
+every colour, size and spacing value in the default theme is a custom property in one
+`:root` block at the top of `styles.css`, and no colour literal appears anywhere below it.
+Rebranding is editing a dozen values.
+
+```css
+/* theme/static/styles.css — the whole theme, for many stores */
+:root {
+  --paper: #fffdf8;  --paper-sunk: #f4efe4;
+  --ink: #241f18;    --ink-soft: #5c5348;  --ink-faint: #8d8375;
+  --rule: #e2d9c8;
+  --accent: #7a2e1f; --accent-ink: #fffdf8;  /* buttons, links, prices */
+  --warn: #8a2f1d;
+  --font: "Iowan Old Style", Georgia, serif;
+  --radius: 0;       --page: 1000px;         /* square corners, narrower column */
+}
+```
+
+The full set is `--paper`, `--paper-sunk`, `--ink`, `--ink-soft`, `--ink-faint`, `--rule`,
+`--accent`, `--accent-ink`, `--warn`; `--font`, `--font-mono`, `--text`, `--text-small`,
+`--text-large`, `--title`, `--title-page`; `--gap-xs` through `--gap-xl`; `--radius`,
+`--radius-lg`, `--measure`, `--page`. Overriding just these in a file that then `@import`s
+nothing means you are also replacing the rest of the stylesheet — so either copy the whole
+default and edit its `:root`, or write your own from scratch. There is no cascade between
+the bundled file and yours: same name, one wins.
+
+**No web fonts in the default**, and adding one is not just a CSS edit: `style-src` is
+`'self'` and fonts fall to `default-src 'self'`, so a font from another origin is blocked by
+the CSP — silently, in the browser's console. Self-host the
+`.woff2` in `STATIC_DIR` — that is one of the reasons new names are served — and reference
+it from your stylesheet with a `/static/...` URL.
+
+#### Overriding templates
+
+Overriding is per *template name*, not per file or per page. A file defining
+`{{define "products_list"}}` replaces the catalog listing everywhere it appears, including
+inside the default full page and in the htmx fragment responses — which is what keeps a
+themed store consistent between a full page load and a swap.
+
+The names, and which file they live in:
+
+| File | Defines | Is |
+|---|---|---|
+| `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
+| | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
+| `products.html` | `products`, `products_list` | The catalog page, and just the grid inside it |
+| `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
+| `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
+| `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
+| `admin_*.html` | `admin_login`, `admin_products`, `admin_product_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
+| `email_order_paid.{html,txt}`, `email_order_notify.txt` | same names, minus the extension for the HTML one | See [Email templates](#email-templates) |
+
+Three things to know before writing one:
+
+- **Class names are the contract** between the templates and the stylesheet. They describe
+  what a thing is — `.product-card`, `.site-header`, `.price`, `.field` — so that overriding
+  one side and not the other keeps working. Change the markup and keep the names, or change
+  both together.
+- **Every form needs `{{template "csrf" .CSRFToken}}`**, or it gets a `403`. See
+  [CSRF](#csrf).
+- **Templates get exactly the data the handler passes.** Every page embeds `.Title`,
+  `.StoreName`, `.Currency` and `.CSRFToken`, plus its own — `.Products`, `.Product`,
+  `.Cart`, `.Order`. The functions available are `money` (cents → a displayed amount),
+  `asset` (a bundled or overridden file → its hashed URL), `image` (a product's image key →
+  where it is served from) and `linebreaks`. A template naming a field that does not exist
+  fails the render, which with reloading on is a `500` on that page and, without it, a
+  refused boot.
+
+#### Reloading, and not reloading
+
+`THEME_RELOAD=true` re-reads both directories on **every request**. It is for writing a
+theme and for nothing else, and a deployment must leave it off:
+
+- It reparses every template and re-reads every asset per request.
+- It moves a *later* mistake — a file saved half-written while the server is up — from
+  impossible to a `500` on whichever page uses it. A theme that is already broken at startup
+  still fails the boot either way: both directories are validated once before anything
+  serves, and a template that does not parse or a `STATIC_DIR` that cannot be read
+  **refuses to start**. That is the behaviour you want in front of customers, where the
+  alternative is finding out from the first shopper.
+
+Either way the theme is read from disk at runtime, so shipping a change is replacing files
+and restarting — never a rebuild. The server logs a warning at startup whenever reloading is
+on, so a deployment that has it by accident says so.
+
+One thing does not need reloading to appear: **asset URLs carry a hash of the file's
+contents** (`/static/styles.css?v=fc1508f97297`), so a replaced stylesheet is a different
+URL and no cache can serve the old one. That is what makes a refresh enough rather than a
+hard reload.
 
 ### Bundled assets
 
@@ -691,7 +805,8 @@ uploaded objects can never consider a logo an orphan.
 **Override any of them with `STATIC_DIR`**, which is to assets what `TEMPLATE_DIR` is to
 templates: a file there shadows a bundled one of the same name, and a new name is served
 too — so an overridden template can reference its own `hero.png`. Read at startup, so a
-change needs a restart and never a rebuild. Rebranding is dropping a `logo.svg` into a
+change needs a restart and never a rebuild — or no restart either, under
+[`THEME_RELOAD`](#reloading-and-not-reloading). Rebranding is dropping a `logo.svg` into a
 directory.
 
 The defaults are deliberately generic: the logo has no text, because the store's name comes

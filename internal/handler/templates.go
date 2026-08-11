@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	texttemplate "text/template"
 
 	"github.com/17xande-dev/gostore/internal/blob"
@@ -28,8 +29,16 @@ var templatesFS embed.FS
 // text/template, which does not — running a receipt through the HTML escaper
 // would put `&amp;` in front of a customer.
 type Templates struct {
+	// mu guards the two sets, which reload replaces on the fly.
+	mu   sync.RWMutex
 	t    *template.Template
 	text *texttemplate.Template
+
+	// What a reload needs to parse the set again. Kept here rather than passed in,
+	// because a render is the only thing that triggers one and it has neither.
+	overrideDir string
+	images      blob.Storage
+	reload      bool
 }
 
 // ParseTemplates parses the embedded defaults and then, when overrideDir is
@@ -38,35 +47,76 @@ type Templates struct {
 // store by dropping files into a directory instead of forking the project.
 //
 // Overrides are read at startup, so changing a file needs a restart but never a
-// rebuild.
+// rebuild — unless SetReload has been called, which is what the development
+// stack does so that a refresh is enough.
+//
 // images resolves a product's image key to the URL it is served at. It is the
 // storage backend, so a template can render an image without the row having
 // recorded where the bytes happen to live today.
 func ParseTemplates(overrideDir string, images blob.Storage) (*Templates, error) {
-	t, err := template.New("gostore").Funcs(funcs(images)).ParseFS(templatesFS, "templates/*.html")
-	if err != nil {
-		return nil, fmt.Errorf("handler: parse embedded templates: %w", err)
+	tmpl := &Templates{overrideDir: overrideDir, images: images}
+	if err := tmpl.parse(); err != nil {
+		return nil, err
 	}
-	text, err := texttemplate.New("gostore").Funcs(funcs(images)).ParseFS(templatesFS, "templates/*.txt")
+	return tmpl, nil
+}
+
+// SetReload makes every render re-read the override directory first, so editing a
+// template and refreshing the page shows the change without a restart.
+//
+// Development only, and not because of taste: it reparses every template on every
+// request, and it moves a syntax error in an override from a boot failure to a 500
+// on whichever page happens to use it. Call it before serving; the flag is read
+// without synchronisation, unlike the template set it governs.
+func (t *Templates) SetReload(on bool) { t.reload = on }
+
+// parse builds both sets from the embedded defaults with the override directory
+// layered on top, and installs them. It replaces the sets only on success, so a
+// reload that hits a half-saved override leaves the last good ones in place and
+// fails that request rather than emptying the template set.
+func (t *Templates) parse() error {
+	html, err := template.New("gostore").Funcs(funcs(t.images)).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
-		return nil, fmt.Errorf("handler: parse embedded text templates: %w", err)
+		return fmt.Errorf("handler: parse embedded templates: %w", err)
+	}
+	text, err := texttemplate.New("gostore").Funcs(funcs(t.images)).ParseFS(templatesFS, "templates/*.txt")
+	if err != nil {
+		return fmt.Errorf("handler: parse embedded text templates: %w", err)
 	}
 
-	if overrideDir != "" {
-		if err := overlay(overrideDir, "*.html", func(files []string) (err error) {
-			t, err = t.ParseFiles(files...)
+	if t.overrideDir != "" {
+		if err := overlay(t.overrideDir, "*.html", func(files []string) (err error) {
+			html, err = html.ParseFiles(files...)
 			return err
 		}); err != nil {
-			return nil, err
+			return err
 		}
-		if err := overlay(overrideDir, "*.txt", func(files []string) (err error) {
+		if err := overlay(t.overrideDir, "*.txt", func(files []string) (err error) {
 			text, err = text.ParseFiles(files...)
 			return err
 		}); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return &Templates{t: t, text: text}, nil
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.t, t.text = html, text
+	return nil
+}
+
+// current returns the two sets, reparsing them first when reloading is on. Both
+// are returned together because a reload replaces both, and a caller holding one
+// from before it and one from after would be reading two different themes.
+func (t *Templates) current() (*template.Template, *texttemplate.Template, error) {
+	if t.reload {
+		if err := t.parse(); err != nil {
+			return nil, nil, err
+		}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.t, t.text, nil
 }
 
 // overlay finds override files matching a pattern and hands them to parse. A
@@ -124,21 +174,29 @@ func linebreaks(s string) template.HTML {
 // template error becomes a 500 instead of a half-written page that already
 // claimed 200.
 func (t *Templates) Render(w http.ResponseWriter, status int, name string, data any) error {
+	html, _, err := t.current()
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
-	if err := t.t.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := html.ExecuteTemplate(&buf, name, data); err != nil {
 		return fmt.Errorf("handler: render %s: %w", name, err)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, err := buf.WriteTo(w)
+	_, err = buf.WriteTo(w)
 	return err
 }
 
 // String executes one named HTML template and returns it, for an email body
 // rather than a response.
 func (t *Templates) String(name string, data any) (string, error) {
+	html, _, err := t.current()
+	if err != nil {
+		return "", err
+	}
 	var buf bytes.Buffer
-	if err := t.t.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := html.ExecuteTemplate(&buf, name, data); err != nil {
 		return "", fmt.Errorf("handler: render %s: %w", name, err)
 	}
 	return buf.String(), nil
@@ -146,8 +204,12 @@ func (t *Templates) String(name string, data any) (string, error) {
 
 // Text executes one named text template — the plain-text half of an email.
 func (t *Templates) Text(name string, data any) (string, error) {
+	_, text, err := t.current()
+	if err != nil {
+		return "", err
+	}
 	var buf bytes.Buffer
-	if err := t.text.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := text.ExecuteTemplate(&buf, name, data); err != nil {
 		return "", fmt.Errorf("handler: render text %s: %w", name, err)
 	}
 	return buf.String(), nil
