@@ -1021,6 +1021,9 @@ missing `PAYFAST_MERCHANT_KEY` fails while the database is still untouched:
 gostore -check-config && gostore -migrate && exec gostore
 ```
 
+Terraform for a Google Cloud deployment (Cloud Run, private-IP Cloud SQL, Secret
+Manager, Artifact Registry) lives in [`infra/terraform`](infra/terraform/README.md).
+
 ## Development
 
 ```sh

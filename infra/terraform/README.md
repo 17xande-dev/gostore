@@ -1,0 +1,76 @@
+# Infrastructure (Google Cloud)
+
+Terraform for the production deployment: Cloud Run, a private-IP Cloud SQL
+Postgres instance, Secret Manager, and Artifact Registry. Every resource here
+is provider-specific to `google` — see "Portability" below.
+
+## What this creates
+
+- **`network.tf`** — a custom-mode VPC, a per-region subnet for Cloud Run's
+  Direct VPC egress, and the one-time private-services peering that lets a
+  private-IP Cloud SQL instance live inside the VPC.
+- **`sql.tf`** — the Cloud SQL instance (private IP only, `ssl_mode =
+  ENCRYPTED_ONLY`), the `gostore` database, and the `gostore` application
+  user. Two passwords are generated and kept separate on purpose: the
+  instance's root/superuser password (provisioning only, never read by the
+  app) and the app user's password (what `DATABASE_URL` actually uses).
+  `prevent_destroy` is set — an accidental `terraform destroy` must not be
+  able to take out the database.
+- **`secrets.tf`** — `DATABASE_URL` is assembled from the values above and
+  written to Secret Manager automatically. `SESSION_SECRET`,
+  `ADMIN_PASSWORD_HASH`, the PayFast credentials, and `SMTP_PASSWORD` get
+  empty secret *containers* only — Terraform owns the infrastructure, not
+  values that come from a human decision (`make hashpw`, PayFast's
+  dashboard). Add versions to those by hand after `apply`:
+  ```sh
+  gcloud secrets versions add gostore-session-secret --data-file=-
+  ```
+- **`run.tf`** — a dedicated Cloud Run runtime service account (not the
+  project's default Compute Engine service account — see "Why a dedicated
+  service account" below), the Cloud Run service itself wired to the VPC
+  subnet with `PRIVATE_RANGES_ONLY` egress, and public invoker access.
+- **`registry.tf`** — the Artifact Registry Docker repository the image is
+  pushed to before `apply` (Terraform deploys whatever `container_image`
+  points at; it does not build or push it).
+
+## Why a dedicated service account
+
+The Cloud Run quickstart grants roles directly to the project's default
+Compute Engine service account. That account is shared by every Compute
+Engine VM, GKE node, or other Cloud Run service in the project that doesn't
+specify its own — granting it `cloudsql.client` widens what *any* of those
+can reach, not just this service, and it's harder to audit later since the
+binding doesn't say which workload needed it. `run.tf` instead creates
+`gostore-run`, scoped to exactly `roles/cloudsql.client` and
+`secretmanager.secretAccessor` on the specific secrets this service reads.
+
+Also skipped: the quickstart's `roles/storage.objectViewer` grant. gostore's
+blob storage (`internal/blob`, on minio-go) authenticates with HMAC
+access-key/secret-key pairs (`BLOB_ACCESS_KEY_ID`/`BLOB_SECRET_ACCESS_KEY`),
+not the service account's own IAM identity — that role would be unused.
+
+## Usage
+
+```sh
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # fill in project_id, container_image, etc.
+terraform init
+terraform plan
+terraform apply
+```
+
+State is local by default (`terraform.tfstate`), gitignored — it contains
+both generated passwords in plaintext. Fine solo; move to a GCS backend
+before anyone else touches this.
+
+## Portability
+
+Not portable to another cloud without a rewrite. Terraform the tool is
+provider-agnostic, but every resource block here (`google_sql_database_instance`,
+`google_compute_network`, `google_cloud_run_v2_service`,
+`google_artifact_registry_repository`, `google_secret_manager_secret`) is
+part of the `google` provider and has no equivalent on another provider's
+schema. Moving to AWS or Azure means writing new resource blocks against
+that provider (e.g. `aws_db_instance`, `aws_ecs_service` or an Azure
+equivalent) — variables and workflow (`init`/`plan`/`apply`) are the only
+parts that carry over.
