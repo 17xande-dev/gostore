@@ -7,8 +7,9 @@ Stdlib-first, with a deliberately tiny dependency surface.
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
 > storefront, the cart, checkout against PayFast, order emails, the admin's order views,
-> product image uploads and the hardening pass all work. What remains is the publishing
-> checklist — see the build order below.
+> product image uploads and the hardening pass all work. What remains is categories, then
+> catalog search with filtering and pagination, then the publishing checklist — see the
+> build order below.
 >
 > The compose stack ships a **published development password** (`gostore`) and PayFast's
 > **published sandbox credentials**, so `make up` gives you a working admin and a working
@@ -216,6 +217,14 @@ Idle buckets are evicted on a lazy sweep during an ordinary request, so there is
 goroutine to own and shut down for a map that is usually tiny, and the map cannot grow
 without bound as an attacker cycles addresses.
 
+**Catalog search is deliberately not limited**, and it is worth being explicit since it is the
+one read that costs more than a primary-key lookup: every surface above is a `POST`, and
+`GET /products` is none of them. A search is a bounded index scan over a small table, it holds
+no lock and writes nothing, and the page it returns is cacheable — so the limiter would mostly
+be throttling a crawler doing something harmless. That reasoning depends on the catalog staying
+small; a store whose search starts showing up in slow-query logs should give `/products` its
+own bucket, which is one line where the route is registered.
+
 ### Password hashing
 
 argon2id, via `x/crypto/argon2` — no new dependency, since `x/crypto` was already here for
@@ -265,25 +274,7 @@ bytes this store holds. Every other directive is closed to this origin, with no
   inline styles, because no CSP has ever applied to them.)
 - **`script-src 'self'`** — same rule for scripts. A theme's JavaScript is a `.js` file in
   `STATIC_DIR`, referenced with `{{asset "yours.js"}}`; an inline `<script>` is simply not
-  run. This is also why the store uses no `hx-on:` attributes and no `js:` filters: htmx
-  compiles those with `new Function`, which needs `'unsafe-eval'` — a wider concession than
-  the one it looks like. htmx's own behaviour is driven from `.js` files instead.
-
-**If something inline is ever genuinely needed, the answer is a nonce, not
-`'unsafe-inline'`.** Recorded here as a decision rather than left to whoever meets the first
-library that injects a `<style>` tag: `'unsafe-inline'` cannot be scoped to the code that
-asked for it — it is one switch for the whole origin, and the browser cannot tell an
-intended inline block from an injected one, which is the entire threat the directive exists
-to stop. A per-response nonce keeps that distinction and still lets the store's own inline
-content run. The cost, and htmx's part in it, is written up in
-[`securityheaders.go`](internal/middleware/securityheaders.go).
-
-One consequence worth knowing before it puzzles you: **htmx injects a `<style>` block for
-its indicator classes** at load, and this policy blocks it — silently, and *open*, leaving
-an `hx-indicator` permanently visible rather than hidden. So the default theme turns that
-injection off with `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>`
-and ships the `.htmx-indicator` rules in `styles.css` instead, where a theme can restyle
-them. Keep both halves, or drop both.
+  run.
 
 HSTS is sent only when `BASE_URL` is `https://`: browsers ignore it over plain HTTP, and
 sending it from a development server would pin a rule making the next plain-HTTP project
@@ -331,6 +322,30 @@ exists only in forms and rendered pages, because a float total rounded different
 payment gateway's amount string is a real and hard-to-find class of bug.
 
 Manage the catalog at `/admin/products`.
+
+### Categories
+
+**A category is a row, not a string on the product.** Two tables: `categories`, and a
+`product_categories` join.
+
+| Column | Is |
+|---|---|
+| `slug` | The public parameter — `/products?category=books`. Unique |
+| `name` | What a shopper reads |
+| `position` | The display order. Sorting by `name` would put "Apparel" ahead of "Books" for ever, and a shop owner wants their own order |
+
+**A product may be in several categories**, which is why there is a join table rather than a
+column. A book that is also a gift belongs in both, and making a shop owner choose is a
+decision the store has no business making for them. The cost is one extra query wherever
+categories are read — paid in the admin, and deliberately not on the storefront cards, which
+do not show them.
+
+**Deleting a category unlinks its products; it never deletes them.** The cascade is on the
+join table alone. This is the same stance as refusing to delete a product an order references:
+a taxonomy edit must not be able to remove things people bought. The cost is that deleting an
+unused category looks like it did nothing, so the admin says how many links it removed.
+
+Manage them at `/admin/categories`.
 
 ### Product images
 
@@ -398,6 +413,21 @@ new object, point the product at it, and only then delete the old one. A failure
 leaves the previous image working, or at worst an orphaned object that costs a few
 kilobytes and is logged.
 
+**How images load** is the browser's own lazy loading and nothing else — no
+`IntersectionObserver`, no JavaScript, no CSP directive involved. The catalog grid marks
+everything after the first row `loading="lazy"`; the first four cards are left eager, because
+lazy-loading an image that is already on screen defers exactly the picture that decides how
+fast the page *feels* loaded. Four is a deliberate guess: the grid asks for as many columns as
+fit, so the real count is a CSS decision the server cannot see, and four over-fetches slightly
+on a phone and under-fetches on a wide monitor. A product page's own photograph is eager and
+`fetchpriority="high"`, being the one image that page is about.
+
+There are **no `width` and `height` attributes**, and that is not an oversight. The fixed-ratio
+frame (`aspect-ratio: 4 / 5`) already reserves the space before any bytes arrive, so there is
+no layout shift left to prevent — and the store never records a photograph's real dimensions,
+so any numbers put there would be a guess about an image that is going to be cropped to the
+frame anyway.
+
 ### Seeding
 
 `cmd/seed` loads a plain products JSON file:
@@ -405,7 +435,7 @@ kilobytes and is logged.
 ```json
 [
   {
-    "kind": "book",
+    "categories": ["books"],
     "slug": "the-quiet-machine",
     "title": "The Quiet Machine",
     "description": "Paperback, 248 pages.",
@@ -423,6 +453,13 @@ than duplicating rows — and it leaves `stock_qty` on rows that already exist a
 fixture is a starting point and not the truth about inventory. Variants missing from the
 file are not deleted.
 
+`categories` is a list of category slugs, and any that do not exist yet are created with the
+slug as the name. That keeps a fixture self-contained — seeding a fresh database needs no
+prior trip to the admin — at the cost of a typo becoming a new category rather than an error.
+Give it a proper name in the admin afterwards — products stay linked through that rename,
+because the link is by id. Changing the *slug* is the one to think about, since that is what
+filter URLs carry.
+
 **There is no `image_url` field**, and an unknown field is an error rather than being
 ignored — so a file carrying one is rejected with the field named. A fixture cannot upload
 bytes, so the only thing it could set is a URL to somebody else's server, which is exactly
@@ -439,7 +476,7 @@ make seed SEED_FILE=my-catalog.json
 
 | Route | Serves |
 |---|---|
-| `GET /products` | The catalog |
+| `GET /products?q=…&category=…&page=…` | The catalog, optionally searched, filtered and paged |
 | `GET /products/{slug}` | One product, with its variants |
 
 Both are read-only, and both answer twice over: a full page for an ordinary visit, and a
@@ -455,6 +492,50 @@ up a cart cookie there. The two chains serve identical HTML.
 Only active products with at least one active variant appear; an inactive product is a `404`,
 not an unlinked page. Sold-out variants are *shown* and marked unavailable rather than
 hidden, because a size vanishing from a selector reads as a bug to whoever is looking for it.
+
+### Search and filtering
+
+Three parameters on the one catalog route, in any combination: `q` searches, `category`
+narrows, `page` pages. A bare `/products` still means everything, so nothing about the plain
+catalog changed.
+
+**Search matches words and spellings both, because neither alone is enough.** Postgres
+full-text handles the first: a generated `tsvector` column with the title weighted above the
+description, queried through `websearch_to_tsquery`, so "books" finds a title containing
+"book". It cannot survive a typo. `pg_trgm` handles the second — trigram similarity finds
+"quiet machnie" — and has no idea "books" and "book" are the same word. Each covers the other's
+blind spot, and results are ordered by whichever of the two scores is higher.
+
+The costs, stated because they are the ones an adopter will meet:
+
+- **`pg_trgm` must exist.** It is a core contrib extension, present in the Postgres image this
+  repo runs, and *trusted* since PostgreSQL 13, so the database owner can create it without
+  superuser. Every managed host worth naming permits it. The migration creates it — see the
+  fixed-schema rule under [Migrations](#migrations).
+- **A query under two characters is treated as empty**, because a trigram index cannot help
+  below three and a one-letter search returns the whole catalog regardless.
+- **English is hard-coded** in the `to_tsvector` configuration. Stemming is
+  language-specific, and a store selling in another language wants that word changed.
+
+**Selecting several categories widens the results, it does not narrow them.** So
+`?category=books&category=apparel` returns both. The opposite reading — products that are
+simultaneously a book and apparel — is
+almost always empty, because these are kinds of thing rather than facets like size and colour.
+The filter list itself always shows every category in its configured order, whether or not the
+current search hits it: a list that reshapes itself as you type moves the option you were
+reaching for.
+
+**Pagination is `LIMIT`/`OFFSET`, 24 to a page**, and the total is counted in the same query as
+the page rather than a second one that could disagree with it. A page past the end is a `404`,
+for the same reason an inactive product is: it stops `?page=900` from being a silent success
+that a crawler will happily index. The cost of offset is that a deep page scans and discards
+rows on the way to its window — cheap at the size of catalog this store is for, and the reason
+a cursor was not worth the complexity here.
+
+**None of it needs JavaScript.** The filter is an ordinary GET form whose checkboxes share the
+name `category`, which is how one form produces repeated parameters without help; the page
+links are ordinary links. htmx then upgrades both to swap just the results list and push the
+URL, so the address bar always describes what is on screen and a search is a shareable link.
 
 ### Embedding the catalog elsewhere
 
@@ -476,6 +557,14 @@ iframe checkout entirely — the split is a feature of the design, not a limitat
 Concretely: the embedded fragment carries **no** add-to-cart form, and links to the store's
 own product page instead. A cart form on another origin could not work anyway — `SameSite=Lax`
 withholds the cookie on a cross-site post, and the CSRF origin check would refuse it.
+
+**The embedded fragment carries no search box, filter or page links either**, for a different
+reason: those controls push the URL they navigate to, and inside somebody else's page that
+would rewrite *their* address bar. An embedder gets the first page and a link through to the
+full catalog on the store's own domain, which is where searching belongs. That link matters —
+an embedded fragment silently showing 24 products out of 200 would look like the whole shop.
+Searching and filtering are first-party, on the same reads-anywhere, writes-first-party line
+everything else here follows.
 
 ## Cart
 
@@ -765,7 +854,7 @@ The names, and which file they live in:
 |---|---|---|
 | `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
 | | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
-| `products.html` | `products`, `products_list` | The catalog page, and just the grid inside it |
+| `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, just the grid inside it, the search and category form, and the page links |
 | `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
 | `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
 | `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
@@ -900,6 +989,10 @@ Recorded here so they are decided deliberately rather than by default:
 | Decision | Candidate | When |
 |---|---|---|
 | Server-side sessions | [`alexedwards/scs`](https://github.com/alexedwards/scs) | Only if a second admin or immediate revocation is ever needed — the same trigger as adding a `sessions` table |
+| `AND` category filtering | a second parameter, or a toggle in the filter form | When a shop's categories overlap enough that widening the results is the wrong default |
+| Accent-insensitive search | `unaccent`, behind an `IMMUTABLE` wrapper so it can be indexed | When a catalog carries accented titles and "cafe" failing to find "café" starts costing sales |
+| Keyset pagination | a cursor on the ranking and title | When a catalog is deep enough that discarding rows to reach a late page is measurable |
+| Tuned trigram thresholds | `AfterConnect` on the pgx pool | When the defaults visibly over- or under-match; they are session settings, so they belong on the connection, not in a query |
 
 ## Deploying
 
@@ -1000,7 +1093,7 @@ ALTER TABLE products ADD COLUMN subtitle TEXT NOT NULL DEFAULT '';
 ALTER TABLE products DROP COLUMN subtitle;
 ```
 
-Three rules, each with teeth:
+Four rules, each with teeth:
 
 - **Never edit a migration that has been applied anywhere.** goose records versions, not
   checksums, so an edited file is silently skipped and the schema quietly diverges from
@@ -1010,9 +1103,23 @@ Three rules, each with teeth:
   when you first ran it — unacceptable in a project other people run against their data.
 - **Down sections are for local development.** Production is forward-only: rolling a
   schema back over live orders loses money, not just columns.
+- **Create extensions in a named schema.** `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA
+  public`, never the bare form. An extension's *objects* are schema-scoped but its *name* is
+  database-global, so the bare statement installs into whatever the `search_path` leads with
+  and then does nothing on the next database whose path leads elsewhere — where the operators
+  are simply missing. The database-backed tests are exactly that case: each one runs in its own
+  schema, so the bare form lands in whichever test happened to run first and disappears with
+  it. The symptom is `operator does not exist: text <% text` in tests that pass individually
+  and fail as a suite.
 
 Statements that cannot run inside a transaction — `CREATE INDEX CONCURRENTLY`, most
 notably — need `-- +goose NO TRANSACTION` at the top of the file.
+
+The first rule has been broken exactly once, deliberately: `0001_init.sql` was rewritten and
+four follow-on migrations folded into it, before the project was published and while its only
+database was a development one. If you are reading this in a released version, that window is
+closed — the rule is absolute now, and a database from before the rewrite is recreated with
+`make down ARGS=-v && make up && make seed`.
 
 The files are ordinary goose migrations, so the `goose` CLI works against this directory
 unchanged when a migration needs to be inspected or applied by hand.
@@ -1028,7 +1135,9 @@ unchanged when a migration needs to be inspected or applied by hand.
 7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
 8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
 9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
-10. Publish ← *next*
+10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *next*
+11. **Search and filtering** — full-text plus trigram, category filters, pagination, images
+12. Publish
 
 ## Licence
 
