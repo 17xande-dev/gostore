@@ -21,6 +21,13 @@ type CartItem struct {
 	Quantity  int
 }
 
+type Category struct {
+	ID       string
+	Slug     string
+	Name     string
+	Position int
+}
+
 type Order struct {
 	ID              string
 	CartID          *string
@@ -37,9 +44,9 @@ type Order struct {
 	GatewayAmount   string
 	GatewayPayload  string
 	Emailed         bool
+	Oversold        bool
 	CreatedAt       time.Time
 	PaidAt          *time.Time
-	Oversold        bool
 }
 
 type OrderItem struct {
@@ -55,14 +62,19 @@ type OrderItem struct {
 
 type Product struct {
 	ID          string
-	Kind        string
 	Slug        string
 	Title       string
 	Description string
+	ImageKey    string
 	Active      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	ImageKey    string
+	Search      interface{}
+}
+
+type ProductCategory struct {
+	ProductID  string
+	CategoryID string
 }
 
 type ProductVariant struct {

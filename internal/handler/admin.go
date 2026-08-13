@@ -168,6 +168,14 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products/{id}/variants/{variantID}/delete", h.adminVariantDelete)
 	admin("POST /admin/products/{id}/image", h.adminProductImageUpload)
 	admin("POST /admin/products/{id}/image/delete", h.adminProductImageDelete)
+	// Categories. Deleting one unlinks it from its products and never deletes them
+	// — see internal/handler/admin_categories.go.
+	admin("GET /admin/categories", h.adminCategoryList)
+	admin("GET /admin/categories/new", h.adminCategoryNew)
+	admin("POST /admin/categories", h.adminCategoryCreate)
+	admin("GET /admin/categories/{id}/edit", h.adminCategoryEdit)
+	admin("POST /admin/categories/{id}", h.adminCategoryUpdate)
+	admin("POST /admin/categories/{id}/delete", h.adminCategoryDelete)
 	// Read-only on purpose: only an authenticated gateway notification may change
 	// an order. See internal/handler/admin_orders.go.
 	admin("GET /admin/orders", h.adminOrderList)
@@ -204,6 +212,10 @@ type productFormPage struct {
 	IsNew   bool
 	Product catalog.Product
 	Errors  validate.FormErrors
+
+	// Categories is the whole taxonomy, so the form can offer every category as a
+	// checkbox; Product.Categories decides which are ticked.
+	Categories []catalog.Category
 
 	// Variant form state. VariantErrorID names the existing variant whose edit
 	// failed, so the message renders on that row; when it is empty the errors
@@ -245,17 +257,28 @@ func (h *Handler) adminProductList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) adminProductNew(w http.ResponseWriter, r *http.Request) {
-	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, catalog.Product{Active: true}, true, nil))
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
+	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, catalog.Product{Active: true}, cats, true, nil))
 }
 
 func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.parseProduct(w, r)
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
+	p, errs, ok := h.parseProduct(w, r, cats)
 	if !ok {
 		return
 	}
 
-	if errs := validate.Product(p); errs.Any() {
-		h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, true, errs))
+	for field, msg := range validate.Product(p) {
+		errs.Add(field, msg)
+	}
+	if errs.Any() {
+		h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, cats, true, errs))
 		return
 	}
 
@@ -264,7 +287,7 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
 			errs := validate.FormErrors{}
 			errs.Add(conflict.Field, "Already used by another product.")
-			h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, true, errs))
+			h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, cats, true, errs))
 			return
 		}
 		h.serverError(w, r, err)
@@ -277,16 +300,24 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) adminProductEdit(w http.ResponseWriter, r *http.Request) {
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
 	p, err := h.cat.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.storeError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, p, false, nil))
+	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, p, cats, false, nil))
 }
 
 func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.parseProduct(w, r)
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
+	p, errs, ok := h.parseProduct(w, r, cats)
 	if !ok {
 		return
 	}
@@ -295,8 +326,11 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 	// Nothing here has to defend the image any more: UpdateProduct does not write
 	// either image column, so the form cannot touch the picture whatever it submits.
 	// That replaced a read-then-preserve dance in this function.
-	if errs := validate.Product(p); errs.Any() {
-		h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, errs)
+	for field, msg := range validate.Product(p) {
+		errs.Add(field, msg)
+	}
+	if errs.Any() {
+		h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, cats, errs)
 		return
 	}
 
@@ -304,7 +338,7 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
 			errs := validate.FormErrors{}
 			errs.Add(conflict.Field, "Already used by another product.")
-			h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, errs)
+			h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, cats, errs)
 			return
 		}
 		h.storeError(w, r, err)
@@ -322,6 +356,10 @@ func (h *Handler) adminProductDelete(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, catalog.ErrInUse):
 		// The product has been ordered. Deleting it would rewrite history, so
 		// the form says so instead of failing opaquely.
+		cats, ok := h.categories(w, r)
+		if !ok {
+			return
+		}
 		p, getErr := h.cat.Get(r.Context(), id)
 		if getErr != nil {
 			h.storeError(w, r, getErr)
@@ -329,7 +367,7 @@ func (h *Handler) adminProductDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		errs := validate.FormErrors{}
 		errs.Add("delete", "This product has been ordered and cannot be deleted. Deactivate it instead.")
-		h.render(w, r, http.StatusConflict, "admin_product_form", h.productForm(r, p, false, errs))
+		h.render(w, r, http.StatusConflict, "admin_product_form", h.productForm(r, p, cats, false, errs))
 	default:
 		h.storeError(w, r, err)
 	}
@@ -403,13 +441,16 @@ func (h *Handler) adminVariantDelete(w http.ResponseWriter, r *http.Request) {
 // parseProduct reads the product form. A blank slug is derived from the title,
 // because a slug is a detail of the URL, not a decision the operator has to
 // make on every product.
-func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request) (catalog.Product, bool) {
+//
+// known is the taxonomy the form was rendered from; the submitted category ids
+// are resolved against it, so an id that names nothing is a message on the form
+// rather than a foreign key violation with no field attached.
+func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request, known []catalog.Category) (catalog.Product, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "malformed form", http.StatusBadRequest)
-		return catalog.Product{}, false
+		return catalog.Product{}, nil, false
 	}
 	p := catalog.Product{
-		Kind:        strings.TrimSpace(r.PostFormValue("kind")),
 		Slug:        strings.TrimSpace(r.PostFormValue("slug")),
 		Title:       strings.TrimSpace(r.PostFormValue("title")),
 		Description: strings.TrimSpace(r.PostFormValue("description")),
@@ -420,7 +461,24 @@ func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request) (catalog.
 	if p.Slug == "" {
 		p.Slug = catalog.Slugify(p.Title)
 	}
-	return p, true
+
+	// A repeated field rather than one comma-separated value, because that is what
+	// a checkbox list submits natively — no JavaScript, and no parsing of a format
+	// somebody has to get right.
+	chosen, errs := validate.ProductCategories(r.PostForm["category"], known)
+	p.Categories = chosen
+	return p, errs, true
+}
+
+// categories loads the taxonomy for a form that has to render it, answering the
+// request itself if the read fails.
+func (h *Handler) categories(w http.ResponseWriter, r *http.Request) ([]catalog.Category, bool) {
+	cats, err := h.cat.Categories(r.Context())
+	if err != nil {
+		h.serverError(w, r, err)
+		return nil, false
+	}
+	return cats, true
 }
 
 // parseVariant reads a variant form, returning both the parsed variant and the
@@ -466,7 +524,7 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.
 	return v, form, errs, true
 }
 
-func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, errs validate.FormErrors) productFormPage {
+func (h *Handler) productForm(r *http.Request, p catalog.Product, cats []catalog.Category, isNew bool, errs validate.FormErrors) productFormPage {
 	title := "Edit product"
 	if isNew {
 		title = "New product"
@@ -475,6 +533,7 @@ func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, er
 		page:           h.newPage(r, title),
 		IsNew:          isNew,
 		Product:        p,
+		Categories:     cats,
 		Errors:         errs,
 		VariantForm:    variantForm{Active: true},
 		UploadsEnabled: h.cfg.ImagesEnabled(),
@@ -485,26 +544,30 @@ func (h *Handler) productForm(r *http.Request, p catalog.Product, isNew bool, er
 
 // renderProductForm re-renders the edit page for a rejected product form,
 // keeping the submitted values but showing the variants as stored.
-func (h *Handler) renderProductForm(w http.ResponseWriter, r *http.Request, status int, p catalog.Product, errs validate.FormErrors) {
+func (h *Handler) renderProductForm(w http.ResponseWriter, r *http.Request, status int, p catalog.Product, cats []catalog.Category, errs validate.FormErrors) {
 	variants, err := h.cat.Variants(r.Context(), p.ID)
 	if err != nil {
 		h.storeError(w, r, err)
 		return
 	}
 	p.Variants = variants
-	h.render(w, r, status, "admin_product_form", h.productForm(r, p, false, errs))
+	h.render(w, r, status, "admin_product_form", h.productForm(r, p, cats, false, errs))
 }
 
 // renderVariantErrors re-renders the edit page after a variant form was
 // rejected. The product is re-read, so everything except the offending form is
 // shown as stored.
 func (h *Handler) renderVariantErrors(w http.ResponseWriter, r *http.Request, status int, productID string, form variantForm, variantID string, errs validate.FormErrors) {
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
 	p, err := h.cat.Get(r.Context(), productID)
 	if err != nil {
 		h.storeError(w, r, err)
 		return
 	}
-	page := h.productForm(r, p, false, nil)
+	page := h.productForm(r, p, cats, false, nil)
 	page.VariantForm = form
 	page.VariantErrors = errs
 	page.VariantErrorID = variantID

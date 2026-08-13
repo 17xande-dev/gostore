@@ -1,0 +1,39 @@
+{{define "admin_categories"}}
+{{template "head" .}}
+{{template "adminnav" .}}
+
+<h1>Categories</h1>
+<p><a href="/admin/categories/new">New category</a></p>
+
+{{/*
+  The delete notice. It says how many products were unlinked, because a delete
+  that unlinked twelve products and one that unlinked none leave exactly the same
+  page behind, and only one of those is what the operator expected.
+*/}}
+{{if .Notice}}<p><strong>{{.Notice}}</strong></p>{{end}}
+
+{{if not .Categories}}
+  <p>No categories yet. Products do not need one — a category is a way to group
+  them, not something a product has to have.</p>
+{{else}}
+<table>
+  <thead>
+    <tr><th>Name</th><th>Slug</th><th>Position</th><th></th></tr>
+  </thead>
+  <tbody>
+  {{range .Categories}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.Slug}}</td>
+      <td>{{.Position}}</td>
+      <td><a href="/admin/categories/{{.ID}}/edit">Edit</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<p><small>Position is the display order — lower numbers first — because sorting by
+name would put "Apparel" ahead of "Books" for ever.</small></p>
+{{end}}
+
+{{template "foot" .}}
+{{end}}

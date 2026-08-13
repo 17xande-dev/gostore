@@ -9,11 +9,60 @@ import (
 	"context"
 )
 
+const addProductCategory = `-- name: AddProductCategory :exec
+INSERT INTO product_categories (product_id, category_id)
+SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM categories WHERE id = $2)
+ON CONFLICT DO NOTHING
+`
+
+type AddProductCategoryParams struct {
+	ProductID  string
+	CategoryID string
+}
+
+// The SELECT ... WHERE EXISTS makes an unknown category id insert nothing rather
+// than raise a foreign key violation. The handler validates ids against the list
+// it rendered, so this is the second line of defence, and the quiet one is right
+// here: a category deleted between rendering the form and submitting it should
+// not turn a product save into an error page.
+func (q *Queries) AddProductCategory(ctx context.Context, arg AddProductCategoryParams) error {
+	_, err := q.db.Exec(ctx, addProductCategory, arg.ProductID, arg.CategoryID)
+	return err
+}
+
+const addProductCategoryBySlug = `-- name: AddProductCategoryBySlug :exec
+INSERT INTO product_categories (product_id, category_id)
+SELECT $1, c.id FROM categories c WHERE c.slug = $2
+ON CONFLICT DO NOTHING
+`
+
+type AddProductCategoryBySlugParams struct {
+	ProductID string
+	Slug      string
+}
+
+func (q *Queries) AddProductCategoryBySlug(ctx context.Context, arg AddProductCategoryBySlugParams) error {
+	_, err := q.db.Exec(ctx, addProductCategoryBySlug, arg.ProductID, arg.Slug)
+	return err
+}
+
+const clearProductCategories = `-- name: ClearProductCategories :exec
+DELETE FROM product_categories WHERE product_id = $1
+`
+
+// Setting a product's categories is a clear followed by inserts, inside the
+// transaction the store opens: the form submits the whole set, so anything not
+// resubmitted was unticked.
+func (q *Queries) ClearProductCategories(ctx context.Context, productID string) error {
+	_, err := q.db.Exec(ctx, clearProductCategories, productID)
+	return err
+}
+
 const clearProductImage = `-- name: ClearProductImage :one
 UPDATE products
 SET image_key = '', updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
+RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
 `
 
 func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, error) {
@@ -21,26 +70,63 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
+	)
+	return i, err
+}
+
+const countCategoryProducts = `-- name: CountCategoryProducts :one
+SELECT COUNT(*) FROM product_categories WHERE category_id = $1
+`
+
+// How many products a delete would unlink, read before the delete. Without it a
+// category that nothing used and one that fifty products used both look like the
+// same silent success.
+func (q *Queries) CountCategoryProducts(ctx context.Context, categoryID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countCategoryProducts, categoryID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createCategory = `-- name: CreateCategory :one
+INSERT INTO categories (id, slug, name, position)
+VALUES (gen_random_uuid(), $1, $2, $3)
+RETURNING id, slug, name, position
+`
+
+type CreateCategoryParams struct {
+	Slug     string
+	Name     string
+	Position int
+}
+
+func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error) {
+	row := q.db.QueryRow(ctx, createCategory, arg.Slug, arg.Name, arg.Position)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Position,
 	)
 	return i, err
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (id, kind, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
+INSERT INTO products (id, slug, title, description, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4)
+RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
 `
 
 type CreateProductParams struct {
-	Kind        string
 	Slug        string
 	Title       string
 	Description string
@@ -54,7 +140,6 @@ type CreateProductParams struct {
 // hold.
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, createProduct,
-		arg.Kind,
 		arg.Slug,
 		arg.Title,
 		arg.Description,
@@ -63,14 +148,14 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
 	)
 	return i, err
 }
@@ -115,6 +200,21 @@ func (q *Queries) CreateVariant(ctx context.Context, arg CreateVariantParams) (P
 	return i, err
 }
 
+const deleteCategory = `-- name: DeleteCategory :execrows
+DELETE FROM categories WHERE id = $1
+`
+
+// Deleting a category unlinks it from its products by cascade on the join table
+// and never touches the products themselves: a taxonomy edit must not delete
+// catalog entries.
+func (q *Queries) DeleteCategory(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCategory, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteProduct = `-- name: DeleteProduct :execrows
 DELETE FROM products WHERE id = $1
 `
@@ -147,7 +247,7 @@ func (q *Queries) DeleteVariant(ctx context.Context, arg DeleteVariantParams) (i
 }
 
 const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
-SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE slug = $1 AND active
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE slug = $1 AND active
 `
 
 func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -155,20 +255,36 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
+	)
+	return i, err
+}
+
+const getCategory = `-- name: GetCategory :one
+SELECT id, slug, name, position FROM categories WHERE id = $1
+`
+
+func (q *Queries) GetCategory(ctx context.Context, id string) (Category, error) {
+	row := q.db.QueryRow(ctx, getCategory, id)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Position,
 	)
 	return i, err
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE id = $1
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
@@ -176,20 +292,20 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
 	)
 	return i, err
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products WHERE slug = $1
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE slug = $1
 `
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -197,20 +313,20 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
 	)
 	return i, err
 }
 
 const listActiveProducts = `-- name: ListActiveProducts :many
-SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products p
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
 ORDER BY p.title
@@ -229,14 +345,14 @@ func (q *Queries) ListActiveProducts(ctx context.Context) ([]Product, error) {
 		var i Product
 		if err := rows.Scan(
 			&i.ID,
-			&i.Kind,
 			&i.Slug,
 			&i.Title,
 			&i.Description,
+			&i.ImageKey,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ImageKey,
+			&i.Search,
 		); err != nil {
 			return nil, err
 		}
@@ -320,6 +436,45 @@ func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID str
 	return items, nil
 }
 
+const listAllProductCategories = `-- name: ListAllProductCategories :many
+SELECT pc.product_id, c.id, c.slug, c.name, c.position FROM product_categories pc
+JOIN categories c ON c.id = pc.category_id
+ORDER BY c.position, c.name
+`
+
+type ListAllProductCategoriesRow struct {
+	ProductID string
+	Category  Category
+}
+
+// Every product's categories in one query, for the admin list to attach in
+// memory the way it already does with variants.
+func (q *Queries) ListAllProductCategories(ctx context.Context) ([]ListAllProductCategoriesRow, error) {
+	rows, err := q.db.Query(ctx, listAllProductCategories)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllProductCategoriesRow{}
+	for rows.Next() {
+		var i ListAllProductCategoriesRow
+		if err := rows.Scan(
+			&i.ProductID,
+			&i.Category.ID,
+			&i.Category.Slug,
+			&i.Category.Name,
+			&i.Category.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAllVariants = `-- name: ListAllVariants :many
 SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants ORDER BY size, color, sku
 `
@@ -353,9 +508,73 @@ func (q *Queries) ListAllVariants(ctx context.Context) ([]ProductVariant, error)
 	return items, nil
 }
 
+const listCategories = `-- name: ListCategories :many
+SELECT id, slug, name, position FROM categories ORDER BY position, name
+`
+
+// Categories. Ordered by position everywhere they are read, because the order a
+// shop offers its sections in is the owner's decision; name is only the tiebreak
+// so two categories at the same position still come back in a stable order.
+func (q *Queries) ListCategories(ctx context.Context) ([]Category, error) {
+	rows, err := q.db.Query(ctx, listCategories)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Category{}
+	for rows.Next() {
+		var i Category
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCategoriesByProduct = `-- name: ListCategoriesByProduct :many
+SELECT c.id, c.slug, c.name, c.position FROM categories c
+JOIN product_categories pc ON pc.category_id = c.id
+WHERE pc.product_id = $1
+ORDER BY c.position, c.name
+`
+
+func (q *Queries) ListCategoriesByProduct(ctx context.Context, productID string) ([]Category, error) {
+	rows, err := q.db.Query(ctx, listCategoriesByProduct, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Category{}
+	for rows.Next() {
+		var i Category
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProducts = `-- name: ListProducts :many
 
-SELECT id, kind, slug, title, description, active, created_at, updated_at, image_key FROM products ORDER BY title
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products ORDER BY title
 `
 
 // Queries behind internal/catalog. See sqlc.yaml; regenerate with `make sqlc`.
@@ -374,14 +593,14 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 		var i Product
 		if err := rows.Scan(
 			&i.ID,
-			&i.Kind,
 			&i.Slug,
 			&i.Title,
 			&i.Description,
+			&i.ImageKey,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ImageKey,
+			&i.Search,
 		); err != nil {
 			return nil, err
 		}
@@ -430,7 +649,7 @@ const setProductImage = `-- name: SetProductImage :one
 UPDATE products
 SET image_key = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
+RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
 `
 
 type SetProductImageParams struct {
@@ -450,28 +669,55 @@ func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
+	)
+	return i, err
+}
+
+const updateCategory = `-- name: UpdateCategory :one
+UPDATE categories SET slug = $2, name = $3, position = $4 WHERE id = $1 RETURNING id, slug, name, position
+`
+
+type UpdateCategoryParams struct {
+	ID       string
+	Slug     string
+	Name     string
+	Position int
+}
+
+func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (Category, error) {
+	row := q.db.QueryRow(ctx, updateCategory,
+		arg.ID,
+		arg.Slug,
+		arg.Name,
+		arg.Position,
+	)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Position,
 	)
 	return i, err
 }
 
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
-SET kind = $2, slug = $3, title = $4, description = $5, active = $6, updated_at = now()
+SET slug = $2, title = $3, description = $4, active = $5, updated_at = now()
 WHERE id = $1
-RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
+RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
 `
 
 type UpdateProductParams struct {
 	ID          string
-	Kind        string
 	Slug        string
 	Title       string
 	Description string
@@ -488,7 +734,6 @@ type UpdateProductParams struct {
 func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, updateProduct,
 		arg.ID,
-		arg.Kind,
 		arg.Slug,
 		arg.Title,
 		arg.Description,
@@ -497,14 +742,14 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
 	)
 	return i, err
 }
@@ -554,17 +799,46 @@ func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (P
 	return i, err
 }
 
+const upsertCategory = `-- name: UpsertCategory :one
+INSERT INTO categories (id, slug, name, position)
+VALUES (gen_random_uuid(), $1, $2, $3)
+ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+RETURNING id, slug, name, position
+`
+
+type UpsertCategoryParams struct {
+	Slug     string
+	Name     string
+	Position int
+}
+
+// ON CONFLICT DO UPDATE rather than DO NOTHING, because DO NOTHING returns no row
+// on conflict and the caller needs the id either way. slug = EXCLUDED.slug is a
+// write of the value that is already there; name and position are deliberately
+// left alone, so re-seeding never overwrites a category the operator has renamed
+// or reordered.
+func (q *Queries) UpsertCategory(ctx context.Context, arg UpsertCategoryParams) (Category, error) {
+	row := q.db.QueryRow(ctx, upsertCategory, arg.Slug, arg.Name, arg.Position)
+	var i Category
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Position,
+	)
+	return i, err
+}
+
 const upsertProduct = `-- name: UpsertProduct :one
-INSERT INTO products (id, kind, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+INSERT INTO products (id, slug, title, description, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4)
 ON CONFLICT (slug) DO UPDATE
-SET kind = EXCLUDED.kind, title = EXCLUDED.title, description = EXCLUDED.description,
+SET title = EXCLUDED.title, description = EXCLUDED.description,
     active = EXCLUDED.active, updated_at = now()
-RETURNING id, kind, slug, title, description, active, created_at, updated_at, image_key
+RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
 `
 
 type UpsertProductParams struct {
-	Kind        string
 	Slug        string
 	Title       string
 	Description string
@@ -577,7 +851,6 @@ type UpsertProductParams struct {
 // fixture has no way to upload bytes. Re-seeding leaves an uploaded image alone.
 func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (Product, error) {
 	row := q.db.QueryRow(ctx, upsertProduct,
-		arg.Kind,
 		arg.Slug,
 		arg.Title,
 		arg.Description,
@@ -586,14 +859,14 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 	var i Product
 	err := row.Scan(
 		&i.ID,
-		&i.Kind,
 		&i.Slug,
 		&i.Title,
 		&i.Description,
+		&i.ImageKey,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.ImageKey,
+		&i.Search,
 	)
 	return i, err
 }

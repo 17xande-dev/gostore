@@ -127,7 +127,7 @@ func (q *Queries) FlagOrderOversold(ctx context.Context, id string) error {
 }
 
 const getLatestOrderForCart = `-- name: GetLatestOrderForCart :one
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, created_at, paid_at, oversold FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestOrderForCart(ctx context.Context, cartID *string) (Order, error) {
@@ -149,15 +149,15 @@ func (q *Queries) GetLatestOrderForCart(ctx context.Context, cartID *string) (Or
 		&i.GatewayAmount,
 		&i.GatewayPayload,
 		&i.Emailed,
+		&i.Oversold,
 		&i.CreatedAt,
 		&i.PaidAt,
-		&i.Oversold,
 	)
 	return i, err
 }
 
 const getOrder = `-- name: GetOrder :one
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, created_at, paid_at, oversold FROM orders WHERE id = $1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders WHERE id = $1
 `
 
 func (q *Queries) GetOrder(ctx context.Context, id string) (Order, error) {
@@ -179,9 +179,9 @@ func (q *Queries) GetOrder(ctx context.Context, id string) (Order, error) {
 		&i.GatewayAmount,
 		&i.GatewayPayload,
 		&i.Emailed,
+		&i.Oversold,
 		&i.CreatedAt,
 		&i.PaidAt,
-		&i.Oversold,
 	)
 	return i, err
 }
@@ -297,7 +297,7 @@ func (q *Queries) ListOrderItems(ctx context.Context, orderID string) ([]ListOrd
 }
 
 const listRecentOrders = `-- name: ListRecentOrders :many
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, created_at, paid_at, oversold FROM orders ORDER BY created_at DESC LIMIT $1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders ORDER BY created_at DESC LIMIT $1
 `
 
 // The admin's order list. Limited rather than unpaginated: products are a small
@@ -334,9 +334,9 @@ func (q *Queries) ListRecentOrders(ctx context.Context, limit int32) ([]Order, e
 			&i.GatewayAmount,
 			&i.GatewayPayload,
 			&i.Emailed,
+			&i.Oversold,
 			&i.CreatedAt,
 			&i.PaidAt,
-			&i.Oversold,
 		); err != nil {
 			return nil, err
 		}

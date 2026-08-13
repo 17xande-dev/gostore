@@ -35,7 +35,7 @@ func TestAdminAuth_RedirectsUnauthenticated(t *testing.T) {
 		if tc.method == http.MethodGet {
 			res, _ = get(t, srv, tc.path)
 		} else {
-			res, _ = post(t, srv, tc.path, url.Values{"title": {"Sneaky"}, "kind": {"book"}})
+			res, _ = post(t, srv, tc.path, url.Values{"title": {"Sneaky"}})
 		}
 		if res.StatusCode != http.StatusSeeOther {
 			t.Errorf("%s %s = %d, want 303", tc.method, tc.path, res.StatusCode)

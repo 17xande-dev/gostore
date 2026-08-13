@@ -18,12 +18,28 @@
     </label>
     {{template "err" index .Errors "slug"}}
   </p>
-  <p>
-    <label>Kind<br>
-      <input name="kind" value="{{.Product.Kind}}" placeholder="book, apparel, …" required>
-    </label>
-    {{template "err" index .Errors "kind"}}
-  </p>
+  {{/*
+    Categories are checkboxes named alike, which is exactly what a form submits as
+    a repeated parameter — so belonging to several needs no JavaScript, and the
+    whole set is submitted every time, which is what makes unticking one mean
+    something. A shop that does not sort its products into sections simply ticks
+    none.
+  */}}
+  <fieldset>
+    <legend>Categories</legend>
+    {{if not .Categories}}
+      <p><small>No categories yet. <a href="/admin/categories/new">Add one</a> if you
+      want to group products.</small></p>
+    {{else}}
+      {{range .Categories}}
+      <label>
+        <input type="checkbox" name="category" value="{{.ID}}"
+               {{if $.Product.InCategory .ID}}checked{{end}}> {{.Name}}
+      </label>
+      {{end}}
+    {{end}}
+    {{template "err" index .Errors "categories"}}
+  </fieldset>
   <p>
     <label>Description<br>
       <textarea name="description" rows="6" cols="60">{{.Product.Description}}</textarea>

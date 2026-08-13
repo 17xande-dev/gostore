@@ -11,14 +11,14 @@
 <table>
   <thead>
     <tr>
-      <th>Title</th><th>Kind</th><th>Slug</th><th>Variants</th><th>Stock</th><th>Active</th><th></th>
+      <th>Title</th><th>Categories</th><th>Slug</th><th>Variants</th><th>Stock</th><th>Active</th><th></th>
     </tr>
   </thead>
   <tbody>
   {{range .Products}}
     <tr>
       <td>{{.Title}}</td>
-      <td>{{.Kind}}</td>
+      <td>{{if .Categories}}{{range $i, $c := .Categories}}{{if $i}}, {{end}}{{$c.Name}}{{end}}{{else}}—{{end}}</td>
       <td>{{.Slug}}</td>
       <td>{{len .Variants}}</td>
       <td>{{.TotalStock}}</td>

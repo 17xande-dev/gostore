@@ -27,7 +27,7 @@ func setup(t *testing.T) fixture {
 	f := fixture{pool: pool, carts: cart.NewStore(pool), cat: catalog.NewStore(pool)}
 	ctx := t.Context()
 
-	p, err := f.cat.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p, err := f.cat.Create(ctx, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -35,7 +35,7 @@ func setup(t *testing.T) fixture {
 	f.sock = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 19900, StockQty: 1, Active: true})
 	f.off = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-L", Size: "L", PriceCents: 39900, StockQty: 5, Active: false})
 
-	draft, err := f.cat.Create(ctx, catalog.Product{Kind: "book", Slug: "draft", Title: "Draft", Active: false})
+	draft, err := f.cat.Create(ctx, catalog.Product{Slug: "draft", Title: "Draft", Active: false})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

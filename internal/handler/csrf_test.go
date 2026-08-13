@@ -26,7 +26,7 @@ func TestCSRF_RejectsPostWithoutAToken(t *testing.T) {
 	}
 	for _, path := range paths {
 		// An explicit empty token stops the helper from supplying a real one.
-		res, _ := post(t, srv, path, url.Values{"csrf_token": {""}, "title": {"Forged"}, "kind": {"book"}})
+		res, _ := post(t, srv, path, url.Values{"csrf_token": {""}, "title": {"Forged"}})
 		if res.StatusCode != http.StatusForbidden {
 			t.Errorf("POST %s without a token = %d, want 403", path, res.StatusCode)
 		}
@@ -48,7 +48,6 @@ func TestCSRF_RejectsATokenFromAnotherSession(t *testing.T) {
 	res, _ := post(t, victim, "/admin/products", url.Values{
 		"csrf_token": {stolen},
 		"title":      {"Forged"},
-		"kind":       {"book"},
 	})
 	if res.StatusCode != http.StatusForbidden {
 		t.Fatalf("POST with another session's token = %d, want 403", res.StatusCode)
@@ -71,7 +70,7 @@ func TestCSRF_AcceptsSameOriginPostByOriginOrRefererAlone(t *testing.T) {
 	for name, setHeaders := range cases {
 		srv, store := setup(t)
 
-		form := url.Values{"csrf_token": {csrfToken(t, srv)}, "title": {name}, "kind": {"book"}, "active": {"1"}}
+		form := url.Values{"csrf_token": {csrfToken(t, srv)}, "title": {name}, "active": {"1"}}
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/admin/products",
 			strings.NewReader(form.Encode()))
 		if err != nil {
@@ -97,7 +96,7 @@ func TestCSRF_RejectsACrossOriginPost(t *testing.T) {
 	// nosurf checks where the request came from as well as its token. A valid
 	// token submitted from another origin — the shape of a real CSRF attempt if
 	// a token ever leaked — must still be refused.
-	form := url.Values{"csrf_token": {csrfToken(t, srv)}, "title": {"Forged"}, "kind": {"book"}}
+	form := url.Values{"csrf_token": {csrfToken(t, srv)}, "title": {"Forged"}}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/admin/products",
 		strings.NewReader(form.Encode()))
 	if err != nil {
@@ -176,7 +175,7 @@ func TestCSRF_DoesNotLeakItsCookieOutsideAdmin(t *testing.T) {
 }
 
 func catalogProduct() catalog.Product {
-	return catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true}
+	return catalog.Product{Slug: "tee", Title: "Tee", Active: true}
 }
 
 func variantFor(productID string) catalog.Variant {

@@ -168,6 +168,10 @@ func (h *Handler) deleteObject(r *http.Request, key, productID string) {
 // 422 rather than a redirect, because the operator needs to read something and a
 // redirect would throw the message away.
 func (h *Handler) imageProblem(w http.ResponseWriter, r *http.Request, productID, message string) {
+	cats, ok := h.categories(w, r)
+	if !ok {
+		return
+	}
 	p, err := h.cat.Get(r.Context(), productID)
 	if err != nil {
 		h.storeError(w, r, err)
@@ -175,7 +179,7 @@ func (h *Handler) imageProblem(w http.ResponseWriter, r *http.Request, productID
 	}
 	errs := validate.FormErrors{}
 	errs.Add("image", message)
-	h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, false, errs))
+	h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, cats, false, errs))
 }
 
 // humanBytes renders a byte count for a form message. It handles whole mebibytes

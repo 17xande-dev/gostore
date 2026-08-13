@@ -7,23 +7,45 @@
 package catalog
 
 import (
+	"slices"
 	"strings"
 	"time"
 )
 
+// Category is one entry in the shop's taxonomy: a row rather than a string on
+// the product, so a product can be in several and renaming one does not have to
+// find every product that said it.
+//
+// Slug is the public URL parameter, and Position is the display order — sorting
+// by Name would put "Apparel" ahead of "Books" for ever, and the order things are
+// offered in is the shop owner's decision, not the alphabet's.
+type Category struct {
+	ID       string `json:"-"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Position int    `json:"position"`
+}
+
 // Product is one catalog entry. Variants is populated by the store methods that
 // say so; it is nil otherwise rather than empty, so "not loaded" and "no
-// variants" stay distinguishable at the call site.
+// variants" stay distinguishable at the call site. Categories works the same way,
+// and is attached only where it is read: the admin needs it, storefront cards do
+// not render it, so the hot path does not pay for a second query.
 type Product struct {
-	ID          string    `json:"id,omitempty"`
-	Kind        string    `json:"kind"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"-"`
-	UpdatedAt   time.Time `json:"-"`
-	Variants    []Variant `json:"variants,omitempty"`
+	ID          string     `json:"id,omitempty"`
+	Slug        string     `json:"slug"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Active      bool       `json:"active"`
+	CreatedAt   time.Time  `json:"-"`
+	UpdatedAt   time.Time  `json:"-"`
+	Variants    []Variant  `json:"variants,omitempty"`
+	Categories  []Category `json:"-"`
+
+	// CategorySlugs is how a seed file names the categories a product belongs to,
+	// because a fixture has no ids to refer to. It is input only: everything that
+	// reads a product back reads Categories, which carries the rows as stored.
+	CategorySlugs []string `json:"categories,omitempty"`
 
 	// ImageKey names the object holding this product's picture — a bucket key, or a
 	// path relative to IMAGE_DIR. Empty means no image.
@@ -43,6 +65,38 @@ type Product struct {
 
 // HasImage reports whether the product has a picture to show.
 func (p Product) HasImage() bool { return p.ImageKey != "" }
+
+// InCategory reports whether the product's loaded categories include one, which
+// is what decides whether a checkbox on the admin form is ticked.
+func (p Product) InCategory(id string) bool {
+	return slices.ContainsFunc(p.Categories, func(c Category) bool { return c.ID == id })
+}
+
+// CategoryNames lists the product's categories for display, in the order they
+// were loaded.
+func (p Product) CategoryNames() []string {
+	names := make([]string, 0, len(p.Categories))
+	for _, c := range p.Categories {
+		names = append(names, c.Name)
+	}
+	return names
+}
+
+// TitleFromSlug turns a slug into a presentable name — "gift-cards" into "Gift
+// Cards". It exists for seeding, where a fixture names a category by slug alone
+// and something has to go in the name column; a category the operator has since
+// renamed keeps its name, because seeding never overwrites one.
+func TitleFromSlug(slug string) string {
+	words := strings.Split(slug, "-")
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		r := []rune(w)
+		words[i] = strings.ToUpper(string(r[0])) + string(r[1:])
+	}
+	return strings.Join(words, " ")
+}
 
 // Variant is a purchasable, priced, stocked row under a product.
 type Variant struct {

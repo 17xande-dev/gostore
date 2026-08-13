@@ -13,7 +13,7 @@ func TestStore_CreateGetAndUpdate(t *testing.T) {
 	ctx := t.Context()
 
 	created, err := s.Create(ctx, catalog.Product{
-		Kind: "book", Slug: "a-book", Title: "A Book", Description: "d", Active: true,
+		Slug: "a-book", Title: "A Book", Description: "d", Active: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -81,7 +81,7 @@ func TestStore_DuplicateSlugIsAConflict(t *testing.T) {
 	s := catalog.NewStore(dbtest.Pool(t))
 	ctx := t.Context()
 
-	p := catalog.Product{Kind: "book", Slug: "taken", Title: "First", Active: true}
+	p := catalog.Product{Slug: "taken", Title: "First", Active: true}
 	if _, err := s.Create(ctx, p); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestStore_Variants(t *testing.T) {
 	s := catalog.NewStore(dbtest.Pool(t))
 	ctx := t.Context()
 
-	p := mustCreate(t, s, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 
 	v, err := s.CreateVariant(ctx, catalog.Variant{
 		ProductID: p.ID, SKU: "TEE-M-BLK", Size: "M", Color: "Black", PriceCents: 29900, StockQty: 7, Active: true,
@@ -147,7 +147,7 @@ func TestStore_Variants(t *testing.T) {
 
 	// A variant id belonging to another product must not be editable through
 	// this product's URL.
-	other := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "other", Title: "Other", Active: true})
+	other := mustCreate(t, s, catalog.Product{Slug: "other", Title: "Other", Active: true})
 	stray := v
 	stray.ProductID = other.ID
 	if _, err := s.UpdateVariant(ctx, stray); !errors.Is(err, catalog.ErrNotFound) {
@@ -170,7 +170,7 @@ func TestStore_DeleteCascadesToVariants(t *testing.T) {
 	s := catalog.NewStore(pool)
 	ctx := t.Context()
 
-	p := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "doomed", Title: "Doomed", Active: true})
+	p := mustCreate(t, s, catalog.Product{Slug: "doomed", Title: "Doomed", Active: true})
 	if _, err := s.CreateVariant(ctx, catalog.Variant{ProductID: p.ID, SKU: "D-1", PriceCents: 100, Active: true}); err != nil {
 		t.Fatalf("CreateVariant: %v", err)
 	}
@@ -196,8 +196,8 @@ func TestStore_List(t *testing.T) {
 		t.Fatalf("List on an empty catalog = %v, %v", products, err)
 	}
 
-	b := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "b", Title: "Beta", Active: true})
-	a := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "a", Title: "Alpha", Active: true})
+	b := mustCreate(t, s, catalog.Product{Slug: "b", Title: "Beta", Active: true})
+	a := mustCreate(t, s, catalog.Product{Slug: "a", Title: "Alpha", Active: true})
 	if _, err := s.CreateVariant(ctx, catalog.Variant{ProductID: b.ID, SKU: "B-1", PriceCents: 100, StockQty: 3, Active: true}); err != nil {
 		t.Fatalf("CreateVariant: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestStore_UpsertIsRerunnable(t *testing.T) {
 	ctx := t.Context()
 
 	p := catalog.Product{
-		Kind: "apparel", Slug: "tote", Title: "Tote", Active: true,
+		Slug: "tote", Title: "Tote", Active: true,
 		Variants: []catalog.Variant{
 			{SKU: "TOTE-STD", Color: "Natural", PriceCents: 14900, StockQty: 20, Active: true},
 		},
@@ -277,23 +277,23 @@ func TestStore_ListActive(t *testing.T) {
 
 	// Visible: active product, one active variant that happens to be sold out
 	// plus one in stock.
-	visible := mustCreate(t, s, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	visible := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 0, Active: true})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-M", Size: "M", PriceCents: 31900, StockQty: 2, Active: true})
 	// Same product, an inactive variant: withdrawn options must not show up.
 	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-L", Size: "L", PriceCents: 99900, StockQty: 5, Active: false})
 
 	// Hidden: the product itself is inactive.
-	inactive := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "draft", Title: "Draft", Active: false})
+	inactive := mustCreate(t, s, catalog.Product{Slug: "draft", Title: "Draft", Active: false})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: inactive.ID, SKU: "DRAFT-1", PriceCents: 100, StockQty: 1, Active: true})
 
 	// Hidden: active product whose only variant is inactive — nothing to buy, so
 	// it is not a listing.
-	empty := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "unbuyable", Title: "Unbuyable", Active: true})
+	empty := mustCreate(t, s, catalog.Product{Slug: "unbuyable", Title: "Unbuyable", Active: true})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: empty.ID, SKU: "UNB-1", PriceCents: 100, StockQty: 1, Active: false})
 
 	// Hidden: active product with no variants at all.
-	mustCreate(t, s, catalog.Product{Kind: "book", Slug: "bare", Title: "Bare", Active: true})
+	mustCreate(t, s, catalog.Product{Slug: "bare", Title: "Bare", Active: true})
 
 	products, err := s.ListActive(ctx)
 	if err != nil {
@@ -327,7 +327,7 @@ func TestStore_GetActiveBySlug(t *testing.T) {
 	s := catalog.NewStore(dbtest.Pool(t))
 	ctx := t.Context()
 
-	p := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "a-book", Title: "A Book", Active: true})
+	p := mustCreate(t, s, catalog.Product{Slug: "a-book", Title: "A Book", Active: true})
 	// The size distinguishes them because (product_id, size, color) is unique —
 	// a product gets at most one optionless variant, which is the invariant that
 	// keeps "has options" from being a special case anywhere else.
@@ -347,13 +347,13 @@ func TestStore_GetActiveBySlug(t *testing.T) {
 		t.Errorf("unknown slug = %v, want ErrNotFound", err)
 	}
 
-	hidden := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "hidden", Title: "Hidden", Active: false})
+	hidden := mustCreate(t, s, catalog.Product{Slug: "hidden", Title: "Hidden", Active: false})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: hidden.ID, SKU: "H-1", PriceCents: 100, StockQty: 1, Active: true})
 	if _, err := s.GetActiveBySlug(ctx, "hidden"); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("inactive product = %v, want ErrNotFound", err)
 	}
 
-	unbuyable := mustCreate(t, s, catalog.Product{Kind: "book", Slug: "unbuyable", Title: "Unbuyable", Active: true})
+	unbuyable := mustCreate(t, s, catalog.Product{Slug: "unbuyable", Title: "Unbuyable", Active: true})
 	mustCreateVariant(t, s, catalog.Variant{ProductID: unbuyable.ID, SKU: "U-1", PriceCents: 100, StockQty: 1, Active: false})
 	if _, err := s.GetActiveBySlug(ctx, "unbuyable"); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("product with no active variants = %v, want ErrNotFound", err)

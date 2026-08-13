@@ -188,7 +188,14 @@ func TestAdminProducts_ListsProductsAndStock(t *testing.T) {
 		t.Error("an empty catalog does not say so")
 	}
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Sample Tee", Active: true})
+	apparel, err := store.CreateCategory(ctx, catalog.Category{Slug: "apparel", Name: "Apparel"})
+	if err != nil {
+		t.Fatalf("CreateCategory: %v", err)
+	}
+	p, err := store.Create(ctx, catalog.Product{
+		Slug: "tee", Title: "Sample Tee", Active: true,
+		Categories: []catalog.Category{apparel},
+	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -202,7 +209,7 @@ func TestAdminProducts_ListsProductsAndStock(t *testing.T) {
 	}
 
 	_, body = get(t, srv, "/admin/products")
-	for _, want := range []string{"Sample Tee", "apparel", "tee", ">7<", "/admin/products/" + p.ID + "/edit"} {
+	for _, want := range []string{"Sample Tee", "Apparel", "tee", ">7<", "/admin/products/" + p.ID + "/edit"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the list is missing %q", want)
 		}
@@ -214,7 +221,6 @@ func TestAdminProducts_CreateDerivesSlugAndRedirectsToEdit(t *testing.T) {
 
 	res, body := post(t, srv, "/admin/products", url.Values{
 		"title":       {"The Quiet Machine"},
-		"kind":        {"book"},
 		"description": {"A demo book."},
 		"active":      {"1"},
 	})
@@ -226,7 +232,7 @@ func TestAdminProducts_CreateDerivesSlugAndRedirectsToEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBySlug: %v", err)
 	}
-	if !p.Active || p.Kind != "book" {
+	if !p.Active {
 		t.Errorf("stored product is %+v", p)
 	}
 	// Straight to the edit page, because a product with no variants cannot be
@@ -241,7 +247,6 @@ func TestAdminProducts_RejectsInvalidFormWithoutWriting(t *testing.T) {
 
 	res, body := post(t, srv, "/admin/products", url.Values{
 		"title": {""},
-		"kind":  {"book"},
 	})
 	if res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("POST with no title = %d, want 422", res.StatusCode)
@@ -262,7 +267,7 @@ func TestAdminProducts_RejectsInvalidFormWithoutWriting(t *testing.T) {
 func TestAdminProducts_DuplicateSlugIsAFieldError(t *testing.T) {
 	srv, store := setup(t)
 
-	form := url.Values{"title": {"A Book"}, "slug": {"a-book"}, "kind": {"book"}, "active": {"1"}}
+	form := url.Values{"title": {"A Book"}, "slug": {"a-book"}, "active": {"1"}}
 	if res, body := post(t, srv, "/admin/products", form); res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("first create = %d %s", res.StatusCode, body)
 	}
@@ -288,7 +293,7 @@ func TestAdminProducts_Update(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "a-book", Title: "A Book", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "a-book", Title: "A Book", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -296,7 +301,6 @@ func TestAdminProducts_Update(t *testing.T) {
 	res, body := post(t, srv, "/admin/products/"+p.ID, url.Values{
 		"title": {"A Better Book"},
 		"slug":  {"a-better-book"},
-		"kind":  {"book"},
 		// "active" omitted: an unchecked checkbox sends nothing, which must
 		// deactivate the product rather than leaving it as it was.
 	})
@@ -330,7 +334,7 @@ func TestAdminVariants_AddParsesPriceAsCents(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -373,7 +377,7 @@ func TestAdminVariants_RejectsBadPriceAndKeepsInput(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -407,7 +411,7 @@ func TestAdminVariants_UpdateAndDelete(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -453,7 +457,7 @@ func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Tee", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -495,7 +499,7 @@ func TestAdminProducts_Delete(t *testing.T) {
 	srv, store := setup(t)
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "doomed", Title: "Doomed", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "doomed", Title: "Doomed", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

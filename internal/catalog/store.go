@@ -67,7 +67,16 @@ func (s *Store) List(ctx context.Context) ([]Product, error) {
 	if err != nil {
 		return nil, fmt.Errorf("catalog: list variants: %w", err)
 	}
-	return attachVariants(products, variants(vrows)), nil
+	products = attachVariants(products, variants(vrows))
+
+	// Categories are attached here and not in ListActive, because the admin list
+	// shows them and storefront cards do not. The hot path does not pay for a
+	// query nothing renders.
+	crows, err := s.q.ListAllProductCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list product categories: %w", err)
+	}
+	return attachCategories(products, crows), nil
 }
 
 // ListActive returns the products a customer may see: active products with
@@ -115,7 +124,8 @@ func (s *Store) GetActiveBySlug(ctx context.Context, slug string) (Product, erro
 	return p, nil
 }
 
-// Get returns one product with its variants.
+// Get returns one product with its variants and its categories. The admin edit
+// form is the caller, and it needs both.
 func (s *Store) Get(ctx context.Context, id string) (Product, error) {
 	row, err := s.q.GetProduct(ctx, id)
 	if err != nil {
@@ -123,6 +133,9 @@ func (s *Store) Get(ctx context.Context, id string) (Product, error) {
 	}
 	p := product(row)
 	if p.Variants, err = s.Variants(ctx, p.ID); err != nil {
+		return Product{}, err
+	}
+	if p.Categories, err = s.CategoriesByProduct(ctx, p.ID); err != nil {
 		return Product{}, err
 	}
 	return p, nil
@@ -150,36 +163,93 @@ func (s *Store) Variants(ctx context.Context, productID string) ([]Variant, erro
 	return variants(rows), nil
 }
 
-// Create inserts a product. The database generates the id, so no UUID
-// dependency reaches the binary.
+// Create inserts a product and its category links. The database generates the
+// id, so no UUID dependency reaches the binary.
+//
+// The links are written in the same transaction as the row, because a product
+// that exists but is in none of the categories the operator ticked is a save
+// that half worked, and nothing in the admin would say so.
 func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
-	row, err := s.q.CreateProduct(ctx, gen.CreateProductParams{
-		Kind:        p.Kind,
-		Slug:        p.Slug,
-		Title:       p.Title,
-		Description: p.Description,
-		Active:      p.Active,
+	return s.inTx(ctx, func(q *gen.Queries) (Product, error) {
+		row, err := q.CreateProduct(ctx, gen.CreateProductParams{
+			Slug:        p.Slug,
+			Title:       p.Title,
+			Description: p.Description,
+			Active:      p.Active,
+		})
+		if err != nil {
+			return Product{}, translate(fmt.Errorf("catalog: create product: %w", err))
+		}
+		out := product(row)
+		if out.Categories, err = setCategories(ctx, q, out.ID, p.Categories); err != nil {
+			return Product{}, err
+		}
+		return out, nil
 	})
-	if err != nil {
-		return Product{}, translate(fmt.Errorf("catalog: create product: %w", err))
-	}
-	return product(row), nil
 }
 
-// Update writes every editable product column.
+// Update writes every editable product column, and replaces the product's
+// category links with the submitted set — the form submits all of them, so a
+// category that is not in p is one that was unticked.
 func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
-	row, err := s.q.UpdateProduct(ctx, gen.UpdateProductParams{
-		ID:          p.ID,
-		Kind:        p.Kind,
-		Slug:        p.Slug,
-		Title:       p.Title,
-		Description: p.Description,
-		Active:      p.Active,
+	return s.inTx(ctx, func(q *gen.Queries) (Product, error) {
+		row, err := q.UpdateProduct(ctx, gen.UpdateProductParams{
+			ID:          p.ID,
+			Slug:        p.Slug,
+			Title:       p.Title,
+			Description: p.Description,
+			Active:      p.Active,
+		})
+		if err != nil {
+			return Product{}, translate(fmt.Errorf("catalog: update product: %w", err))
+		}
+		out := product(row)
+		if out.Categories, err = setCategories(ctx, q, out.ID, p.Categories); err != nil {
+			return Product{}, err
+		}
+		return out, nil
 	})
+}
+
+// inTx runs fn against a transaction and commits it, so the several writes a
+// product save has become still land or fail together.
+func (s *Store) inTx(ctx context.Context, fn func(*gen.Queries) (Product, error)) (Product, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return Product{}, translate(fmt.Errorf("catalog: update product: %w", err))
+		return Product{}, fmt.Errorf("catalog: begin: %w", err)
 	}
-	return product(row), nil
+	defer tx.Rollback(ctx)
+
+	out, err := fn(s.q.WithTx(tx))
+	if err != nil {
+		return Product{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Product{}, fmt.Errorf("catalog: commit: %w", err)
+	}
+	return out, nil
+}
+
+// setCategories replaces a product's category links and returns them as stored.
+// Reading them back rather than echoing the input is what makes an id that no
+// longer names a category visible: it simply is not in the result.
+func setCategories(ctx context.Context, q *gen.Queries, productID string, categories []Category) ([]Category, error) {
+	if err := q.ClearProductCategories(ctx, productID); err != nil {
+		return nil, translate(fmt.Errorf("catalog: clear product categories: %w", err))
+	}
+	for _, c := range categories {
+		err := q.AddProductCategory(ctx, gen.AddProductCategoryParams{
+			ProductID: productID, CategoryID: c.ID,
+		})
+		if err != nil {
+			return nil, translate(fmt.Errorf("catalog: link category: %w", err))
+		}
+	}
+	rows, err := q.ListCategoriesByProduct(ctx, productID)
+	if err != nil {
+		return nil, translate(fmt.Errorf("catalog: product categories: %w", err))
+	}
+	return categoriesOf(rows), nil
 }
 
 // SetImage points a product at an uploaded object, returning the product as
@@ -272,6 +342,79 @@ func (s *Store) DeleteVariant(ctx context.Context, productID, id string) error {
 	return nil
 }
 
+// Categories returns the whole taxonomy in display order. It is small and read
+// by every admin product form, so it is one unfiltered query.
+func (s *Store) Categories(ctx context.Context) ([]Category, error) {
+	rows, err := s.q.ListCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list categories: %w", err)
+	}
+	return categoriesOf(rows), nil
+}
+
+// CategoriesByProduct returns one product's categories in display order.
+func (s *Store) CategoriesByProduct(ctx context.Context, productID string) ([]Category, error) {
+	rows, err := s.q.ListCategoriesByProduct(ctx, productID)
+	if err != nil {
+		return nil, translate(fmt.Errorf("catalog: product categories: %w", err))
+	}
+	return categoriesOf(rows), nil
+}
+
+// Category returns one category.
+func (s *Store) Category(ctx context.Context, id string) (Category, error) {
+	row, err := s.q.GetCategory(ctx, id)
+	if err != nil {
+		return Category{}, translate(fmt.Errorf("catalog: category: %w", err))
+	}
+	return category(row), nil
+}
+
+// CreateCategory inserts a category.
+func (s *Store) CreateCategory(ctx context.Context, c Category) (Category, error) {
+	row, err := s.q.CreateCategory(ctx, gen.CreateCategoryParams{
+		Slug: c.Slug, Name: c.Name, Position: c.Position,
+	})
+	if err != nil {
+		return Category{}, translate(fmt.Errorf("catalog: create category: %w", err))
+	}
+	return category(row), nil
+}
+
+// UpdateCategory writes every editable category column.
+func (s *Store) UpdateCategory(ctx context.Context, c Category) (Category, error) {
+	row, err := s.q.UpdateCategory(ctx, gen.UpdateCategoryParams{
+		ID: c.ID, Slug: c.Slug, Name: c.Name, Position: c.Position,
+	})
+	if err != nil {
+		return Category{}, translate(fmt.Errorf("catalog: update category: %w", err))
+	}
+	return category(row), nil
+}
+
+// DeleteCategory removes a category and reports how many products it was
+// unlinked from. Unlike deleting a product, this is never refused: the join rows
+// go with it by cascade and the products themselves are untouched, because a
+// taxonomy edit must not delete catalog entries.
+//
+// The count is returned because without it the operator cannot tell a category
+// nothing used from one fifty products used — both would look like the same
+// silent success.
+func (s *Store) DeleteCategory(ctx context.Context, id string) (int64, error) {
+	linked, err := s.q.CountCategoryProducts(ctx, id)
+	if err != nil {
+		return 0, translate(fmt.Errorf("catalog: count category products: %w", err))
+	}
+	affected, err := s.q.DeleteCategory(ctx, id)
+	if err != nil {
+		return 0, translate(fmt.Errorf("catalog: delete category: %w", err))
+	}
+	if affected == 0 {
+		return 0, ErrNotFound
+	}
+	return linked, nil
+}
+
 // Upsert inserts or updates a product and its variants by their natural keys —
 // slug for the product, SKU for each variant — in one transaction. This is what
 // makes `cmd/seed` rerunnable: seeding twice must not duplicate the catalog or
@@ -291,7 +434,6 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 	q := s.q.WithTx(tx)
 
 	row, err := q.UpsertProduct(ctx, gen.UpsertProductParams{
-		Kind:        p.Kind,
 		Slug:        p.Slug,
 		Title:       p.Title,
 		Description: p.Description,
@@ -301,6 +443,29 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		return Product{}, translate(fmt.Errorf("catalog: upsert product: %w", err))
 	}
 	out := product(row)
+
+	// A seed file names categories by slug, because it has no ids to refer to.
+	// Each is created if it is new and left exactly as it is if it already exists,
+	// so re-seeding never renames or reorders a taxonomy the operator has edited.
+	//
+	// Links are added, never cleared first: a fixture is not authoritative over a
+	// catalog somebody has since categorised, for the same reason its stock counts
+	// are not.
+	for _, slug := range p.CategorySlugs {
+		if _, err := q.UpsertCategory(ctx, gen.UpsertCategoryParams{
+			Slug: slug, Name: TitleFromSlug(slug),
+		}); err != nil {
+			return Product{}, translate(fmt.Errorf("catalog: upsert category %q: %w", slug, err))
+		}
+		if err := q.AddProductCategoryBySlug(ctx, gen.AddProductCategoryBySlugParams{
+			ProductID: out.ID, Slug: slug,
+		}); err != nil {
+			return Product{}, translate(fmt.Errorf("catalog: link category %q: %w", slug, err))
+		}
+	}
+	if out.Categories, err = categoriesFrom(ctx, q, out.ID); err != nil {
+		return Product{}, err
+	}
 
 	out.Variants = make([]Variant, 0, len(p.Variants))
 	for _, v := range p.Variants {
@@ -323,6 +488,32 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		return Product{}, fmt.Errorf("catalog: commit: %w", err)
 	}
 	return out, nil
+}
+
+// categoriesFrom reads one product's categories through whichever handle it is
+// given, so the same read works inside a transaction and outside one.
+func categoriesFrom(ctx context.Context, q *gen.Queries, productID string) ([]Category, error) {
+	rows, err := q.ListCategoriesByProduct(ctx, productID)
+	if err != nil {
+		return nil, translate(fmt.Errorf("catalog: product categories: %w", err))
+	}
+	return categoriesOf(rows), nil
+}
+
+// attachCategories files each category under its product, the same shape as
+// attachVariants and for the same reason.
+func attachCategories(products []Product, rows []gen.ListAllProductCategoriesRow) []Product {
+	byID := make(map[string]int, len(products))
+	for i, p := range products {
+		products[i].Categories = []Category{}
+		byID[p.ID] = i
+	}
+	for _, r := range rows {
+		if i, ok := byID[r.ProductID]; ok {
+			products[i].Categories = append(products[i].Categories, category(r.Category))
+		}
+	}
+	return products
 }
 
 // attachVariants files each variant under its product, so the caller gets two
@@ -349,7 +540,6 @@ func attachVariants(products []Product, variants []Variant) []Product {
 func product(r gen.Product) Product {
 	return Product{
 		ID:          r.ID,
-		Kind:        r.Kind,
 		Slug:        r.Slug,
 		Title:       r.Title,
 		Description: r.Description,
@@ -379,6 +569,23 @@ func variant(r gen.ProductVariant) Variant {
 		StockQty:   r.StockQty,
 		Active:     r.Active,
 	}
+}
+
+func category(r gen.Category) Category {
+	return Category{
+		ID:       r.ID,
+		Slug:     r.Slug,
+		Name:     r.Name,
+		Position: r.Position,
+	}
+}
+
+func categoriesOf(rows []gen.Category) []Category {
+	out := make([]Category, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, category(r))
+	}
+	return out
 }
 
 func variants(rows []gen.ProductVariant) []Variant {

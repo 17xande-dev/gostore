@@ -7,7 +7,7 @@ Stdlib-first, with a deliberately tiny dependency surface.
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
 > storefront, the cart, checkout against PayFast, order emails, the admin's order views,
-> product image uploads and the hardening pass all work. What remains is categories, then
+> product image uploads, the hardening pass and categories all work. What remains is
 > catalog search with filtering and pagination, then the publishing checklist — see the
 > build order below.
 >
@@ -453,9 +453,11 @@ than duplicating rows — and it leaves `stock_qty` on rows that already exist a
 fixture is a starting point and not the truth about inventory. Variants missing from the
 file are not deleted.
 
-`categories` is a list of category slugs, and any that do not exist yet are created with the
-slug as the name. That keeps a fixture self-contained — seeding a fresh database needs no
-prior trip to the admin — at the cost of a typo becoming a new category rather than an error.
+`categories` is a list of category slugs, and any that do not exist yet are created, named by
+title-casing the slug — `gift-cards` becomes "Gift Cards". That keeps a fixture
+self-contained — seeding a fresh database needs no prior trip to the admin — at the cost of a
+typo becoming a new category rather than an error. A category that already exists is left
+exactly as it is, name and position included, so re-seeding never undoes an edit.
 Give it a proper name in the admin afterwards — products stay linked through that rename,
 because the link is by id. Changing the *slug* is the one to think about, since that is what
 filter URLs carry.
@@ -858,7 +860,7 @@ The names, and which file they live in:
 | `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
 | `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
 | `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
-| `admin_*.html` | `admin_login`, `admin_products`, `admin_product_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
+| `admin_*.html` | `admin_login`, `admin_products`, `admin_product_form`, `admin_categories`, `admin_category_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
 | `email_order_paid.{html,txt}`, `email_order_notify.txt` | same names, minus the extension for the HTML one | See [Email templates](#email-templates) |
 
 Three things to know before writing one:
@@ -1138,8 +1140,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
 8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
 9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
-10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *next*
-11. **Search and filtering** — full-text plus trigram, category filters, pagination, images
+10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *done*
+11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *next*
 12. Publish
 
 ## Licence

@@ -27,7 +27,7 @@ func TestFormErrors(t *testing.T) {
 
 func TestProduct(t *testing.T) {
 	valid := catalog.Product{
-		Kind: "book", Slug: "a-book", Title: "A Book", Description: "Fine.",
+		Slug: "a-book", Title: "A Book", Description: "Fine.",
 	}
 	if errs := Product(valid); errs.Any() {
 		t.Errorf("a valid product was rejected: %s", errs)
@@ -39,7 +39,7 @@ func TestProduct(t *testing.T) {
 		field string
 	}{
 		{"no title", func(p *catalog.Product) { p.Title = "  " }, "title"},
-		{"no kind", func(p *catalog.Product) { p.Kind = "" }, "kind"},
+		{"category slug not a slug", func(p *catalog.Product) { p.CategorySlugs = []string{"Gift Cards"} }, "categories"},
 		{"no slug", func(p *catalog.Product) { p.Slug = "" }, "slug"},
 		{"slug with spaces", func(p *catalog.Product) { p.Slug = "a book" }, "slug"},
 		{"slug in capitals", func(p *catalog.Product) { p.Slug = "A-Book" }, "slug"},

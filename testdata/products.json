@@ -1,6 +1,6 @@
 [
   {
-    "kind": "book",
+    "categories": ["books"],
     "slug": "the-quiet-machine",
     "title": "The Quiet Machine",
     "description": "A demo book. Paperback, 248 pages. Everything in this file is fictional sample data.",
@@ -17,7 +17,7 @@
     ]
   },
   {
-    "kind": "book",
+    "categories": ["books"],
     "slug": "field-notes-on-nothing",
     "title": "Field Notes on Nothing",
     "description": "A demo book available in two editions, to show a product whose variants differ by format.",
@@ -42,7 +42,7 @@
     ]
   },
   {
-    "kind": "apparel",
+    "categories": ["apparel"],
     "slug": "sample-t-shirt",
     "title": "Sample T-Shirt",
     "description": "A demo garment, to show variants across two option dimensions and a sold-out combination.",
@@ -83,7 +83,7 @@
     ]
   },
   {
-    "kind": "apparel",
+    "categories": ["apparel"],
     "slug": "canvas-tote",
     "title": "Canvas Tote",
     "description": "A demo tote bag with a single variant, and an inactive one to show a hidden row.",

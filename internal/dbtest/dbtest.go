@@ -59,7 +59,12 @@ func Pool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	// public is on the path as well as the test's own schema, because pg_trgm's
+	// operators live there: the migration installs the extension into public
+	// explicitly, and an extension *name* is database-global, so only the first
+	// test schema to run would otherwise own it and every other one would fail
+	// with "operator does not exist: text <% text".
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema + ", public"
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

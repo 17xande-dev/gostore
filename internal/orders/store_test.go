@@ -37,7 +37,7 @@ func newShop(t *testing.T) *shop {
 	}
 
 	ctx := t.Context()
-	p, err := s.catalog.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Sample Tee", Active: true})
+	p, err := s.catalog.Create(ctx, catalog.Product{Slug: "tee", Title: "Sample Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

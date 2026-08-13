@@ -18,7 +18,7 @@ func stockCart(t *testing.T, store *catalog.Store) map[string]catalog.Variant {
 	t.Helper()
 	ctx := t.Context()
 
-	p, err := store.Create(ctx, catalog.Product{Kind: "apparel", Slug: "tee", Title: "Sample Tee", Active: true})
+	p, err := store.Create(ctx, catalog.Product{Slug: "tee", Title: "Sample Tee", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -36,7 +36,7 @@ func stockCart(t *testing.T, store *catalog.Store) map[string]catalog.Variant {
 		variants[v.Size] = out
 	}
 
-	book, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "a-book", Title: "A Book", Active: true})
+	book, err := store.Create(ctx, catalog.Product{Slug: "a-book", Title: "A Book", Active: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

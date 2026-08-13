@@ -56,7 +56,7 @@ func stock(t *testing.T, store *catalog.Store) catalog.Product {
 	ctx := t.Context()
 
 	p, err := store.Create(ctx, catalog.Product{
-		Kind: "apparel", Slug: "sample-tee", Title: "Sample Tee",
+		Slug: "sample-tee", Title: "Sample Tee",
 		Description: "A demo garment.", Active: true,
 	})
 	if err != nil {
@@ -72,7 +72,7 @@ func stock(t *testing.T, store *catalog.Store) catalog.Product {
 		}
 	}
 
-	hidden, err := store.Create(ctx, catalog.Product{Kind: "book", Slug: "unpublished", Title: "Unpublished Draft", Active: false})
+	hidden, err := store.Create(ctx, catalog.Product{Slug: "unpublished", Title: "Unpublished Draft", Active: false})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

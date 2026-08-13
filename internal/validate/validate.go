@@ -56,8 +56,6 @@ func Product(p catalog.Product) FormErrors {
 
 	required(e, "title", p.Title)
 	maxLen(e, "title", p.Title, 200)
-	required(e, "kind", p.Kind)
-	maxLen(e, "kind", p.Kind, 50)
 	maxLen(e, "description", p.Description, 10_000)
 
 	switch {
@@ -69,9 +67,68 @@ func Product(p catalog.Product) FormErrors {
 		maxLen(e, "slug", p.Slug, 200)
 	}
 
+	// CategorySlugs is only ever set by a seed file — the admin form submits ids,
+	// which ProductCategories resolves — so this is a no-op for a form and the one
+	// check a fixture gets. A slug that is not already in slug form would create a
+	// category whose public URL is not the string the file wrote.
+	for _, slug := range p.CategorySlugs {
+		if slug == "" || slug != catalog.Slugify(slug) {
+			e.Add("categories", "Category slugs must be lowercase letters, numbers and hyphens.")
+			break
+		}
+	}
+
 	// There is deliberately nothing here about the image. The product form does not
 	// carry one: an image arrives by upload and its URL is whatever storage says it
 	// is, so there is no user input to validate.
+	return e
+}
+
+// ProductCategories resolves the category ids a product form submitted against
+// the ones the form was rendered from, returning the chosen categories and an
+// error for anything that is not among them.
+//
+// Checking against the rendered list rather than letting the database refuse the
+// link is what makes the failure legible: a foreign key violation would arrive as
+// a 500 with no field attached, and a hand-crafted id would silently do nothing.
+// Categories are optional — a shop that does not use them submits none, which is
+// not an error.
+func ProductCategories(ids []string, known []catalog.Category) ([]catalog.Category, FormErrors) {
+	e := FormErrors{}
+	byID := make(map[string]catalog.Category, len(known))
+	for _, c := range known {
+		byID[c.ID] = c
+	}
+
+	chosen := make([]catalog.Category, 0, len(ids))
+	for _, id := range ids {
+		c, ok := byID[id]
+		if !ok {
+			e.Add("categories", "One of the categories no longer exists. Reload the page and try again.")
+			continue
+		}
+		chosen = append(chosen, c)
+	}
+	return chosen, e
+}
+
+// Category validates a category as submitted by the admin form. The slug is
+// checked as strictly as a product's, and for the same reason: it is a public URL
+// parameter, and changing it later breaks links that already exist.
+func Category(c catalog.Category) FormErrors {
+	e := FormErrors{}
+
+	required(e, "name", c.Name)
+	maxLen(e, "name", c.Name, 100)
+
+	switch {
+	case c.Slug == "":
+		e.Add("slug", "Required.")
+	case c.Slug != catalog.Slugify(c.Slug):
+		e.Add("slug", "Use lowercase letters, numbers and hyphens only.")
+	default:
+		maxLen(e, "slug", c.Slug, 100)
+	}
 	return e
 }
 

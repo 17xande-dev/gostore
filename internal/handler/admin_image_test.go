@@ -29,7 +29,7 @@ func uploadShop(t *testing.T) (*shop, catalog.Product) {
 	signIn(t, s.srv)
 
 	p, err := s.catalog.Create(t.Context(), catalog.Product{
-		Kind: "book", Slug: "a-book", Title: "A Book", Active: true,
+		Slug: "a-book", Title: "A Book", Active: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -260,7 +260,6 @@ func TestProductImage_CannotBeSetByURL(t *testing.T) {
 	form := url.Values{
 		"title":     {p.Title},
 		"slug":      {p.Slug},
-		"kind":      {p.Kind},
 		"image_url": {"https://someone-elses-site.example/cover.jpg"},
 		"active":    {"1"},
 	}
@@ -293,7 +292,6 @@ func TestProductImage_FormSaveDoesNotClobberAnUpload(t *testing.T) {
 	form := url.Values{
 		"title":  {"A Renamed Book"},
 		"slug":   {p.Slug},
-		"kind":   {p.Kind},
 		"active": {"1"},
 		// image_url deliberately absent, as the form has no such field.
 	}
@@ -357,7 +355,7 @@ func TestProductImage_UnconfiguredStorageSaysSo(t *testing.T) {
 	signIn(t, s.srv)
 
 	p, err := s.catalog.Create(t.Context(), catalog.Product{
-		Kind: "book", Slug: "a-book", Title: "A Book", Active: true,
+		Slug: "a-book", Title: "A Book", Active: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
