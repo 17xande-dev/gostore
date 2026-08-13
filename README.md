@@ -7,9 +7,9 @@ Stdlib-first, with a deliberately tiny dependency surface.
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
 > catalog (products, variants, seed command, admin CRUD), admin authentication, the
 > storefront, the cart, checkout against PayFast, order emails, the admin's order views,
-> product image uploads, the hardening pass and categories all work. What remains is
-> catalog search with filtering and pagination, then the publishing checklist — see the
-> build order below.
+> product image uploads, the hardening pass, categories, and catalog search with filtering
+> and pagination all work. What remains is the publishing checklist — see the build order
+> below.
 >
 > The compose stack ships a **published development password** (`gostore`) and PayFast's
 > **published sandbox credentials**, so `make up` gives you a working admin and a working
@@ -1141,7 +1141,7 @@ unchanged when a migration needs to be inspected or applied by hand.
 8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
 9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
 10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *done*
-11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *next*
+11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *done*
 12. Publish
 
 ## Licence

@@ -271,7 +271,7 @@ func TestStore_UpsertIsRerunnable(t *testing.T) {
 	}
 }
 
-func TestStore_ListActive(t *testing.T) {
+func TestStore_SearchActiveVisibilityRules(t *testing.T) {
 	s := catalog.NewStore(dbtest.Pool(t))
 	ctx := t.Context()
 
@@ -295,17 +295,18 @@ func TestStore_ListActive(t *testing.T) {
 	// Hidden: active product with no variants at all.
 	mustCreate(t, s, catalog.Product{Slug: "bare", Title: "Bare", Active: true})
 
-	products, err := s.ListActive(ctx)
+	res, err := s.SearchActive(ctx, catalog.Search{Page: 1, PageSize: 24})
 	if err != nil {
-		t.Fatalf("ListActive: %v", err)
+		t.Fatalf("SearchActive: %v", err)
 	}
-	if len(products) != 1 {
-		t.Fatalf("ListActive returned %d products, want only the buyable one: %+v", len(products), products)
+	if len(res.Products) != 1 || res.Total != 1 {
+		t.Fatalf("SearchActive returned %d of %d products, want only the buyable one: %+v",
+			len(res.Products), res.Total, res.Products)
 	}
 
-	got := products[0]
+	got := res.Products[0]
 	if got.Slug != "tee" {
-		t.Errorf("ListActive returned %q", got.Slug)
+		t.Errorf("SearchActive returned %q", got.Slug)
 	}
 	if len(got.Variants) != 2 {
 		t.Fatalf("product has %d variants, want the 2 active ones: %+v", len(got.Variants), got.Variants)

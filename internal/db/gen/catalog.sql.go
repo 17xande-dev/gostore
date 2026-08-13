@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"time"
 )
 
 const addProductCategory = `-- name: AddProductCategory :exec
@@ -325,55 +326,14 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 	return i, err
 }
 
-const listActiveProducts = `-- name: ListActiveProducts :many
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products p
-WHERE p.active
-  AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
-ORDER BY p.title
-`
-
-// The products a customer may see: active, with at least one active variant. A
-// product with nothing purchasable under it is not a listing, it is a dead end.
-func (q *Queries) ListActiveProducts(ctx context.Context) ([]Product, error) {
-	rows, err := q.db.Query(ctx, listActiveProducts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Product{}
-	for rows.Next() {
-		var i Product
-		if err := rows.Scan(
-			&i.ID,
-			&i.Slug,
-			&i.Title,
-			&i.Description,
-			&i.ImageKey,
-			&i.Active,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.Search,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listActiveVariants = `-- name: ListActiveVariants :many
+const listActiveVariantsByProduct = `-- name: ListActiveVariantsByProduct :many
 SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants
-WHERE active AND product_id IN (SELECT id FROM products WHERE active)
+WHERE product_id = $1 AND active
 ORDER BY size, color, sku
 `
 
-// Out-of-stock variants are included. Hiding them makes a size silently vanish
-// from a selector, which reads as a bug; the storefront marks them unavailable.
-func (q *Queries) ListActiveVariants(ctx context.Context) ([]ProductVariant, error) {
-	rows, err := q.db.Query(ctx, listActiveVariants)
+func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID string) ([]ProductVariant, error) {
+	rows, err := q.db.Query(ctx, listActiveVariantsByProduct, productID)
 	if err != nil {
 		return nil, err
 	}
@@ -401,14 +361,19 @@ func (q *Queries) ListActiveVariants(ctx context.Context) ([]ProductVariant, err
 	return items, nil
 }
 
-const listActiveVariantsByProduct = `-- name: ListActiveVariantsByProduct :many
+const listActiveVariantsByProducts = `-- name: ListActiveVariantsByProducts :many
 SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants
-WHERE product_id = $1 AND active
+WHERE active AND product_id = ANY($1::uuid[])
 ORDER BY size, color, sku
 `
 
-func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID string) ([]ProductVariant, error) {
-	rows, err := q.db.Query(ctx, listActiveVariantsByProduct, productID)
+// The variants for one page of products, and only that page: reading every active
+// variant in the catalog to render 24 products would undo the paging.
+//
+// Out-of-stock variants are included. Hiding them makes a size silently vanish
+// from a selector, which reads as a bug; the storefront marks them unavailable.
+func (q *Queries) ListActiveVariantsByProducts(ctx context.Context, productIds []string) ([]ProductVariant, error) {
+	rows, err := q.db.Query(ctx, listActiveVariantsByProducts, productIds)
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +599,104 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Active,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchActiveProducts = `-- name: SearchActiveProducts :many
+SELECT p.id, p.slug, p.title, p.description, p.image_key, p.active, p.created_at, p.updated_at, p.search, COUNT(*) OVER () AS total_count
+FROM products p
+WHERE p.active
+  AND EXISTS (SELECT 1 FROM product_variants v
+              WHERE v.product_id = p.id AND v.active)
+  AND (cardinality($1::text[]) = 0
+       OR EXISTS (SELECT 1 FROM product_categories pc
+                  JOIN categories c ON c.id = pc.category_id
+                  WHERE pc.product_id = p.id
+                    AND c.slug = ANY($1::text[])))
+  AND ($2::text = ''
+       OR p.search @@ websearch_to_tsquery('english', $2)
+       OR $2 <% p.title
+       OR p.title ILIKE '%' || $2 || '%')
+ORDER BY GREATEST(ts_rank_cd(p.search, websearch_to_tsquery('english', $2)),
+                  similarity(p.title, $2)) DESC,
+         p.title
+LIMIT $4 OFFSET $3
+`
+
+type SearchActiveProductsParams struct {
+	CategorySlugs []string
+	Q             string
+	PageOffset    int32
+	PageSize      int32
+}
+
+type SearchActiveProductsRow struct {
+	ID          string
+	Slug        string
+	Title       string
+	Description string
+	ImageKey    string
+	Active      bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Search      interface{}
+	TotalCount  int64
+}
+
+// One statement serves search, category filtering and pagination, because they
+// are one question — "which products, in what order, and which slice of them" —
+// and asking it three times would let the three answers disagree.
+//
+// COUNT(*) OVER () is the part worth naming: the size of the filtered set arrives
+// in the same round trip as the page, computed before LIMIT applies. A separate
+// COUNT would be a second trip whose answer can differ from the first under
+// concurrent edits, which shows up as page numbers promising results that are not
+// there.
+//
+// Full-text and trigram are both here because neither is enough alone.
+// websearch_to_tsquery stems, so "books" reaches a title containing "book", but it
+// dies on a typo; trigram survives the typo and has no idea the two words are
+// related. ILIKE catches the third case both miss — a substring inside a word,
+// which is what a shopper typing half a title is doing.
+//
+// An empty q needs no special case: websearch_to_tsquery('english',”) is an empty
+// tsquery and similarity(title,”) is 0, so GREATEST is 0 for every row and the
+// ORDER BY falls through to p.title. A filter-only request is alphabetical for
+// free, with no second query and no branch in the handler. Passing ” rather than
+// NULL also keeps sqlc from handing the store a *string.
+func (q *Queries) SearchActiveProducts(ctx context.Context, arg SearchActiveProductsParams) ([]SearchActiveProductsRow, error) {
+	rows, err := q.db.Query(ctx, searchActiveProducts,
+		arg.CategorySlugs,
+		arg.Q,
+		arg.PageOffset,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchActiveProductsRow{}
+	for rows.Next() {
+		var i SearchActiveProductsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Title,
+			&i.Description,
+			&i.ImageKey,
+			&i.Active,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Search,
+			&i.TotalCount,
 		); err != nil {
 			return nil, err
 		}

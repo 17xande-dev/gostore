@@ -190,6 +190,11 @@ type page struct {
 	StoreName string
 	Currency  string
 	CSRFToken string
+
+	// BaseURL is the store's own address. Templates need it only where a link has
+	// to work from somewhere else — the embedded catalog fragment renders inside
+	// another origin's page, where a relative href would point at that origin.
+	BaseURL string
 }
 
 func (h *Handler) newPage(r *http.Request, title string) page {
@@ -198,6 +203,7 @@ func (h *Handler) newPage(r *http.Request, title string) page {
 		StoreName: h.cfg.StoreName,
 		Currency:  h.cfg.Currency,
 		CSRFToken: nosurf.Token(r),
+		BaseURL:   h.cfg.BaseURL,
 	}
 }
 

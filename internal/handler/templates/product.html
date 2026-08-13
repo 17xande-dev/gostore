@@ -85,10 +85,15 @@
   Two columns where there is room, one where there is not — decided by the grid in
   styles.css rather than by a breakpoint here.
 */}}
+{{/*
+  This image is the page's largest element and the one a shopper is waiting for, so
+  it is eager — no loading="lazy" — and asks for priority over everything else the
+  page fetches. No width/height: .frame reserves the box with aspect-ratio already.
+*/}}
 <article class="product-detail">
   <span class="frame">
-    {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}">
-    {{else}}<img src="{{asset "placeholder.svg"}}" alt="">{{end}}
+    {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" fetchpriority="high" decoding="async">
+    {{else}}<img src="{{asset "placeholder.svg"}}" alt="" fetchpriority="high" decoding="async">{{end}}
   </span>
   <div class="info">
     <h1>{{.Title}}</h1>

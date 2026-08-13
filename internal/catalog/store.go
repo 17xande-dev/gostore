@@ -79,28 +79,93 @@ func (s *Store) List(ctx context.Context) ([]Product, error) {
 	return attachCategories(products, crows), nil
 }
 
-// ListActive returns the products a customer may see: active products with
-// their active variants, and only those that have at least one — a product with
-// nothing purchasable under it is not a listing, it is a dead end.
-//
-// Out-of-stock variants are included. Hiding them would make a size silently
-// disappear from a size selector, which reads as a bug; the storefront shows
-// them as unavailable instead.
-func (s *Store) ListActive(ctx context.Context) ([]Product, error) {
-	rows, err := s.q.ListActiveProducts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: list active products: %w", err)
+// Search describes one request for a page of the storefront catalog. The zero
+// value is not useful: PageSize must be positive, and Page counts from 1, because
+// that is what appears in the URL.
+type Search struct {
+	// Query is the shopper's words. It is matched three ways — stemmed full text,
+	// trigram similarity and a plain substring — because each finds what the others
+	// miss. Empty means "everything", and needs no special case anywhere.
+	Query string
+
+	// CategorySlugs widens rather than narrows: several selected slugs return the
+	// union. These are kinds of thing rather than facets like size and colour, so
+	// asking for a product that is simultaneously a book and apparel is almost
+	// always asking for nothing.
+	//
+	// Slugs rather than ids, so a public URL parameter needs no lookup before the
+	// search can run and a category renamed in the admin keeps its links working.
+	CategorySlugs []string
+
+	Page     int
+	PageSize int
+}
+
+// Results is one page of the catalog plus the size of the whole filtered set, so
+// a pager can be drawn without a second query that might disagree.
+type Results struct {
+	Products []Product
+	Total    int
+	Pages    int
+}
+
+// SearchActive returns one page of the products a customer may see, filtered and
+// ordered by relevance. It is the storefront's only listing query: an unfiltered
+// request is not a special case, because an empty query ranks every row 0 and the
+// ordering falls through to the title.
+func (s *Store) SearchActive(ctx context.Context, q Search) (Results, error) {
+	if q.PageSize <= 0 {
+		return Results{}, fmt.Errorf("catalog: search: page size must be positive")
 	}
-	products := products(rows)
-	if len(products) == 0 {
-		return products, nil
+	if q.Page <= 0 {
+		q.Page = 1
+	}
+	// A slice, never nil: cardinality(NULL) is NULL rather than 0, so a nil array
+	// would make the "no categories selected" test fail and match nothing at all.
+	slugs := q.CategorySlugs
+	if slugs == nil {
+		slugs = []string{}
 	}
 
-	vrows, err := s.q.ListActiveVariants(ctx)
+	rows, err := s.q.SearchActiveProducts(ctx, gen.SearchActiveProductsParams{
+		Q:             q.Query,
+		CategorySlugs: slugs,
+		PageSize:      int32(q.PageSize),
+		PageOffset:    int32((q.Page - 1) * q.PageSize),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("catalog: list active variants: %w", err)
+		return Results{}, fmt.Errorf("catalog: search products: %w", err)
 	}
-	return attachVariants(products, variants(vrows)), nil
+
+	out := Results{Products: make([]Product, 0, len(rows))}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		// Every row carries the same window count, so reading it from the first is
+		// reading it from all of them.
+		out.Total = int(r.TotalCount)
+		out.Products = append(out.Products, Product{
+			ID:          r.ID,
+			Slug:        r.Slug,
+			Title:       r.Title,
+			Description: r.Description,
+			Active:      r.Active,
+			CreatedAt:   r.CreatedAt,
+			UpdatedAt:   r.UpdatedAt,
+			ImageKey:    r.ImageKey,
+		})
+		ids = append(ids, r.ID)
+	}
+	out.Pages = (out.Total + q.PageSize - 1) / q.PageSize
+
+	if len(ids) == 0 {
+		return out, nil
+	}
+	vrows, err := s.q.ListActiveVariantsByProducts(ctx, ids)
+	if err != nil {
+		return Results{}, fmt.Errorf("catalog: search variants: %w", err)
+	}
+	out.Products = attachVariants(out.Products, variants(vrows))
+	return out, nil
 }
 
 // GetActiveBySlug returns one product for the storefront, with its active

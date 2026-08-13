@@ -10,19 +10,55 @@ SELECT * FROM products ORDER BY title;
 -- name: ListAllVariants :many
 SELECT * FROM product_variants ORDER BY size, color, sku;
 
--- The products a customer may see: active, with at least one active variant. A
--- product with nothing purchasable under it is not a listing, it is a dead end.
--- name: ListActiveProducts :many
-SELECT * FROM products p
+-- One statement serves search, category filtering and pagination, because they
+-- are one question — "which products, in what order, and which slice of them" —
+-- and asking it three times would let the three answers disagree.
+--
+-- COUNT(*) OVER () is the part worth naming: the size of the filtered set arrives
+-- in the same round trip as the page, computed before LIMIT applies. A separate
+-- COUNT would be a second trip whose answer can differ from the first under
+-- concurrent edits, which shows up as page numbers promising results that are not
+-- there.
+--
+-- Full-text and trigram are both here because neither is enough alone.
+-- websearch_to_tsquery stems, so "books" reaches a title containing "book", but it
+-- dies on a typo; trigram survives the typo and has no idea the two words are
+-- related. ILIKE catches the third case both miss — a substring inside a word,
+-- which is what a shopper typing half a title is doing.
+--
+-- An empty q needs no special case: websearch_to_tsquery('english','') is an empty
+-- tsquery and similarity(title,'') is 0, so GREATEST is 0 for every row and the
+-- ORDER BY falls through to p.title. A filter-only request is alphabetical for
+-- free, with no second query and no branch in the handler. Passing '' rather than
+-- NULL also keeps sqlc from handing the store a *string.
+-- name: SearchActiveProducts :many
+SELECT p.*, COUNT(*) OVER () AS total_count
+FROM products p
 WHERE p.active
-  AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
-ORDER BY p.title;
+  AND EXISTS (SELECT 1 FROM product_variants v
+              WHERE v.product_id = p.id AND v.active)
+  AND (cardinality(@category_slugs::text[]) = 0
+       OR EXISTS (SELECT 1 FROM product_categories pc
+                  JOIN categories c ON c.id = pc.category_id
+                  WHERE pc.product_id = p.id
+                    AND c.slug = ANY(@category_slugs::text[])))
+  AND (@q::text = ''
+       OR p.search @@ websearch_to_tsquery('english', @q)
+       OR @q <% p.title
+       OR p.title ILIKE '%' || @q || '%')
+ORDER BY GREATEST(ts_rank_cd(p.search, websearch_to_tsquery('english', @q)),
+                  similarity(p.title, @q)) DESC,
+         p.title
+LIMIT @page_size OFFSET @page_offset;
 
+-- The variants for one page of products, and only that page: reading every active
+-- variant in the catalog to render 24 products would undo the paging.
+--
 -- Out-of-stock variants are included. Hiding them makes a size silently vanish
 -- from a selector, which reads as a bug; the storefront marks them unavailable.
--- name: ListActiveVariants :many
+-- name: ListActiveVariantsByProducts :many
 SELECT * FROM product_variants
-WHERE active AND product_id IN (SELECT id FROM products WHERE active)
+WHERE active AND product_id = ANY(@product_ids::uuid[])
 ORDER BY size, color, sku;
 
 -- name: GetActiveProductBySlug :one

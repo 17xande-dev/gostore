@@ -226,6 +226,105 @@ pre.raw {
   margin-block: 0 var(--gap);
 }
 
+/* --- Search and filtering ------------------------------------------------ */
+
+/* The filter form sits outside the swapped results, so it keeps its text and its
+   cursor while the grid under it changes. */
+.filters {
+  margin-block-end: var(--gap-md);
+}
+
+.filters .search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+}
+
+.filters .search label {
+  flex: 1 1 14rem;
+}
+
+.filters input[type="search"] {
+  width: 100%;
+}
+
+/* Wrapping rather than scrolling: a shop with a dozen categories should show them
+   all, and a horizontal scroller hides the ones at the end. */
+.filters .categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm) var(--gap);
+  align-items: center;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--gap-sm) var(--gap);
+  margin-block-start: var(--gap-sm);
+}
+
+.filters .categories legend {
+  font-size: var(--text-small);
+  color: var(--ink-soft);
+  padding-inline: var(--gap-xs);
+}
+
+.filters .categories label {
+  display: inline-flex;
+  gap: var(--gap-xs);
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* --- Pagination ---------------------------------------------------------- */
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+  align-items: center;
+  margin-block-start: var(--gap-lg);
+}
+
+.pager a,
+.pager .current {
+  display: inline-block;
+  min-width: 2.25rem;
+  padding: var(--gap-xs) var(--gap-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  text-align: center;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.pager .current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.count {
+  font-size: var(--text-small);
+  margin-block-start: var(--gap-sm);
+}
+
+.see-all {
+  margin-block-start: var(--gap-md);
+}
+
+/* Visible to a screen reader, not on screen. Used for labels whose purpose is
+   obvious from a placeholder but which still have to exist. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* --- Product cards ------------------------------------------------------- */
 
 /* auto-fill with a clamped minimum rather than breakpoints. The clamp is what makes

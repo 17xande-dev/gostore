@@ -20,6 +20,18 @@ import (
 type productsPageData struct {
 	page
 	Products []catalog.Product
+
+	// Search is what was asked for, so the form comes back filled in.
+	Search   string
+	Facets   []facet
+	Filtered bool
+	Pager    pagination
+
+	// Embedded says this response is going into a page on another origin, which is
+	// what decides between a pager and a link out to the store. An embedder's
+	// address bar is not this store's to rewrite, and hx-push-url inside their page
+	// would do exactly that.
+	Embedded bool
 }
 
 type productPageData struct {
@@ -90,13 +102,69 @@ func (h *Handler) isEmbedded(r *http.Request) bool {
 }
 
 func (h *Handler) products(w http.ResponseWriter, r *http.Request) {
-	products, err := h.cat.ListActive(r.Context())
+	params, ok := parseSearch(r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	// An embedded fragment gets the first page and nothing that navigates: the
+	// filter form and the page links push a URL, and inside somebody else's page
+	// that would rewrite their address bar. It gets a link to the store instead.
+	embedded := h.isEmbedded(r)
+	if embedded {
+		params = searchParams{Page: 1}
+	}
+
+	results, err := h.cat.SearchActive(r.Context(), catalog.Search{
+		Query:         params.Query,
+		CategorySlugs: params.Categories,
+		Page:          params.Page,
+		PageSize:      pageSize,
+	})
 	if err != nil {
 		h.serverError(w, r, err)
 		return
 	}
 
-	data := productsPageData{page: h.newPage(r, "Products"), Products: products}
+	// A page past the end is a 404, on the same grounds as an inactive product.
+	// Page 1 is exempt: an empty catalog, and a search that matched nothing, are
+	// both pages with something to say rather than pages that do not exist.
+	if params.Page > 1 && params.Page > results.Pages {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Every category, always, in its configured order — not just the ones the
+	// current results hit. A filter list that reshapes itself as the shopper types
+	// moves the option they were reaching for. The cost is that an empty category
+	// is offered and returns nothing.
+	var facets []facet
+	if !embedded {
+		cats, err := h.cat.Categories(r.Context())
+		if err != nil {
+			h.serverError(w, r, err)
+			return
+		}
+		selected := make(map[string]bool, len(params.Categories))
+		for _, slug := range params.Categories {
+			selected[slug] = true
+		}
+		facets = make([]facet, 0, len(cats))
+		for _, c := range cats {
+			facets = append(facets, facet{Slug: c.Slug, Name: c.Name, Selected: selected[c.Slug]})
+		}
+	}
+
+	data := productsPageData{
+		page:     h.newPage(r, "Products"),
+		Products: results.Products,
+		Search:   params.Query,
+		Facets:   facets,
+		Filtered: params.filtered(),
+		Pager:    paginate(params, params.Page, results.Pages, results.Total),
+		Embedded: embedded,
+	}
 	h.render(w, r, http.StatusOK, fragmentOr(r, "products_list", "products"), data)
 }
 

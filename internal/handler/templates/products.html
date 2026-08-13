@@ -1,60 +1,196 @@
 {{/*
-  The full catalog page, for a visit to the store itself. The list inside it is
-  its own template, so the same URL can serve just that fragment to an htmx
+  The full catalog page, for a visit to the store itself. The results inside it
+  are their own template, so the same URL can serve just that fragment to an htmx
   request — including one coming from a page on another origin.
+
+  The filter form sits *outside* #products deliberately. htmx swaps only the
+  results, so a search box keeps its text and its cursor while the grid under it
+  changes, and the checkboxes do not flicker back and forth as answers arrive.
 */}}
 {{define "products"}}
 {{template "head" .}}
 
 <h1>{{.StoreName}}</h1>
-{{template "products_list" .}}
+
+{{template "products_filters" .}}
+
+<div id="products">
+  {{template "products_list" .}}
+</div>
 
 {{template "foot" .}}
 {{end}}
 
+{{/*
+  Search and category filtering, as an ordinary GET form: no JavaScript needed for
+  any of it. The checkboxes all share the name "category", which is how one form
+  produces repeated parameters natively — so multi-select costs nothing.
+
+  htmx then upgrades the same form to swap just the results and push the URL, so
+  the address bar always describes what is on screen and a search is a link
+  somebody can send. `show:window:top` puts the viewport back at the top after a
+  swap, declaratively — the alternative is a script, and behaviour lives in files
+  under STATIC_DIR here, never inline.
+*/}}
+{{define "products_filters"}}
+<form class="filters" method="get" action="/products"
+      hx-get="/products" hx-target="#products" hx-push-url="true"
+      hx-swap="innerHTML show:window:top">
+  <p class="search">
+    <label>
+      <span class="visually-hidden">Search</span>
+      <input type="search" name="q" value="{{.Search}}" placeholder="Search products">
+    </label>
+    <button type="submit">Search</button>
+  </p>
+
+  {{if .Facets}}
+  <fieldset class="categories">
+    <legend>Categories</legend>
+    {{/*
+      Selecting several widens the results rather than narrowing them: these are
+      kinds of thing, not facets like size and colour, so asking for a product that
+      is simultaneously a book and apparel is asking for nothing.
+    */}}
+    {{range .Facets}}
+    <label>
+      <input type="checkbox" name="category" value="{{.Slug}}" {{if .Selected}}checked{{end}}>
+      {{.Name}}
+    </label>
+    {{end}}
+  </fieldset>
+  {{end}}
+
+  {{/*
+    Without JavaScript this is how a shopper gets back to everything; with it, the
+    same link swaps the grid like any other.
+  */}}
+  {{if .Filtered}}
+  <p><a href="/products" hx-get="/products" hx-target="#products" hx-push-url="true"
+        hx-swap="innerHTML show:window:top">Clear filters</a></p>
+  {{end}}
+</form>
+{{end}}
+
+{{/*
+  The results: the grid, and then either the pager or — when this is going into
+  somebody else's page — a link through to the whole catalog here.
+*/}}
 {{define "products_list"}}
 {{if not .Products}}
-  <p class="muted">Nothing for sale yet.</p>
+  {{if .Filtered}}
+    <p class="muted">Nothing matched. <a href="/products" hx-get="/products"
+      hx-target="#products" hx-push-url="true" hx-swap="innerHTML show:window:top">Show
+      everything</a>.</p>
+  {{else}}
+    <p class="muted">Nothing for sale yet.</p>
+  {{end}}
 {{else}}
 {{/*
   A grid that reflows on its own: styles.css asks for as many columns as fit above a
   minimum width, so there are no breakpoints here and none in the CSS either.
 */}}
 <ul class="products">
-  {{range .Products}}
+  {{range $i, $p := .Products}}
   <li>
     {{/*
       The whole card is the link, so the target is the card rather than a few words
       of title.
     */}}
-    <a class="product-card" href="/products/{{.Slug}}" hx-boost="true">
+    <a class="product-card" href="/products/{{$p.Slug}}" hx-boost="true">
       {{/*
         The fixed-ratio frame is what makes a catalog of differently-sized
         photographs line up, and what stops a product with no picture yet from being
         a shorter card than its neighbours. The placeholder carries no alt text: the
         title directly below already says what the thing is, so announcing "no image"
         to a screen reader would be noise.
+
+        The first row is deliberately *not* lazy. Lazy-loading an image that is
+        already on screen defers exactly the one that decides how quickly the page
+        looks finished. Four is a guess at a row, and a stated one: the grid asks for
+        as many columns as fit, so the real count is a CSS decision the server cannot
+        know — four over-fetches slightly on a phone and under-fetches on a wide
+        monitor, and the alternative is a breakpoint the CSS deliberately does not
+        have.
+
+        No width/height either, on purpose: .frame reserves the box with aspect-ratio
+        in both layouts, so there is no shift left to fix, and these are object-fit
+        cover images whose real dimensions the store never records.
       */}}
       <span class="frame">
-        {{if .HasImage}}<img src="{{image .ImageKey}}" alt="{{.Title}}" loading="lazy">
-        {{else}}<img src="{{asset "placeholder.svg"}}" alt="" loading="lazy">{{end}}
-      </span>
-      <span class="title">{{.Title}}</span>
-      <span class="price">
-        {{if .OnePrice}}
-          {{$.Currency}} {{money .MinPriceCents}}
+        {{if $p.HasImage}}
+          <img src="{{image $p.ImageKey}}" alt="{{$p.Title}}" decoding="async"
+               {{if ge $i 4}}loading="lazy"{{end}}>
         {{else}}
-          {{$.Currency}} {{money .MinPriceCents}} – {{money .MaxPriceCents}}
+          <img src="{{asset "placeholder.svg"}}" alt="" decoding="async"
+               {{if ge $i 4}}loading="lazy"{{end}}>
+        {{end}}
+      </span>
+      <span class="title">{{$p.Title}}</span>
+      <span class="price">
+        {{if $p.OnePrice}}
+          {{$.Currency}} {{money $p.MinPriceCents}}
+        {{else}}
+          {{$.Currency}} {{money $p.MinPriceCents}} – {{money $p.MaxPriceCents}}
         {{end}}
       </span>
       {{/*
         Sold out is shown rather than the product being hidden: somebody looking for
         it should find out it exists and is gone, not conclude the shop never had it.
       */}}
-      {{if not .InStock}}<span class="badge sold-out">Sold out</span>{{end}}
+      {{if not $p.InStock}}<span class="badge sold-out">Sold out</span>{{end}}
     </a>
   </li>
   {{end}}
 </ul>
+
+{{if .Embedded}}
+  {{/*
+    An embedded fragment showing 24 of 200 products silently would look like the
+    whole shop. The link says how many there are and leads to where searching
+    actually works.
+  */}}
+  <p class="see-all">
+    <a href="{{.BaseURL}}/products">See all {{.Pager.Total}} products</a>
+  </p>
+{{else}}
+  {{template "products_pager" .Pager}}
+{{end}}
+{{end}}
+{{end}}
+
+{{/*
+  The page links. Every URL is built by the handler with net/url, so each one
+  carries the search and the categories that produced this page — assembling query
+  strings in a template is where encoding bugs live.
+
+  Plain <a href> first, upgraded by htmx to swap only the grid. With JavaScript off
+  they are ordinary links to ordinary URLs, which is the whole point.
+*/}}
+{{define "products_pager"}}
+{{if gt .Pages 1}}
+<nav class="pager" aria-label="Catalog pages">
+  {{if .HasPrev}}
+    <a rel="prev" href="{{.PrevURL}}" hx-get="{{.PrevURL}}" hx-target="#products"
+       hx-push-url="true" hx-swap="innerHTML show:window:top">← Previous</a>
+  {{end}}
+
+  {{range .Links}}
+    {{if .Current}}
+      <span class="current" aria-current="page">{{.Number}}</span>
+    {{else}}
+      <a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#products" hx-push-url="true"
+         hx-swap="innerHTML show:window:top">{{.Number}}</a>
+    {{end}}
+  {{end}}
+
+  {{if .HasNext}}
+    <a rel="next" href="{{.NextURL}}" hx-get="{{.NextURL}}" hx-target="#products"
+       hx-push-url="true" hx-swap="innerHTML show:window:top">Next →</a>
+  {{end}}
+</nav>
+{{end}}
+{{if .Total}}
+<p class="count muted">Showing {{.FirstIndex}}–{{.LastIndex}} of {{.Total}}</p>
 {{end}}
 {{end}}
