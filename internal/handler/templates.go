@@ -170,21 +170,33 @@ func linebreaks(s string) template.HTML {
 	return template.HTML(strings.ReplaceAll(escaped, "\n", "<br>"))
 }
 
-// Render executes one named template. It renders into a buffer first, so a
-// template error becomes a 500 instead of a half-written page that already
-// claimed 200.
-func (t *Templates) Render(w http.ResponseWriter, status int, name string, data any) error {
+// Execute renders one named template to bytes, writing nothing. Splitting this
+// out of Render is what lets a caller turn a template failure into a 500: nothing
+// has been sent at the point it returns an error, so the status is still the
+// caller's to choose.
+func (t *Templates) Execute(name string, data any) ([]byte, error) {
 	html, _, err := t.current()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var buf bytes.Buffer
 	if err := html.ExecuteTemplate(&buf, name, data); err != nil {
-		return fmt.Errorf("handler: render %s: %w", name, err)
+		return nil, fmt.Errorf("handler: render %s: %w", name, err)
+	}
+	return buf.Bytes(), nil
+}
+
+// Render executes one named template and writes it. It renders into a buffer
+// first, so a template error becomes the caller's problem to answer rather than a
+// half-written page that already claimed 200.
+func (t *Templates) Render(w http.ResponseWriter, status int, name string, data any) error {
+	body, err := t.Execute(name, data)
+	if err != nil {
+		return err
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, err = buf.WriteTo(w)
+	_, err = w.Write(body)
 	return err
 }
 

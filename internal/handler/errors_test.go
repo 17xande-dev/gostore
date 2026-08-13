@@ -91,9 +91,9 @@ func TestNotFound_BrokenTemplateStillAnswers404(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Errorf("a broken 404 template answered %d, want 404", res.StatusCode)
 	}
-	// Specifically Go's plain 404, which is what proves the fallback ran rather
-	// than the override having quietly rendered to nothing.
-	if !strings.Contains(body, "404 page not found") {
+	// Specifically the plain-text fallback, which is what proves it ran rather than
+	// the override having quietly rendered to nothing.
+	if !strings.Contains(body, "Not Found") || strings.Contains(body, "<html") {
 		t.Errorf("the plain fallback did not run: %q", excerpt(body))
 	}
 }

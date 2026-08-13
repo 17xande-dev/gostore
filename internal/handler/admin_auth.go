@@ -25,7 +25,7 @@ func (h *Handler) adminLoginForm(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return
 	}
 

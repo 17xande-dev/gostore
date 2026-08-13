@@ -118,6 +118,14 @@ resource "google_cloud_run_v2_service" "main" {
         name  = "CURRENCY"
         value = var.currency
       }
+
+      # Cloud Logging reads "severity" and "message"; slog writes "level" and
+      # "msg". Without this every line files under DEFAULT severity, so a
+      # severity>=ERROR filter matches nothing and alerting never fires.
+      env {
+        name  = "LOG_FORMAT"
+        value = "gcp"
+      }
     }
   }
 

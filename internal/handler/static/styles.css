@@ -312,10 +312,11 @@ pre.raw {
   margin-block-start: var(--gap-md);
 }
 
-/* --- Not found ----------------------------------------------------------- */
+/* --- Error pages --------------------------------------------------------- */
 
 /* Narrow and centred, because there is nothing else on the page to align to. */
-.not-found {
+.not-found,
+.error-page {
   max-width: 34rem;
   margin-inline: auto;
   padding-block: var(--gap-xl);
@@ -324,6 +325,7 @@ pre.raw {
 
 /* Big, faint, and hidden from screen readers — it is decoration, and the heading
    under it is what actually says what happened. */
+.error-page .code,
 .not-found .code {
   font-size: 4rem;
   font-weight: 700;
@@ -332,6 +334,7 @@ pre.raw {
   margin: 0;
 }
 
+.error-page .lede,
 .not-found .lede {
   margin-inline: auto;
 }
@@ -342,6 +345,36 @@ pre.raw {
 
 .not-found .search {
   justify-content: center;
+}
+
+.error-page .reference {
+  margin-block-start: var(--gap-lg);
+}
+
+/* Development-only detail. Deliberately loud and left-aligned: it is a wall of Go
+   error text, and making it look like part of the page would invite somebody to
+   ship a deployment still showing it. Never rendered when BASE_URL is https. */
+.error-page .detail {
+  margin-block-start: var(--gap-lg);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  text-align: start;
+
+  > p {
+    margin-block-end: var(--gap-sm);
+    color: var(--warn);
+    font-size: var(--text-small);
+  }
+
+  > pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--paper-sunk);
+    border-radius: var(--radius);
+    padding: var(--gap-sm);
+    margin: 0;
+  }
 }
 
 /* The index page's opening line. Slightly larger than body text and nothing else,

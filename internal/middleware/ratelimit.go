@@ -55,6 +55,15 @@ type RateLimitConfig struct {
 	// and a client's allowance resets by waiting; long enough to outlast the
 	// window is what matters.
 	TTL time.Duration
+
+	// Exceeded answers a throttled request. It is supplied rather than built here
+	// because rendering the store's error page is the handler package's job and
+	// this package cannot import it — and because the payment gateway, which is
+	// also throttled, wants a bare answer rather than a page.
+	//
+	// Retry-After is already set when it runs. Nil falls back to plain text, so a
+	// limiter is still correct on its own.
+	Exceeded http.Handler
 }
 
 // limiterTTL is the default idle lifetime of a bucket.
@@ -95,10 +104,16 @@ func RateLimit(cfg RateLimitConfig, trustProxy bool, log *slog.Logger) Middlewar
 			}
 
 			log.Warn("rate limited", "limiter", cfg.Name, "client_ip", ip,
-				"method", r.Method, "path", r.URL.Path)
+				"method", r.Method, "path", r.URL.Path,
+				"request_id", RequestIDFrom(r.Context()))
 			// Retry-After tells a well-behaved client — and a payment gateway — when
-			// to come back, rather than leaving it to guess or give up.
+			// to come back, rather than leaving it to guess or give up. Set before
+			// Exceeded runs, so whatever answers carries it.
 			w.Header().Set("Retry-After", retryAfter)
+			if cfg.Exceeded != nil {
+				cfg.Exceeded.ServeHTTP(w, r)
+				return
+			}
 			http.Error(w, "too many requests; slow down and try again", http.StatusTooManyRequests)
 		})
 	}

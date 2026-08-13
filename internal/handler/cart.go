@@ -52,7 +52,7 @@ func (h *Handler) cartStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) cartAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return
 	}
 
@@ -104,7 +104,7 @@ func (h *Handler) cartAdd(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) cartUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return
 	}
 

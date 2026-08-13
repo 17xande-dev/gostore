@@ -141,7 +141,7 @@ func (h *Handler) adminCategoryDelete(w http.ResponseWriter, r *http.Request) {
 // a decision worth making twice.
 func (h *Handler) parseCategory(w http.ResponseWriter, r *http.Request) (catalog.Category, string, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return catalog.Category{}, "", nil, false
 	}
 

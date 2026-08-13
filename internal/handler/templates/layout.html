@@ -16,16 +16,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — {{.StoreName}}</title>
 {{/*
-  htmx injects a <style> block for the indicator classes as soon as it loads, and
-  style-src 'self' blocks it — silently, apart from a console warning, and it fails
-  open: the rule that hides an hx-indicator never applies, leaving a spinner
-  permanently visible. So the injection is off and styles.css carries those rules
-  instead. A meta tag is how htmx is configured without inline script.
+  Two settings, both load-bearing. Keep them if you override "head".
 
-  Keep this if you override "head", and keep the .htmx-indicator rules if you
-  replace styles.css. The two halves go together.
+  includeIndicatorStyles:false — htmx injects a <style> block for the indicator
+  classes as soon as it loads, and style-src 'self' blocks it. Silently, apart from
+  a console warning, and it fails *open*: the rule that hides an hx-indicator never
+  applies, leaving a spinner permanently visible. So the injection is off and
+  styles.css carries those rules instead. Keep the .htmx-indicator rules if you
+  replace styles.css — the two halves go together.
+
+  responseHandling — htmx's default is to swap 2xx and to swap *nothing* on 4xx or
+  5xx. That default silently threw away every refusal this store sends: the cart
+  answers "That option is sold out." as a 409 carrying the fragment meant for the
+  page, and the browser dropped it, so a shopper clicked add-to-cart and watched
+  nothing happen. Errors are swapped here instead, and error:true is kept so
+  htmx:responseError still fires for anything listening.
+
+  The other half of that rule lives in the server: a response that is a whole page
+  rather than a fragment sends HX-Retarget: body, so an error page replaces the
+  document instead of being pasted into the cart-count span. See
+  internal/handler/errors.go.
 */}}
-<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,
+  "responseHandling":[{"code":"204","swap":false},
+                      {"code":"[23]..","swap":true},
+                      {"code":"[45]..","swap":true,"error":true}]}'>
 {{/*
   Both bundled, both served from this origin: no CDN, so the CSP stays 'self' for
   scripts and styles alike and no third-party server sits on the payment path.

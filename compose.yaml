@@ -78,6 +78,7 @@ services:
       STORE_NAME: ${STORE_NAME:-gostore}
       CURRENCY: ${CURRENCY:-ZAR}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
       # Development credentials, published on purpose so `make up` yields a
       # working admin: the password is "gostore". Both values MUST be replaced
       # for any deployment anyone else can reach — see the README.

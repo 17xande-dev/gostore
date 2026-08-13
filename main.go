@@ -67,7 +67,7 @@ func run() error {
 		return err
 	}
 
-	log := newLogger(cfg.LogLevel)
+	log := newLogger(cfg.LogLevel, cfg.LogFormat)
 	slog.SetDefault(log)
 
 	if *checkConfig {
@@ -366,7 +366,11 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 		// under it. See Blob.PublicOrigin.
 		policy.ImgSources = []string{cfg.Blob.PublicOrigin()}
 	}
-	return middleware.Chain(mux, middleware.SecurityHeaders(policy))
+	// RequestID first, because Chain reads outermost-first: everything inside it —
+	// including the rate limiter and the security headers, both of which can answer
+	// a request on their own — then runs with an id already in the context to log
+	// against.
+	return middleware.Chain(mux, middleware.RequestID, middleware.SecurityHeaders(policy))
 }
 
 // healthz reports readiness, including the database, so a container platform
@@ -386,7 +390,7 @@ func healthz(pool *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level, format string) *slog.Logger {
 	var l slog.Level
 	switch level {
 	case "debug":
@@ -398,7 +402,30 @@ func newLogger(level string) *slog.Logger {
 	default:
 		l = slog.LevelInfo
 	}
+
+	opts := &slog.HandlerOptions{Level: l}
+	if format == "gcp" {
+		// Google Cloud Logging reads "severity" and "message"; slog writes "level"
+		// and "msg". Without the rename every line files as DEFAULT severity, so a
+		// `severity>=ERROR` filter matches nothing and an alert on the error rate
+		// never fires — the failure is silent in the direction that matters.
+		//
+		// Renaming rather than duplicating, because a line carrying both is a line
+		// that shows the message twice in the console.
+		opts.ReplaceAttr = func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) > 0 {
+				return a
+			}
+			switch a.Key {
+			case slog.LevelKey:
+				a.Key = "severity"
+			case slog.MessageKey:
+				a.Key = "message"
+			}
+			return a
+		}
+	}
 	// JSON to stdout: the one log format every managed platform ingests without
 	// configuration.
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l}))
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
 }

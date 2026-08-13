@@ -116,6 +116,19 @@ type Config struct {
 	// development cannot use them.
 	CookieSecure bool
 
+	// ShowErrorDetail puts the underlying error on the error page, instead of only
+	// a reference to find in the logs. Derived from the same signal as
+	// CookieSecure, deliberately: "is this production" should have one answer
+	// rather than three, and this is already the question HSTS and the CSRF
+	// cookie's TLS mode are decided by.
+	//
+	// The detail is the Go error string, never a stack trace. That string names
+	// tables, columns and constraints, which is reconnaissance for anybody probing
+	// the store, so it is off the moment BaseURL is https — and an http deployment
+	// is one this project already treats as not-production, since it gets neither
+	// Secure cookies nor HSTS.
+	ShowErrorDetail bool
+
 	// EmbedOrigins are the origins allowed to fetch the read-only catalog
 	// fragments cross-origin, for dropping the catalog into a page hosted
 	// elsewhere. Empty means no CORS headers at all, which is the right default
@@ -124,6 +137,16 @@ type Config struct {
 
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
+
+	// LogFormat is "json" or "gcp". Both are JSON on stdout; "gcp" renames two
+	// keys — level to severity, msg to message — because that is what Google Cloud
+	// Logging reads. Without it every line files as DEFAULT severity, so
+	// `severity>=ERROR` matches nothing and alerting on the error rate silently
+	// never fires.
+	//
+	// Opt-in rather than automatic: the rename is a Google convention, and this
+	// project does not assume anybody's platform.
+	LogFormat string
 }
 
 // PayFast is what the PayFast gateway needs from the environment. The merchant
@@ -255,6 +278,7 @@ func Load() (Config, error) {
 		StaticDir:         strings.TrimSpace(os.Getenv("STATIC_DIR")),
 		ThemeReload:       boolEnv("THEME_RELOAD", false),
 		LogLevel:          env("LOG_LEVEL", "info"),
+		LogFormat:         env("LOG_FORMAT", "json"),
 		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
 		SessionTTL:        24 * time.Hour,
 		ShutdownTimeout:   15 * time.Second,
@@ -295,6 +319,9 @@ func Load() (Config, error) {
 		},
 	}
 	c.CookieSecure = strings.HasPrefix(c.BaseURL, "https://")
+	// One signal, three uses: Secure cookies, HSTS, and whether an error page may
+	// say what actually went wrong.
+	c.ShowErrorDetail = !c.CookieSecure
 
 	var missing []string
 	if c.DatabaseURL == "" {
@@ -356,6 +383,9 @@ func Load() (Config, error) {
 	}
 
 	if err := checkLogLevel(c.LogLevel); err != nil {
+		return Config{}, err
+	}
+	if err := checkLogFormat(c.LogFormat); err != nil {
 		return Config{}, err
 	}
 
@@ -528,6 +558,7 @@ func LoadTool() (Config, error) {
 	c := Config{
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		LogLevel:    env("LOG_LEVEL", "info"),
+		LogFormat:   env("LOG_FORMAT", "json"),
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: required env vars not set: DATABASE_URL")
@@ -535,7 +566,19 @@ func LoadTool() (Config, error) {
 	if err := checkLogLevel(c.LogLevel); err != nil {
 		return Config{}, err
 	}
+	if err := checkLogFormat(c.LogFormat); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+func checkLogFormat(format string) error {
+	switch format {
+	case "json", "gcp":
+		return nil
+	default:
+		return fmt.Errorf("config: LOG_FORMAT must be json or gcp; got %q", format)
+	}
 }
 
 func checkLogLevel(level string) error {

@@ -54,30 +54,44 @@ type limiters struct {
 // perMinute builds a limiter allowing n requests a minute, or a pass-through when
 // n is zero. Burst is a third of the allowance, minimum two, so a shopper who
 // double-clicks is never the one who trips it.
-func perMinute(name string, n int, trustProxy bool, log *slog.Logger) middleware.Middleware {
+func perMinute(name string, n int, trustProxy bool, log *slog.Logger, exceeded http.Handler) middleware.Middleware {
 	if n <= 0 {
 		log.Warn("rate limiting is disabled for a surface that has one available", "limiter", name)
 		return func(next http.Handler) http.Handler { return next }
 	}
 	return middleware.RateLimit(middleware.RateLimitConfig{
-		Name:  name,
-		Every: time.Minute / time.Duration(n),
-		Burst: max(2, n/3),
+		Name:     name,
+		Every:    time.Minute / time.Duration(n),
+		Burst:    max(2, n/3),
+		Exceeded: exceeded,
 	}, trustProxy, log)
+}
+
+// rateLimited is the page a throttled person sees. The payment callback does not
+// use it — a gateway wants a status and a Retry-After, not HTML — which is why
+// this is passed per limiter rather than built into the middleware.
+func (h *Handler) rateLimited(w http.ResponseWriter, r *http.Request) {
+	h.clientError(w, r, http.StatusTooManyRequests, "Too many requests",
+		"That came through faster than we allow. Wait a moment and try again — the "+
+			"Retry-After header on this response says how long.")
 }
 
 func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
 	ord *orders.Store, gateway payment.Gateway, mail email.Sender, images blob.Storage,
 	sessions *auth.Sessions) *Handler {
-	return &Handler{
+	h := &Handler{
 		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
 		orders: ord, gateway: gateway, mail: mail, blob: images, sessions: sessions,
-		limits: limiters{
-			login:    perMinute("admin login", cfg.RateLimits.LoginPerMinute, cfg.TrustProxyIP, log),
-			checkout: perMinute("checkout", cfg.RateLimits.CheckoutPerMinute, cfg.TrustProxyIP, log),
-			callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.TrustProxyIP, log),
-		},
 	}
+	page := http.HandlerFunc(h.rateLimited)
+	h.limits = limiters{
+		login:    perMinute("admin login", cfg.RateLimits.LoginPerMinute, cfg.TrustProxyIP, log, page),
+		checkout: perMinute("checkout", cfg.RateLimits.CheckoutPerMinute, cfg.TrustProxyIP, log, page),
+		// No page for the gateway: it is a machine, and the plain status with
+		// Retry-After is exactly what it acts on.
+		callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.TrustProxyIP, log, nil),
+	}
+	return h
 }
 
 // FirstPartyHandler returns everything that changes state — the admin, the cart
@@ -98,7 +112,7 @@ func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler 
 	// This mux is reached only for paths the outer one handed over — /admin/… and
 	// /cart/… — so its own catch-all is what stops /cart/nonsense falling back to
 	// Go's plain 404 while every other unknown URL gets the page.
-	mux.HandleFunc("/", h.notFound)
+	mux.HandleFunc("/", h.notFoundFor(mux))
 	return h.withCSRF(mux)
 }
 
@@ -132,12 +146,19 @@ func (h *Handler) withCSRF(next http.Handler) http.Handler {
 // 403 and nothing else: the request was either forged or made with a stale form,
 // and neither case should be retried silently.
 func (h *Handler) csrfFailed(w http.ResponseWriter, r *http.Request) {
-	h.log.Warn("rejected request with a bad CSRF token",
+	h.logger(r).Warn("rejected request with a bad CSRF token",
 		"method", r.Method, "path", r.URL.Path, "reason", nosurf.Reason(r))
-	if r.Header.Get("HX-Request") == "true" {
+
+	// For htmx, a reload rather than a page: the token is stale, and reloading is
+	// both the explanation and the fix. HX-Refresh is honoured whatever the status,
+	// because htmx handles it before it decides whether to swap anything.
+	if isHTMX(r) {
 		w.Header().Set("HX-Refresh", "true")
+		http.Error(w, "the form you submitted has expired; reload the page and try again", http.StatusForbidden)
+		return
 	}
-	http.Error(w, "the form you submitted has expired; reload the page and try again", http.StatusForbidden)
+	h.clientError(w, r, http.StatusForbidden, "That form has expired",
+		"Forms are only good for a while, and this one has run out. Reload the page you were on and try again.")
 }
 
 // RegisterAdmin wires the admin routes: the login form and the sign-out
@@ -457,7 +478,7 @@ func (h *Handler) adminVariantDelete(w http.ResponseWriter, r *http.Request) {
 // rather than a foreign key violation with no field attached.
 func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request, known []catalog.Category) (catalog.Product, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return catalog.Product{}, nil, false
 	}
 	p := catalog.Product{
@@ -495,7 +516,7 @@ func (h *Handler) categories(w http.ResponseWriter, r *http.Request) ([]catalog.
 // raw input, so a rejected form can be re-rendered exactly as it was typed.
 func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.Variant, variantForm, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+		h.badForm(w, r)
 		return catalog.Variant{}, variantForm{}, nil, false
 	}
 
@@ -591,11 +612,23 @@ func conflictMessage(field string) string {
 	return "Already used by another variant."
 }
 
+// render writes a page, and turns a template that will not execute into a 500.
+//
+// It used to log the failure and return, which left the response at 200 with an
+// empty body — the comment said the status line might already have been written,
+// and that was not true: Templates.Execute renders to bytes and writes nothing, so
+// at this point the status is still ours to choose. An adopter's broken override
+// is now a server error that says so, rather than a blank page that claims success.
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
-	if err := h.tmpl.Render(w, status, name, data); err != nil {
-		// The status line may already be written, so this cannot become a 500;
-		// log it loudly instead.
-		h.log.Error("render failed", "template", name, "path", r.URL.Path, "error", err)
+	body, err := h.tmpl.Execute(name, data)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if _, err := w.Write(body); err != nil {
+		h.logger(r).Error("writing a page failed", "template", name, "path", r.URL.Path, "error", err)
 	}
 }
 
@@ -607,9 +640,4 @@ func (h *Handler) storeError(w http.ResponseWriter, r *http.Request, err error) 
 		return
 	}
 	h.serverError(w, r, err)
-}
-
-func (h *Handler) serverError(w http.ResponseWriter, r *http.Request, err error) {
-	h.log.Error("server error", "method", r.Method, "path", r.URL.Path, "error", err)
-	http.Error(w, "internal server error", http.StatusInternalServerError)
 }

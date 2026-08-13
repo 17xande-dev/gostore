@@ -1,0 +1,83 @@
+{{/*
+  The two error pages that are not 404. They are separate templates because they
+  say genuinely different things, and a shop should be able to reword one without
+  touching the other:
+
+    error_client  4xx — you asked for something that is not yours, or came too
+                  fast. The visitor can usually do something about it.
+    error_server  5xx — this is ours. The visitor can do nothing except come back,
+                  and telling them otherwise wastes their time.
+
+  404 has its own template, not_found, because it is the common one and deserves a
+  search box rather than an apology.
+
+  Both are overridable by name from TEMPLATE_DIR. If you replace error_server,
+  keep the reference on the page: it is the only thing connecting what a customer
+  saw to the line in the log that says why.
+*/}}
+
+{{define "error_client"}}
+{{template "head" .}}
+
+<div class="error-page">
+  <p class="code" aria-hidden="true">{{.Status}}</p>
+  <h1>{{.Heading}}</h1>
+  <p class="lede muted">{{.Message}}</p>
+
+  <p class="see-all">
+    <a href="/products" hx-boost="true">Browse all products</a> ·
+    <a href="/" hx-boost="true">Go to the front page</a>
+  </p>
+
+  {{template "error_reference" .}}
+</div>
+
+{{template "foot" .}}
+{{end}}
+
+{{define "error_server"}}
+{{template "head" .}}
+
+<div class="error-page">
+  <p class="code" aria-hidden="true">{{.Status}}</p>
+  <h1>{{.Heading}}</h1>
+  <p class="lede muted">{{.Message}}</p>
+
+  {{/*
+    No "try again" button. A 500 that is going to succeed on a retry will succeed
+    when they reload; one that is not will waste their time twice.
+  */}}
+  <p class="see-all">
+    <a href="/" hx-boost="true">Go to the front page</a>
+  </p>
+
+  {{template "error_reference" .}}
+</div>
+
+{{template "foot" .}}
+{{end}}
+
+{{/*
+  The reference, and — in development only — what actually went wrong.
+
+  Detail is populated by the handler only when BASE_URL is not https, which is
+  this project's existing signal for "not production" and the same one that
+  decides Secure cookies and HSTS. The Go error string names tables, columns and
+  constraints, so it is reconnaissance in front of a stranger and a first
+  diagnosis in front of the person writing the code.
+*/}}
+{{define "error_reference"}}
+{{if .Reference}}
+  <p class="reference">
+    <small>Reference <code>{{.Reference}}</code> — quote this if you get in touch.</small>
+  </p>
+{{end}}
+
+{{if .Detail}}
+  <div class="detail">
+    <p><strong>Development detail.</strong> This appears because <code>BASE_URL</code>
+    is not <code>https://</code>. It is never shown in production.</p>
+    <pre class="scroll-x">{{.Detail}}</pre>
+  </div>
+{{end}}
+{{end}}

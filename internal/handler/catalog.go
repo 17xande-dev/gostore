@@ -102,7 +102,7 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	// unregistered method used to get 405 from the mux, and now lands here as a
 	// 404 instead, because a pattern that matches beats one that would only have
 	// matched with a different method. POST / is the case that changed.
-	mux.HandleFunc("/", h.notFound)
+	mux.HandleFunc("/", h.notFoundFor(mux))
 
 	// Vendored htmx, served from the binary so the storefront needs no CDN.
 	mux.Handle("GET /static/", http.HandlerFunc(h.static))
