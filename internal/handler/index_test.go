@@ -106,11 +106,15 @@ func TestIndex_RootPatternIsNotACatchAll(t *testing.T) {
 	}
 }
 
-func TestIndex_OnlyAnswersGET(t *testing.T) {
-	// ServeMux answers a known path under an unregistered method with 405 and an
-	// Allow header, rather than 404 — worth pinning, because it is the difference
-	// between "no such page" and "not that way", and it proves the pattern is
-	// method-scoped rather than open to a POST.
+func TestIndex_DoesNotAnswerAPost(t *testing.T) {
+	// The index is registered as "GET /{$}", so a POST is not it.
+	//
+	// It answers 404 rather than the 405 ServeMux gives when *only* a
+	// method-mismatched pattern matches: the "/" catch-all that installs the custom
+	// not-found page also matches this request, and a pattern that matches outright
+	// beats one that would have needed a different method. That is the price of a
+	// 404 page, and it is worth it — 405 on the front page is a distinction nobody
+	// was reading.
 	srv, _ := newStorefront(t, testConfig(), "")
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/", nil)
@@ -123,11 +127,8 @@ func TestIndex_OnlyAnswersGET(t *testing.T) {
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST / = %d, want 405", res.StatusCode)
-	}
-	if got := res.Header.Get("Allow"); !strings.Contains(got, "GET") {
-		t.Errorf("Allow = %q, want it to name GET", got)
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("POST / = %d, want 404", res.StatusCode)
 	}
 }
 

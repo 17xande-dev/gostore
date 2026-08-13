@@ -1,0 +1,36 @@
+{{/*
+  The 404 page. It is the one page a visitor reaches by accident, so it does the
+  two things that actually help: it says plainly what happened, and it offers a way
+  onward rather than a dead end.
+
+  The search box is an ordinary GET form pointing at the catalog — the same form
+  the catalog itself uses, minus the filters. No JavaScript, and no CSRF token
+  needed, because a GET changes nothing.
+*/}}
+{{define "not_found"}}
+{{template "head" .}}
+
+<div class="not-found">
+  <p class="code" aria-hidden="true">404</p>
+  <h1>Page not found</h1>
+  <p class="lede muted">The address you asked for does not exist here. It may have
+  been moved, or the product may no longer be for sale.</p>
+
+  <form class="filters" method="get" action="/products">
+    <p class="search">
+      <label>
+        <span class="visually-hidden">Search products</span>
+        <input type="search" name="q" placeholder="Search products">
+      </label>
+      <button type="submit">Search</button>
+    </p>
+  </form>
+
+  <p class="see-all">
+    <a href="/products" hx-boost="true">Browse all products</a> ·
+    <a href="/" hx-boost="true">Go to the front page</a>
+  </p>
+</div>
+
+{{template "foot" .}}
+{{end}}

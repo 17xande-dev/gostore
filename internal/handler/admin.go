@@ -95,6 +95,10 @@ func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler 
 	h.RegisterAdmin(mux, protect)
 	h.registerCart(mux)
 	h.registerCheckout(mux)
+	// This mux is reached only for paths the outer one handed over — /admin/… and
+	// /cart/… — so its own catch-all is what stops /cart/nonsense falling back to
+	// Go's plain 404 while every other unknown URL gets the page.
+	mux.HandleFunc("/", h.notFound)
 	return h.withCSRF(mux)
 }
 
@@ -599,7 +603,7 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, nam
 // anything else is a genuine server fault.
 func (h *Handler) storeError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, catalog.ErrNotFound) {
-		http.NotFound(w, r)
+		h.notFound(w, r)
 		return
 	}
 	h.serverError(w, r, err)

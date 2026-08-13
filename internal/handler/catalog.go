@@ -63,8 +63,8 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	catalogMux.HandleFunc("GET /products", h.products)
 	catalogMux.HandleFunc("GET /products/{slug}", h.product)
 	// Preflight, for a cross-origin htmx fetch that sets HX-Request.
-	catalogMux.HandleFunc("OPTIONS /products", notFound)
-	catalogMux.HandleFunc("OPTIONS /products/{slug}", notFound)
+	catalogMux.HandleFunc("OPTIONS /products", plainNotFound)
+	catalogMux.HandleFunc("OPTIONS /products/{slug}", plainNotFound)
 
 	firstParty := h.withCSRF(catalogMux)
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,13 +85,24 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	// this store's own front door rather than something to drop into another
 	// origin's page, so it is not embeddable and wants no CORS header.
 	//
-	// "GET /{$}" and not "/": the bare pattern is a subtree that would match every
-	// path nothing else claimed, quietly turning honest 404s into a home page.
-	// {$} matches the root and only the root. Same distinction as GET /admin/{$}.
+	// "GET /{$}" and not "/": {$} matches the root and only the root, so the index
+	// is the front page rather than the answer to every unclaimed path. Same
+	// distinction as GET /admin/{$}.
 	//
 	// nosurf.Token returns "" off the CSRF path rather than panicking, which the
 	// embedded catalog above already relies on, so newPage is safe here.
 	mux.HandleFunc("GET /{$}", h.index)
+
+	// And "/" — the bare subtree, which matches every path no other pattern
+	// claimed — is how a custom 404 page is installed, since ServeMux has no
+	// NotFoundHandler to set. The pair is deliberate: {$} is the front page, and
+	// this is everything nobody claimed.
+	//
+	// One consequence worth knowing: a request to a *known* path under an
+	// unregistered method used to get 405 from the mux, and now lands here as a
+	// 404 instead, because a pattern that matches beats one that would only have
+	// matched with a different method. POST / is the case that changed.
+	mux.HandleFunc("/", h.notFound)
 
 	// Vendored htmx, served from the binary so the storefront needs no CDN.
 	mux.Handle("GET /static/", http.HandlerFunc(h.static))
@@ -117,7 +128,7 @@ func (h *Handler) isEmbedded(r *http.Request) bool {
 func (h *Handler) products(w http.ResponseWriter, r *http.Request) {
 	params, ok := parseSearch(r)
 	if !ok {
-		http.NotFound(w, r)
+		h.notFound(w, r)
 		return
 	}
 
@@ -144,7 +155,7 @@ func (h *Handler) products(w http.ResponseWriter, r *http.Request) {
 	// Page 1 is exempt: an empty catalog, and a search that matched nothing, are
 	// both pages with something to say rather than pages that do not exist.
 	if params.Page > 1 && params.Page > results.Pages {
-		http.NotFound(w, r)
+		h.notFound(w, r)
 		return
 	}
 
@@ -203,5 +214,3 @@ func fragmentOr(r *http.Request, fragment, full string) string {
 	}
 	return full
 }
-
-func notFound(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }

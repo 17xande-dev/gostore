@@ -503,6 +503,27 @@ because it carries no form and therefore sets no cookie — the only HTML page i
 the store that sets none at all. **A form added to the index would be refused with
 a `403`.** Link to a page that has one instead.
 
+### When a page is not found
+
+Every HTML surface answers a missing page with the same rendered `404`: an unknown
+URL, a withdrawn or misspelled product, a `?page=` past the end of the catalog, an
+order id that is not one. It says what happened and offers a search box and a way
+back, because the one page a visitor reaches by accident should not be a dead end.
+
+Two deliberate exceptions:
+
+- **Byte endpoints stay plain.** A missing `/static/…` or `/images/…` answers with
+  Go's one-line `404`, since nothing reads an HTML page out of an `<img>` tag.
+- **A broken theme still answers `404`.** If an overridden `not_found` fails to
+  render, the plain one is sent rather than an empty `200` — the status is what a
+  browser and a crawler act on.
+
+Installing it costs a `"/"` pattern on the mux, which is how a custom not-found
+handler is done in Go: `ServeMux` has no `NotFoundHandler` to set. One consequence
+is that a known path requested with an unregistered method now answers `404` rather
+than `405`, because a pattern that matches beats one that would have matched under
+a different method.
+
 The two catalog routes below are read-only, and both answer twice over: a full page for an ordinary visit, and a
 bare fragment when htmx asks (`HX-Request: true`, unless `HX-Boosted` says the browser is
 replacing the whole document). One URL serves the store and an embedder, so there is no
@@ -879,6 +900,7 @@ The names, and which file they live in:
 | `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
 | | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
 | `index.html` | `index` | The front page. Small on purpose — this is the one most shops replace outright |
+| `not_found.html` | `not_found` | The 404 page, which every mistyped URL and withdrawn product lands on |
 | `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, the results inside it, the search and category form, and the page links |
 | | `product_grid` | The card grid, **shared by the catalog and the index**. Override this to restyle a product card everywhere it appears — overriding `products_list` alone changes the catalog only |
 | `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |

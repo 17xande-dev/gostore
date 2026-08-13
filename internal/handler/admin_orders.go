@@ -58,7 +58,7 @@ func (h *Handler) adminOrderShow(w http.ResponseWriter, r *http.Request) {
 // package's sentinel does not match the other's.
 func (h *Handler) orderError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, orders.ErrNotFound) {
-		http.NotFound(w, r)
+		h.notFound(w, r)
 		return
 	}
 	h.serverError(w, r, err)
