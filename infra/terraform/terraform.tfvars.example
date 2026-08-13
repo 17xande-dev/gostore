@@ -1,0 +1,5 @@
+project_id      = "gostore-prod-479"
+region          = "africa-south1"
+container_image = "africa-south1-docker.pkg.dev/gostore-prod-479/gostore/gostore:v1"
+base_url        = "https://gostore.example.com"
+store_name      = "Your Store Name"
