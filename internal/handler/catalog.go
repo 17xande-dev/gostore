@@ -80,6 +80,19 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	mux.Handle("OPTIONS /products", cors(dispatch))
 	mux.Handle("OPTIONS /products/{slug}", cors(dispatch))
 
+	// The index, outside the two chains above and outside CORS. It carries no
+	// form, so it needs no CSRF token and sets no cookie of any kind; and it is
+	// this store's own front door rather than something to drop into another
+	// origin's page, so it is not embeddable and wants no CORS header.
+	//
+	// "GET /{$}" and not "/": the bare pattern is a subtree that would match every
+	// path nothing else claimed, quietly turning honest 404s into a home page.
+	// {$} matches the root and only the root. Same distinction as GET /admin/{$}.
+	//
+	// nosurf.Token returns "" off the CSRF path rather than panicking, which the
+	// embedded catalog above already relies on, so newPage is safe here.
+	mux.HandleFunc("GET /{$}", h.index)
+
 	// Vendored htmx, served from the binary so the storefront needs no CDN.
 	mux.Handle("GET /static/", http.HandlerFunc(h.static))
 }

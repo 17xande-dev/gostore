@@ -478,10 +478,32 @@ make seed SEED_FILE=my-catalog.json
 
 | Route | Serves |
 |---|---|
+| `GET /` | The index: the store name, a line to replace, and the newest few products |
 | `GET /products?q=…&category=…&page=…` | The catalog, optionally searched, filtered and paged |
 | `GET /products/{slug}` | One product, with its variants |
 
-Both are read-only, and both answer twice over: a full page for an ordinary visit, and a
+### The index page
+
+Deliberately almost empty, and meant to be replaced. It exists so that a fresh
+deployment has a working front door rather than a `404`, and it carries the least
+that is still a page: the store name from `STORE_NAME`, one plain line, the four
+newest products, and a link to the catalog.
+
+The products are **example content, not a feature**. They are the newest four —
+there is no `featured` flag, no extra column and nothing to tick in the admin,
+because a front page that needs curating before it works is a front page that
+ships empty. They share the catalog's card grid (`product_grid`), so restyling a
+card changes both pages rather than one of them.
+
+Replacing the whole thing is one file defining `index` in `TEMPLATE_DIR`. See
+[Theming](#theming).
+
+One thing to know before adding to it: `/` is served outside the CSRF layer,
+because it carries no form and therefore sets no cookie — the only HTML page in
+the store that sets none at all. **A form added to the index would be refused with
+a `403`.** Link to a page that has one instead.
+
+The two catalog routes below are read-only, and both answer twice over: a full page for an ordinary visit, and a
 bare fragment when htmx asks (`HX-Request: true`, unless `HX-Boosted` says the browser is
 replacing the whole document). One URL serves the store and an embedder, so there is no
 second API to keep in step.
@@ -856,7 +878,9 @@ The names, and which file they live in:
 |---|---|---|
 | `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
 | | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
-| `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, just the grid inside it, the search and category form, and the page links |
+| `index.html` | `index` | The front page. Small on purpose — this is the one most shops replace outright |
+| `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, the results inside it, the search and category form, and the page links |
+| | `product_grid` | The card grid, **shared by the catalog and the index**. Override this to restyle a product card everywhere it appears — overriding `products_list` alone changes the catalog only |
 | `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
 | `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
 | `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |

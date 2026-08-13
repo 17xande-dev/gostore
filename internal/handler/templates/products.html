@@ -10,7 +10,11 @@
 {{define "products"}}
 {{template "head" .}}
 
-<h1>{{.StoreName}}</h1>
+{{/*
+  The heading says what the page is, not what the shop is called: the store name is
+  in the header on every page, and on the index it is the heading.
+*/}}
+<h1>All products</h1>
 
 {{template "products_filters" .}}
 
@@ -86,10 +90,37 @@
     <p class="muted">Nothing for sale yet.</p>
   {{end}}
 {{else}}
+{{template "product_grid" .}}
+
+{{if .Embedded}}
+  {{/*
+    An embedded fragment showing 24 of 200 products silently would look like the
+    whole shop. The link says how many there are and leads to where searching
+    actually works.
+  */}}
+  <p class="see-all">
+    <a href="{{.BaseURL}}/products">See all {{.Pager.Total}} products</a>
+  </p>
+{{else}}
+  {{template "products_pager" .Pager}}
+{{end}}
+{{end}}
+{{end}}
+
 {{/*
+  The card grid, shared by the catalog and the index — so restyling a product card
+  changes both, rather than one of them and not the other in a way nobody notices.
+  Override *this* name to change how a card looks anywhere it appears.
+
+  It takes the whole page rather than a list of products, because the eager/lazy
+  rule below needs the index within the grid and the price needs .Currency. The
+  index passes four products, so every card there is eager, which is what a page
+  of four above the fold wants anyway.
+
   A grid that reflows on its own: styles.css asks for as many columns as fit above a
   minimum width, so there are no breakpoints here and none in the CSS either.
 */}}
+{{define "product_grid"}}
 <ul class="products">
   {{range $i, $p := .Products}}
   <li>
@@ -143,20 +174,6 @@
   </li>
   {{end}}
 </ul>
-
-{{if .Embedded}}
-  {{/*
-    An embedded fragment showing 24 of 200 products silently would look like the
-    whole shop. The link says how many there are and leads to where searching
-    actually works.
-  */}}
-  <p class="see-all">
-    <a href="{{.BaseURL}}/products">See all {{.Pager.Total}} products</a>
-  </p>
-{{else}}
-  {{template "products_pager" .Pager}}
-{{end}}
-{{end}}
 {{end}}
 
 {{/*

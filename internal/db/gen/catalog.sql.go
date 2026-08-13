@@ -537,6 +537,59 @@ func (q *Queries) ListCategoriesByProduct(ctx context.Context, productID string)
 	return items, nil
 }
 
+const listNewestActiveProducts = `-- name: ListNewestActiveProducts :many
+SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products p
+WHERE p.active
+  AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
+ORDER BY p.created_at DESC, p.title
+LIMIT $1
+`
+
+// The newest few products, for the index page's example block.
+//
+// The visibility rules are repeated from SearchActiveProducts rather than shared,
+// because Postgres has no cheap way to share a predicate and a view would be a
+// schema change. They must stay in step: the front page must never show something
+// the catalog hides.
+//
+// p.title is the tiebreak because created_at defaults to now(), which is the
+// *transaction* timestamp — a bulk insert or a fast test loop gives several
+// products the same one, and without the tiebreak their order would vary between
+// page loads.
+//
+// No index on created_at, deliberately: a top-N sort over a small products table
+// is a sequential scan and a heap, which is right at this size, and adding one
+// would be a migration. See the search plan discussion for the same argument.
+func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) ([]Product, error) {
+	rows, err := q.db.Query(ctx, listNewestActiveProducts, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Product{}
+	for rows.Next() {
+		var i Product
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Title,
+			&i.Description,
+			&i.ImageKey,
+			&i.Active,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Search,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProducts = `-- name: ListProducts :many
 
 SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products ORDER BY title

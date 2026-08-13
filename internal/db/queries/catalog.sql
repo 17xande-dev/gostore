@@ -51,6 +51,28 @@ ORDER BY GREATEST(ts_rank_cd(p.search, websearch_to_tsquery('english', @q)),
          p.title
 LIMIT @page_size OFFSET @page_offset;
 
+-- The newest few products, for the index page's example block.
+--
+-- The visibility rules are repeated from SearchActiveProducts rather than shared,
+-- because Postgres has no cheap way to share a predicate and a view would be a
+-- schema change. They must stay in step: the front page must never show something
+-- the catalog hides.
+--
+-- p.title is the tiebreak because created_at defaults to now(), which is the
+-- *transaction* timestamp — a bulk insert or a fast test loop gives several
+-- products the same one, and without the tiebreak their order would vary between
+-- page loads.
+--
+-- No index on created_at, deliberately: a top-N sort over a small products table
+-- is a sequential scan and a heap, which is right at this size, and adding one
+-- would be a migration. See the search plan discussion for the same argument.
+-- name: ListNewestActiveProducts :many
+SELECT * FROM products p
+WHERE p.active
+  AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
+ORDER BY p.created_at DESC, p.title
+LIMIT @row_limit;
+
 -- The variants for one page of products, and only that page: reading every active
 -- variant in the catalog to render 24 products would undo the paging.
 --

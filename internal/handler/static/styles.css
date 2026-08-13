@@ -312,6 +312,14 @@ pre.raw {
   margin-block-start: var(--gap-md);
 }
 
+/* The index page's opening line. Slightly larger than body text and nothing else,
+   because the line itself is meant to be replaced and a shop's own words should
+   not have to fight a style that assumed what they would be. */
+.lede {
+  font-size: var(--text-large);
+  max-width: 46ch;
+}
+
 /* Visible to a screen reader, not on screen. Used for labels whose purpose is
    obvious from a placeholder but which still have to exist. */
 .visually-hidden {

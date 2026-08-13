@@ -168,6 +168,40 @@ func (s *Store) SearchActive(ctx context.Context, q Search) (Results, error) {
 	return out, nil
 }
 
+// NewestActive returns the most recently added products a customer may see, with
+// their active variants. The index page is the caller, where it is example
+// content rather than a listing — the catalog is what lists things.
+//
+// It shares SearchActive's visibility rules, so the front page can never show a
+// product the catalog hides. Categories are deliberately not attached: the cards
+// do not render them, so the front page does not pay for a second query.
+func (s *Store) NewestActive(ctx context.Context, limit int) ([]Product, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("catalog: newest: limit must be positive")
+	}
+
+	rows, err := s.q.ListNewestActiveProducts(ctx, int32(limit))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: newest products: %w", err)
+	}
+	out := products(rows)
+	if len(out) == 0 {
+		// Non-nil, so a template's "if no products" branch is about an empty
+		// catalog rather than about a nil this function happened to return.
+		return out, nil
+	}
+
+	ids := make([]string, 0, len(out))
+	for _, p := range out {
+		ids = append(ids, p.ID)
+	}
+	vrows, err := s.q.ListActiveVariantsByProducts(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: newest variants: %w", err)
+	}
+	return attachVariants(out, variants(vrows)), nil
+}
+
 // GetActiveBySlug returns one product for the storefront, with its active
 // variants. An inactive product, or one whose every variant is inactive, is
 // ErrNotFound: from outside, "withdrawn" and "never existed" are the same page.

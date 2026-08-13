@@ -1,0 +1,40 @@
+{{/*
+  The front page. It is deliberately almost empty: enough that a fresh deployment
+  has a working home rather than a 404, and little enough that replacing it is
+  obviously the intended move.
+
+  To make it yours, drop a file into TEMPLATE_DIR that defines "index" — see the
+  README's Theming section. Nothing here needs a fork or a rebuild.
+
+  One thing to know before adding to it: this page is served outside the CSRF
+  layer, because it carries no form and therefore sets no cookie. A form added here
+  would be refused with a 403. Link to a page that has one — the product page and
+  the cart both do.
+*/}}
+{{define "index"}}
+{{template "head" .}}
+
+<h1>{{.StoreName}}</h1>
+
+{{/*
+  Replace this line. It is deliberately plain rather than written for a shop that
+  does not exist yet: made-up copy reads as finished, and the thing about copy that
+  reads as finished is that nobody notices it shipping.
+*/}}
+<p class="lede muted">Welcome to {{.StoreName}}.</p>
+
+{{/*
+  A few of the newest products, as an example of what a front page can put here.
+  The grid is the same one the catalog uses, so restyling a card changes both.
+*/}}
+{{if .Products}}
+  <h2>New in</h2>
+  {{template "product_grid" .}}
+  <p class="see-all"><a href="/products" hx-boost="true">Browse all products →</a></p>
+{{else}}
+  <p class="muted">Nothing for sale yet.
+    <a href="/products" hx-boost="true">The catalog</a> is where products appear.</p>
+{{end}}
+
+{{template "foot" .}}
+{{end}}
