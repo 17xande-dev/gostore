@@ -11,6 +11,8 @@ package cart
 import (
 	"fmt"
 	"time"
+
+	"github.com/17xande-dev/gostore/internal/catalog"
 )
 
 // Cart is one shopper's basket, with its items priced from the catalog as it
@@ -33,8 +35,9 @@ type Item struct {
 	ProductSlug  string
 	ProductTitle string
 	SKU          string
-	Size         string
-	Color        string
+	Option1      string
+	Option2      string
+	Option3      string
 
 	UnitPriceCents int64
 	StockQty       int
@@ -46,16 +49,10 @@ type Item struct {
 }
 
 // Label describes the item's options for display — "L / Navy", or "" for a
-// product with no options.
+// product with no options. Shared with the storefront's rendering rather than
+// reimplemented, so a cart line and a product page cannot disagree.
 func (i Item) Label() string {
-	switch {
-	case i.Size != "" && i.Color != "":
-		return i.Size + " / " + i.Color
-	case i.Size != "":
-		return i.Size
-	default:
-		return i.Color
-	}
+	return catalog.OptionLabel(i.Option1, i.Option2, i.Option3)
 }
 
 // LineTotalCents is the cost of this line at the current price.

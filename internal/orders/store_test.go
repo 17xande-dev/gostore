@@ -42,8 +42,8 @@ func newShop(t *testing.T) *shop {
 		t.Fatalf("Create: %v", err)
 	}
 	for _, v := range []catalog.Variant{
-		{ProductID: p.ID, SKU: "TEE-S", Size: "S", Color: "Navy", PriceCents: 29900, StockQty: 5, Active: true},
-		{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 31900, StockQty: 2, Active: true},
+		{ProductID: p.ID, SKU: "TEE-S", Option1: "S", Option2: "Navy", PriceCents: 29900, StockQty: 5, Active: true},
+		{ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 31900, StockQty: 2, Active: true},
 	} {
 		out, err := s.catalog.CreateVariant(ctx, v)
 		if err != nil {

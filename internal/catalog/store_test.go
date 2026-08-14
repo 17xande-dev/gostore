@@ -97,6 +97,86 @@ func TestStore_DuplicateSlugIsAConflict(t *testing.T) {
 	}
 }
 
+func TestStore_OptionNamesRoundTrip(t *testing.T) {
+	// The option names are on the product and the values are on the variants, so
+	// three separate writes have to carry them: Create, Update and the seed's
+	// Upsert. A struct literal that forgets one is silent — the column simply
+	// stays empty — which is exactly the failure this pins.
+	s := catalog.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	p := mustCreate(t, s, catalog.Product{
+		Slug: "tee", Title: "Tee", Active: true,
+		Option1Name: "Size", Option2Name: "Colour", Option3Name: "Material",
+	})
+	if p.Option1Name != "Size" || p.Option2Name != "Colour" || p.Option3Name != "Material" {
+		t.Fatalf("Create did not return the option names: %+v", p)
+	}
+
+	got, err := s.Get(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Option1Name != "Size" || got.Option3Name != "Material" {
+		t.Errorf("option names did not survive the round trip: %+v", got)
+	}
+
+	// Renaming a heading and clearing an unused slot are both ordinary edits.
+	got.Option1Name, got.Option3Name = "Chest", ""
+	if _, err := s.Update(ctx, got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if reread, err := s.Get(ctx, p.ID); err != nil {
+		t.Fatalf("Get after update: %v", err)
+	} else if reread.Option1Name != "Chest" || reread.Option3Name != "" {
+		t.Errorf("Update did not write the option names: %+v", reread)
+	}
+
+	// Upsert is the seed's path, and it must update the names on a re-run rather
+	// than leave a fixture's earlier spelling in place.
+	up, err := s.Upsert(ctx, catalog.Product{
+		Slug: "tee", Title: "Tee", Active: true, Option1Name: "Format",
+	})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if up.Option1Name != "Format" || up.Option2Name != "" {
+		t.Errorf("Upsert did not write the option names: %+v", up)
+	}
+}
+
+func TestStore_VariantOptionsRoundTrip(t *testing.T) {
+	// The third slot in particular: two would be easy to carry through by accident
+	// while the third stays empty everywhere.
+	s := catalog.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	p := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
+	v := mustCreateVariant(t, s, catalog.Variant{
+		ProductID: p.ID, SKU: "TEE-1",
+		Option1: "L", Option2: "Navy", Option3: "Cotton",
+		PriceCents: 29900, StockQty: 1, Active: true,
+	})
+	if v.Option3 != "Cotton" {
+		t.Fatalf("CreateVariant dropped an option: %+v", v)
+	}
+
+	v.Option2, v.Option3 = "Black", "Linen"
+	if _, err := s.UpdateVariant(ctx, v); err != nil {
+		t.Fatalf("UpdateVariant: %v", err)
+	}
+	got, err := s.Variants(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Variants: %v", err)
+	}
+	if len(got) != 1 || got[0].Option2 != "Black" || got[0].Option3 != "Linen" {
+		t.Errorf("UpdateVariant did not write the options: %+v", got)
+	}
+	if want := "L / Black / Linen"; got[0].Label() != want {
+		t.Errorf("Label() = %q, want %q", got[0].Label(), want)
+	}
+}
+
 func TestStore_Variants(t *testing.T) {
 	s := catalog.NewStore(dbtest.Pool(t))
 	ctx := t.Context()
@@ -104,7 +184,7 @@ func TestStore_Variants(t *testing.T) {
 	p := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
 
 	v, err := s.CreateVariant(ctx, catalog.Variant{
-		ProductID: p.ID, SKU: "TEE-M-BLK", Size: "M", Color: "Black", PriceCents: 29900, StockQty: 7, Active: true,
+		ProductID: p.ID, SKU: "TEE-M-BLK", Option1: "M", Option2: "Black", PriceCents: 29900, StockQty: 7, Active: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateVariant: %v", err)
@@ -113,16 +193,16 @@ func TestStore_Variants(t *testing.T) {
 		t.Fatalf("CreateVariant returned %+v", v)
 	}
 
-	// A duplicate SKU and a duplicate size/colour pair are different mistakes
+	// A duplicate SKU and a duplicate set of option values are different mistakes
 	// and must be reported against different fields.
-	_, err = s.CreateVariant(ctx, catalog.Variant{ProductID: p.ID, SKU: "TEE-M-BLK", Size: "L", PriceCents: 1, Active: true})
+	_, err = s.CreateVariant(ctx, catalog.Variant{ProductID: p.ID, SKU: "TEE-M-BLK", Option1: "L", PriceCents: 1, Active: true})
 	var conflict *catalog.ConflictError
 	if !errors.As(err, &conflict) || conflict.Field != "sku" {
 		t.Errorf("duplicate SKU = %v, want a sku conflict", err)
 	}
-	_, err = s.CreateVariant(ctx, catalog.Variant{ProductID: p.ID, SKU: "OTHER", Size: "M", Color: "Black", PriceCents: 1, Active: true})
+	_, err = s.CreateVariant(ctx, catalog.Variant{ProductID: p.ID, SKU: "OTHER", Option1: "M", Option2: "Black", PriceCents: 1, Active: true})
 	if !errors.As(err, &conflict) || conflict.Field != "options" {
-		t.Errorf("duplicate size/colour = %v, want an options conflict", err)
+		t.Errorf("duplicate options = %v, want an options conflict", err)
 	}
 
 	v.StockQty = 2
@@ -229,7 +309,7 @@ func TestStore_UpsertIsRerunnable(t *testing.T) {
 	p := catalog.Product{
 		Slug: "tote", Title: "Tote", Active: true,
 		Variants: []catalog.Variant{
-			{SKU: "TOTE-STD", Color: "Natural", PriceCents: 14900, StockQty: 20, Active: true},
+			{SKU: "TOTE-STD", Option1: "Natural", PriceCents: 14900, StockQty: 20, Active: true},
 		},
 	}
 
@@ -278,10 +358,10 @@ func TestStore_SearchActiveVisibilityRules(t *testing.T) {
 	// Visible: active product, one active variant that happens to be sold out
 	// plus one in stock.
 	visible := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
-	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 0, Active: true})
-	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-M", Size: "M", PriceCents: 31900, StockQty: 2, Active: true})
+	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-S", Option1: "S", PriceCents: 29900, StockQty: 0, Active: true})
+	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-M", Option1: "M", PriceCents: 31900, StockQty: 2, Active: true})
 	// Same product, an inactive variant: withdrawn options must not show up.
-	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-L", Size: "L", PriceCents: 99900, StockQty: 5, Active: false})
+	mustCreateVariant(t, s, catalog.Variant{ProductID: visible.ID, SKU: "TEE-L", Option1: "L", PriceCents: 99900, StockQty: 5, Active: false})
 
 	// Hidden: the product itself is inactive.
 	inactive := mustCreate(t, s, catalog.Product{Slug: "draft", Title: "Draft", Active: false})
@@ -332,8 +412,8 @@ func TestStore_GetActiveBySlug(t *testing.T) {
 	// The size distinguishes them because (product_id, size, color) is unique —
 	// a product gets at most one optionless variant, which is the invariant that
 	// keeps "has options" from being a special case anywhere else.
-	mustCreateVariant(t, s, catalog.Variant{ProductID: p.ID, SKU: "AB-1", Size: "Paperback", PriceCents: 24900, StockQty: 3, Active: true})
-	mustCreateVariant(t, s, catalog.Variant{ProductID: p.ID, SKU: "AB-2", Size: "Hardcover", PriceCents: 34900, StockQty: 1, Active: false})
+	mustCreateVariant(t, s, catalog.Variant{ProductID: p.ID, SKU: "AB-1", Option1: "Paperback", PriceCents: 24900, StockQty: 3, Active: true})
+	mustCreateVariant(t, s, catalog.Variant{ProductID: p.ID, SKU: "AB-2", Option1: "Hardcover", PriceCents: 34900, StockQty: 1, Active: false})
 
 	got, err := s.GetActiveBySlug(ctx, "a-book")
 	if err != nil {

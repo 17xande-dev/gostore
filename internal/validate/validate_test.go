@@ -67,7 +67,7 @@ func TestProduct(t *testing.T) {
 }
 
 func TestVariant(t *testing.T) {
-	valid := catalog.Variant{SKU: "TEE-M", Size: "M", Color: "Black", PriceCents: 100, StockQty: 1}
+	valid := catalog.Variant{SKU: "TEE-M", Option1: "M", Option2: "Black", PriceCents: 100, StockQty: 1}
 	if errs := Variant(valid); errs.Any() {
 		t.Errorf("a valid variant was rejected: %s", errs)
 	}
@@ -88,11 +88,58 @@ func TestVariant(t *testing.T) {
 		{"no sku", func(v *catalog.Variant) { v.SKU = "" }, "sku"},
 		{"negative price", func(v *catalog.Variant) { v.PriceCents = -1 }, "price"},
 		{"negative stock", func(v *catalog.Variant) { v.StockQty = -1 }, "stock_qty"},
+		{"overlong option 1", func(v *catalog.Variant) { v.Option1 = strings.Repeat("x", 101) }, "option1"},
+		{"overlong option 3", func(v *catalog.Variant) { v.Option3 = strings.Repeat("x", 101) }, "option3"},
 	}
 	for _, tc := range cases {
 		v := valid
 		tc.mut(&v)
 		errs := Variant(v)
+		if _, ok := errs[tc.field]; !ok {
+			t.Errorf("%s: no error on %q, got %s", tc.name, tc.field, errs)
+		}
+	}
+}
+
+func TestProductOptionNames(t *testing.T) {
+	base := catalog.Product{Slug: "tee", Title: "Tee"}
+
+	ok := []struct {
+		name    string
+		options [3]string
+	}{
+		{"none at all", [3]string{}},
+		{"one", [3]string{"Format", "", ""}},
+		{"two", [3]string{"Size", "Colour", ""}},
+		{"all three", [3]string{"Size", "Colour", "Material"}},
+	}
+	for _, tc := range ok {
+		p := base
+		p.Option1Name, p.Option2Name, p.Option3Name = tc.options[0], tc.options[1], tc.options[2]
+		if errs := Product(p); errs.Any() {
+			t.Errorf("%s: valid option names were rejected: %s", tc.name, errs)
+		}
+	}
+
+	bad := []struct {
+		name    string
+		options [3]string
+		field   string
+	}{
+		// Values are matched to names by position, so a hole would leave every
+		// variant's first value with no heading above it.
+		{"gap in slot 1", [3]string{"", "Colour", ""}, "option2_name"},
+		{"gap in slot 2", [3]string{"Size", "", "Material"}, "option3_name"},
+		// Two headings reading the same makes the variants under them
+		// indistinguishable, and the comparison is deliberately case-insensitive.
+		{"duplicate", [3]string{"Size", "Size", ""}, "option2_name"},
+		{"duplicate in another case", [3]string{"Size", "SIZE", ""}, "option2_name"},
+		{"overlong", [3]string{strings.Repeat("x", 101), "", ""}, "option1_name"},
+	}
+	for _, tc := range bad {
+		p := base
+		p.Option1Name, p.Option2Name, p.Option3Name = tc.options[0], tc.options[1], tc.options[2]
+		errs := Product(p)
 		if _, ok := errs[tc.field]; !ok {
 			t.Errorf("%s: no error on %q, got %s", tc.name, tc.field, errs)
 		}

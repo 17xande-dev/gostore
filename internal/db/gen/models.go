@@ -54,8 +54,7 @@ type OrderItem struct {
 	OrderID        string
 	VariantID      string
 	Title          string
-	Size           string
-	Color          string
+	VariantLabel   string
 	UnitPriceCents int64
 	Quantity       int
 }
@@ -66,6 +65,9 @@ type Product struct {
 	Title       string
 	Description string
 	ImageKey    string
+	Option1Name string
+	Option2Name string
+	Option3Name string
 	Active      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -81,8 +83,9 @@ type ProductVariant struct {
 	ID         string
 	ProductID  string
 	SKU        string
-	Size       string
-	Color      string
+	Option1    string
+	Option2    string
+	Option3    string
 	PriceCents int64
 	StockQty   int
 	Active     bool

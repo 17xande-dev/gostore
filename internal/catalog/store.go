@@ -152,6 +152,9 @@ func (s *Store) SearchActive(ctx context.Context, q Search) (Results, error) {
 			CreatedAt:   r.CreatedAt,
 			UpdatedAt:   r.UpdatedAt,
 			ImageKey:    r.ImageKey,
+			Option1Name: r.Option1Name,
+			Option2Name: r.Option2Name,
+			Option3Name: r.Option3Name,
 		})
 		ids = append(ids, r.ID)
 	}
@@ -275,6 +278,9 @@ func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
 			Title:       p.Title,
 			Description: p.Description,
 			Active:      p.Active,
+			Option1Name: p.Option1Name,
+			Option2Name: p.Option2Name,
+			Option3Name: p.Option3Name,
 		})
 		if err != nil {
 			return Product{}, translate(fmt.Errorf("catalog: create product: %w", err))
@@ -298,6 +304,9 @@ func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 			Title:       p.Title,
 			Description: p.Description,
 			Active:      p.Active,
+			Option1Name: p.Option1Name,
+			Option2Name: p.Option2Name,
+			Option3Name: p.Option3Name,
 		})
 		if err != nil {
 			return Product{}, translate(fmt.Errorf("catalog: update product: %w", err))
@@ -397,8 +406,9 @@ func (s *Store) CreateVariant(ctx context.Context, v Variant) (Variant, error) {
 	row, err := s.q.CreateVariant(ctx, gen.CreateVariantParams{
 		ProductID:  v.ProductID,
 		SKU:        v.SKU,
-		Size:       v.Size,
-		Color:      v.Color,
+		Option1:    v.Option1,
+		Option2:    v.Option2,
+		Option3:    v.Option3,
 		PriceCents: v.PriceCents,
 		StockQty:   v.StockQty,
 		Active:     v.Active,
@@ -417,8 +427,9 @@ func (s *Store) UpdateVariant(ctx context.Context, v Variant) (Variant, error) {
 		ID:         v.ID,
 		ProductID:  v.ProductID,
 		SKU:        v.SKU,
-		Size:       v.Size,
-		Color:      v.Color,
+		Option1:    v.Option1,
+		Option2:    v.Option2,
+		Option3:    v.Option3,
 		PriceCents: v.PriceCents,
 		StockQty:   v.StockQty,
 		Active:     v.Active,
@@ -537,6 +548,9 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		Title:       p.Title,
 		Description: p.Description,
 		Active:      p.Active,
+		Option1Name: p.Option1Name,
+		Option2Name: p.Option2Name,
+		Option3Name: p.Option3Name,
 	})
 	if err != nil {
 		return Product{}, translate(fmt.Errorf("catalog: upsert product: %w", err))
@@ -571,8 +585,9 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		vrow, err := q.UpsertVariant(ctx, gen.UpsertVariantParams{
 			ProductID:  out.ID,
 			SKU:        v.SKU,
-			Size:       v.Size,
-			Color:      v.Color,
+			Option1:    v.Option1,
+			Option2:    v.Option2,
+			Option3:    v.Option3,
 			PriceCents: v.PriceCents,
 			StockQty:   v.StockQty,
 			Active:     v.Active,
@@ -646,6 +661,9 @@ func product(r gen.Product) Product {
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 		ImageKey:    r.ImageKey,
+		Option1Name: r.Option1Name,
+		Option2Name: r.Option2Name,
+		Option3Name: r.Option3Name,
 	}
 }
 
@@ -662,8 +680,9 @@ func variant(r gen.ProductVariant) Variant {
 		ID:         r.ID,
 		ProductID:  r.ProductID,
 		SKU:        r.SKU,
-		Size:       r.Size,
-		Color:      r.Color,
+		Option1:    r.Option1,
+		Option2:    r.Option2,
+		Option3:    r.Option3,
 		PriceCents: r.PriceCents,
 		StockQty:   r.StockQty,
 		Active:     r.Active,
@@ -720,7 +739,7 @@ func translate(err error) error {
 				return &ConflictError{Field: "slug"}
 			case strings.Contains(pgErr.ConstraintName, "sku"):
 				return &ConflictError{Field: "sku"}
-			case strings.Contains(pgErr.ConstraintName, "size_color"):
+			case strings.Contains(pgErr.ConstraintName, "options"):
 				return &ConflictError{Field: "options"}
 			}
 		}

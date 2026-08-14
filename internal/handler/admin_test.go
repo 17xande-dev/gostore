@@ -200,8 +200,8 @@ func TestAdminProducts_ListsProductsAndStock(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	for _, v := range []catalog.Variant{
-		{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 4, Active: true},
-		{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 3, Active: true},
+		{ProductID: p.ID, SKU: "TEE-S", Option1: "S", PriceCents: 29900, StockQty: 4, Active: true},
+		{ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: 3, Active: true},
 	} {
 		if _, err := store.CreateVariant(ctx, v); err != nil {
 			t.Fatalf("CreateVariant: %v", err)
@@ -239,6 +239,74 @@ func TestAdminProducts_CreateDerivesSlugAndRedirectsToEdit(t *testing.T) {
 	// bought yet.
 	if got, want := res.Header.Get("Location"), "/admin/products/"+p.ID+"/edit"; got != want {
 		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+func TestAdminProducts_OptionNamesRoundTripThroughTheForm(t *testing.T) {
+	// End to end through a real form submission, because the interesting failure
+	// is not in the store — it is a field the template forgets to render or the
+	// parser forgets to read, either of which leaves the column empty in silence.
+	srv, store := setup(t)
+	ctx := t.Context()
+
+	res, body := post(t, srv, "/admin/products", url.Values{
+		"title":        {"Conference 2026"},
+		"active":       {"1"},
+		"option1_name": {"Format"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST /admin/products = %d %s", res.StatusCode, body)
+	}
+	p, err := store.GetBySlug(ctx, "conference-2026")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	if p.Option1Name != "Format" {
+		t.Fatalf("option name was not saved: %+v", p)
+	}
+
+	// It comes back into the form, or an edit that touches anything else silently
+	// blanks it.
+	if _, body := get(t, srv, "/admin/products/"+p.ID+"/edit"); !strings.Contains(body, `value="Format"`) {
+		t.Error("the edit form does not render the saved option name")
+	}
+
+	// And the variant row below it is labelled with that name rather than a
+	// hardcoded heading.
+	if _, err := store.CreateVariant(ctx, catalog.Variant{
+		ProductID: p.ID, SKU: "CONF-AUDIO", Option1: "Audio",
+		PriceCents: 15000, StockQty: 1, Active: true,
+	}); err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+	_, body = get(t, srv, "/admin/products/"+p.ID+"/edit")
+	if !strings.Contains(body, `<label>Format <input name="option1" value="Audio"`) {
+		t.Errorf("the variant row is not labelled from the product's option name: %s", body)
+	}
+	// The unused slots must not appear as unlabelled inputs.
+	if strings.Contains(body, `name="option2" value=`) {
+		t.Error("an unnamed option slot was rendered as a variant input")
+	}
+}
+
+func TestAdminProducts_RejectsGappedOptionNames(t *testing.T) {
+	// Values are matched to names by position, so slot 2 named while slot 1 is
+	// blank would leave every variant's first value with no heading.
+	srv, store := setup(t)
+
+	res, body := post(t, srv, "/admin/products", url.Values{
+		"title":        {"Gapped"},
+		"active":       {"1"},
+		"option2_name": {"Colour"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("POST with a gapped option = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Fill the earlier option in first.") {
+		t.Errorf("no message explaining the gap: %s", body)
+	}
+	if _, err := store.GetBySlug(t.Context(), "gapped"); err == nil {
+		t.Error("the rejected product was written anyway")
 	}
 }
 
@@ -341,8 +409,8 @@ func TestAdminVariants_AddParsesPriceAsCents(t *testing.T) {
 
 	res, body := post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
 		"sku":       {"TEE-M-BLK"},
-		"size":      {"M"},
-		"color":     {"Black"},
+		"option1":   {"M"},
+		"option2":   {"Black"},
 		"price":     {"299.99"},
 		"stock_qty": {"7"},
 		"active":    {"1"},
@@ -416,7 +484,7 @@ func TestAdminVariants_UpdateAndDelete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	v, err := store.CreateVariant(ctx, catalog.Variant{
-		ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 7, Active: true,
+		ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: 7, Active: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateVariant: %v", err)
@@ -425,7 +493,7 @@ func TestAdminVariants_UpdateAndDelete(t *testing.T) {
 	base := "/admin/products/" + p.ID + "/variants/" + v.ID
 	res, body := post(t, srv, base, url.Values{
 		"sku":       {"TEE-M"},
-		"size":      {"M"},
+		"option1":   {"M"},
 		"price":     {"319.00"},
 		"stock_qty": {"2"},
 		// "active" omitted, so the variant comes off sale.
@@ -462,14 +530,14 @@ func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := store.CreateVariant(ctx, catalog.Variant{
-		ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 1, Active: true,
+		ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: 1, Active: true,
 	}); err != nil {
 		t.Fatalf("CreateVariant: %v", err)
 	}
 
 	res, body := post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
 		"sku":       {"TEE-M"},
-		"size":      {"L"},
+		"option1":   {"L"},
 		"price":     {"299.00"},
 		"stock_qty": {"1"},
 	})
@@ -483,7 +551,7 @@ func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
 	// Same SKU rejected, and the same size/colour pair reported differently.
 	res, body = post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
 		"sku":       {"TEE-M-2"},
-		"size":      {"M"},
+		"option1":   {"M"},
 		"price":     {"299.00"},
 		"stock_qty": {"1"},
 	})

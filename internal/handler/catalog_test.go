@@ -63,9 +63,9 @@ func stock(t *testing.T, store *catalog.Store) catalog.Product {
 		t.Fatalf("Create: %v", err)
 	}
 	for _, v := range []catalog.Variant{
-		{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 4, Active: true},
-		{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 31900, StockQty: 0, Active: true},
-		{ProductID: p.ID, SKU: "TEE-L", Size: "L", PriceCents: 99900, StockQty: 9, Active: false},
+		{ProductID: p.ID, SKU: "TEE-S", Option1: "S", PriceCents: 29900, StockQty: 4, Active: true},
+		{ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 31900, StockQty: 0, Active: true},
+		{ProductID: p.ID, SKU: "TEE-L", Option1: "L", PriceCents: 99900, StockQty: 9, Active: false},
 	} {
 		if _, err := store.CreateVariant(ctx, v); err != nil {
 			t.Fatalf("CreateVariant: %v", err)

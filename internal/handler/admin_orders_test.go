@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -156,7 +157,7 @@ func TestAdminOrders_SnapshotSurvivesACatalogEdit(t *testing.T) {
 
 	v := s.variants["S"]
 	v.PriceCents = 99900
-	v.Size = "RENAMED"
+	v.Option1 = "RENAMED"
 	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
@@ -175,6 +176,43 @@ func TestAdminOrders_SnapshotSurvivesACatalogEdit(t *testing.T) {
 	}
 	if strings.Contains(body, "Renamed Product") || strings.Contains(body, "999.00") {
 		t.Error("a catalog edit rewrote purchase history")
+	}
+	// The option label is a snapshot for the same reason the title is. It is stored
+	// rendered rather than joined from the variant at read time, so renaming an
+	// option value — or the product's option *names* — cannot relabel a sale.
+	if strings.Contains(body, "RENAMED") {
+		t.Error("a renamed variant option rewrote the order's line label")
+	}
+}
+
+func TestAdminOrders_SnapshotSurvivesRenamedOptionNames(t *testing.T) {
+	// The half the previous test cannot reach: renaming the product's option
+	// *headings* rather than a variant's value. Both would relabel the order if the
+	// label were joined at read time instead of snapshotted.
+	s := newCheckoutShop(t)
+	id := paidOrder(t, s)
+	signIn(t, s.srv)
+
+	// The whole page, minus the per-request CSRF token, which is the only thing
+	// that legitimately differs between two reads.
+	csrf := regexp.MustCompile(`value="[^"]*"`)
+	orderPage := func() string {
+		_, body := get(t, s.srv, "/admin/orders/"+id)
+		return csrf.ReplaceAllString(body, `value="..."`)
+	}
+	before := orderPage()
+
+	p, err := s.catalog.GetBySlug(t.Context(), "tee")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	p.Option1Name = "Chest measurement"
+	if _, err := s.catalog.Update(t.Context(), p); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if after := orderPage(); after != before {
+		t.Error("renaming an option heading changed a recorded order")
 	}
 }
 

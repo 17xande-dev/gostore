@@ -7,13 +7,13 @@
 -- be NULL, but sqlc cannot prove that and would otherwise hand the store a *bool
 -- — implying a third state that does not exist. The cast says so in SQL.
 -- name: ListCartLinesForOrder :many
-SELECT i.variant_id, i.quantity, p.title, v.size, v.color,
+SELECT i.variant_id, i.quantity, p.title, v.option1, v.option2, v.option3,
        v.price_cents, v.stock_qty, (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
 JOIN product_variants v ON v.id = i.variant_id
 JOIN products p ON p.id = v.product_id
 WHERE i.cart_id = $1
-ORDER BY p.title, v.size, v.color, v.sku;
+ORDER BY p.title, v.option1, v.option2, v.option3, v.sku;
 
 -- name: CreateOrder :one
 INSERT INTO orders (id, cart_id, customer_name, customer_email, customer_phone,
@@ -22,9 +22,14 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, created_at;
 
 -- The snapshot: later catalog edits must never rewrite purchase history.
+--
+-- variant_label is the options already rendered — 'L / Navy' — rather than the
+-- three values in their own columns, because this snapshot is read only for
+-- display. Rendering it here rather than at read time also means a product that
+-- later renames its option slots cannot relabel a completed sale.
 -- name: CreateOrderItem :exec
-INSERT INTO order_items (order_id, variant_id, title, size, color, unit_price_cents, quantity)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO order_items (order_id, variant_id, title, variant_label, unit_price_cents, quantity)
+VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: GetOrder :one
 SELECT * FROM orders WHERE id = $1;
@@ -45,7 +50,7 @@ SELECT * FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1;
 SELECT * FROM orders ORDER BY created_at DESC LIMIT $1;
 
 -- name: ListOrderItems :many
-SELECT variant_id, title, size, color, unit_price_cents, quantity
+SELECT variant_id, title, variant_label, unit_price_cents, quantity
 FROM order_items WHERE order_id = $1 ORDER BY id;
 
 -- FOR UPDATE is the whole safety mechanism of MarkPaid: it serialises concurrent

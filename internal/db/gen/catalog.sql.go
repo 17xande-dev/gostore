@@ -63,7 +63,7 @@ const clearProductImage = `-- name: ClearProductImage :one
 UPDATE products
 SET image_key = '', updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, error) {
@@ -75,6 +75,9 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -122,9 +125,10 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (id, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
+INSERT INTO products (id, slug, title, description, active,
+                      option1_name, option2_name, option3_name)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type CreateProductParams struct {
@@ -132,6 +136,9 @@ type CreateProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Option1Name string
+	Option2Name string
+	Option3Name string
 }
 
 // The database generates the id, which is why no UUID library reaches the binary.
@@ -145,6 +152,9 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Option1Name,
+		arg.Option2Name,
+		arg.Option3Name,
 	)
 	var i Product
 	err := row.Scan(
@@ -153,6 +163,9 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -162,16 +175,18 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 }
 
 const createVariant = `-- name: CreateVariant :one
-INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-RETURNING id, product_id, sku, size, color, price_cents, stock_qty, active
+INSERT INTO product_variants (id, product_id, sku, option1, option2, option3,
+                              price_cents, stock_qty, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active
 `
 
 type CreateVariantParams struct {
 	ProductID  string
 	SKU        string
-	Size       string
-	Color      string
+	Option1    string
+	Option2    string
+	Option3    string
 	PriceCents int64
 	StockQty   int
 	Active     bool
@@ -181,8 +196,9 @@ func (q *Queries) CreateVariant(ctx context.Context, arg CreateVariantParams) (P
 	row := q.db.QueryRow(ctx, createVariant,
 		arg.ProductID,
 		arg.SKU,
-		arg.Size,
-		arg.Color,
+		arg.Option1,
+		arg.Option2,
+		arg.Option3,
 		arg.PriceCents,
 		arg.StockQty,
 		arg.Active,
@@ -192,8 +208,9 @@ func (q *Queries) CreateVariant(ctx context.Context, arg CreateVariantParams) (P
 		&i.ID,
 		&i.ProductID,
 		&i.SKU,
-		&i.Size,
-		&i.Color,
+		&i.Option1,
+		&i.Option2,
+		&i.Option3,
 		&i.PriceCents,
 		&i.StockQty,
 		&i.Active,
@@ -248,7 +265,7 @@ func (q *Queries) DeleteVariant(ctx context.Context, arg DeleteVariantParams) (i
 }
 
 const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE slug = $1 AND active
+SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1 AND active
 `
 
 func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -260,6 +277,9 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -285,7 +305,7 @@ func (q *Queries) GetCategory(ctx context.Context, id string) (Category, error) 
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE id = $1
+SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
@@ -297,6 +317,9 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -306,7 +329,7 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products WHERE slug = $1
+SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1
 `
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -318,6 +341,9 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -327,9 +353,9 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 }
 
 const listActiveVariantsByProduct = `-- name: ListActiveVariantsByProduct :many
-SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants
+SELECT id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active FROM product_variants
 WHERE product_id = $1 AND active
-ORDER BY size, color, sku
+ORDER BY option1, option2, option3, sku
 `
 
 func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID string) ([]ProductVariant, error) {
@@ -345,8 +371,9 @@ func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID str
 			&i.ID,
 			&i.ProductID,
 			&i.SKU,
-			&i.Size,
-			&i.Color,
+			&i.Option1,
+			&i.Option2,
+			&i.Option3,
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Active,
@@ -362,9 +389,9 @@ func (q *Queries) ListActiveVariantsByProduct(ctx context.Context, productID str
 }
 
 const listActiveVariantsByProducts = `-- name: ListActiveVariantsByProducts :many
-SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants
+SELECT id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active FROM product_variants
 WHERE active AND product_id = ANY($1::uuid[])
-ORDER BY size, color, sku
+ORDER BY option1, option2, option3, sku
 `
 
 // The variants for one page of products, and only that page: reading every active
@@ -385,8 +412,9 @@ func (q *Queries) ListActiveVariantsByProducts(ctx context.Context, productIds [
 			&i.ID,
 			&i.ProductID,
 			&i.SKU,
-			&i.Size,
-			&i.Color,
+			&i.Option1,
+			&i.Option2,
+			&i.Option3,
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Active,
@@ -441,7 +469,7 @@ func (q *Queries) ListAllProductCategories(ctx context.Context) ([]ListAllProduc
 }
 
 const listAllVariants = `-- name: ListAllVariants :many
-SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants ORDER BY size, color, sku
+SELECT id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active FROM product_variants ORDER BY option1, option2, option3, sku
 `
 
 func (q *Queries) ListAllVariants(ctx context.Context) ([]ProductVariant, error) {
@@ -457,8 +485,9 @@ func (q *Queries) ListAllVariants(ctx context.Context) ([]ProductVariant, error)
 			&i.ID,
 			&i.ProductID,
 			&i.SKU,
-			&i.Size,
-			&i.Color,
+			&i.Option1,
+			&i.Option2,
+			&i.Option3,
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Active,
@@ -538,7 +567,7 @@ func (q *Queries) ListCategoriesByProduct(ctx context.Context, productID string)
 }
 
 const listNewestActiveProducts = `-- name: ListNewestActiveProducts :many
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products p
+SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
 ORDER BY p.created_at DESC, p.title
@@ -575,6 +604,9 @@ func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) 
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Option1Name,
+			&i.Option2Name,
+			&i.Option3Name,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -592,7 +624,7 @@ func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) 
 
 const listProducts = `-- name: ListProducts :many
 
-SELECT id, slug, title, description, image_key, active, created_at, updated_at, search FROM products ORDER BY title
+SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products ORDER BY title
 `
 
 // Queries behind internal/catalog. See sqlc.yaml; regenerate with `make sqlc`.
@@ -615,6 +647,9 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Option1Name,
+			&i.Option2Name,
+			&i.Option3Name,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -631,7 +666,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 }
 
 const listVariantsByProduct = `-- name: ListVariantsByProduct :many
-SELECT id, product_id, sku, size, color, price_cents, stock_qty, active FROM product_variants WHERE product_id = $1 ORDER BY size, color, sku
+SELECT id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active FROM product_variants WHERE product_id = $1 ORDER BY option1, option2, option3, sku
 `
 
 func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) ([]ProductVariant, error) {
@@ -647,8 +682,9 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 			&i.ID,
 			&i.ProductID,
 			&i.SKU,
-			&i.Size,
-			&i.Color,
+			&i.Option1,
+			&i.Option2,
+			&i.Option3,
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Active,
@@ -664,7 +700,7 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 }
 
 const searchActiveProducts = `-- name: SearchActiveProducts :many
-SELECT p.id, p.slug, p.title, p.description, p.image_key, p.active, p.created_at, p.updated_at, p.search, COUNT(*) OVER () AS total_count
+SELECT p.id, p.slug, p.title, p.description, p.image_key, p.option1_name, p.option2_name, p.option3_name, p.active, p.created_at, p.updated_at, p.search, COUNT(*) OVER () AS total_count
 FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v
@@ -697,6 +733,9 @@ type SearchActiveProductsRow struct {
 	Title       string
 	Description string
 	ImageKey    string
+	Option1Name string
+	Option2Name string
+	Option3Name string
 	Active      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -745,6 +784,9 @@ func (q *Queries) SearchActiveProducts(ctx context.Context, arg SearchActiveProd
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Option1Name,
+			&i.Option2Name,
+			&i.Option3Name,
 			&i.Active,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -765,7 +807,7 @@ const setProductImage = `-- name: SetProductImage :one
 UPDATE products
 SET image_key = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type SetProductImageParams struct {
@@ -789,6 +831,9 @@ func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -827,9 +872,10 @@ func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) 
 
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
-SET slug = $2, title = $3, description = $4, active = $5, updated_at = now()
+SET slug = $2, title = $3, description = $4, active = $5,
+    option1_name = $6, option2_name = $7, option3_name = $8, updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type UpdateProductParams struct {
@@ -838,6 +884,9 @@ type UpdateProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Option1Name string
+	Option2Name string
+	Option3Name string
 }
 
 // updated_at is maintained here rather than by a trigger, so the write is visible
@@ -854,6 +903,9 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Option1Name,
+		arg.Option2Name,
+		arg.Option3Name,
 	)
 	var i Product
 	err := row.Scan(
@@ -862,6 +914,9 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -872,17 +927,19 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 
 const updateVariant = `-- name: UpdateVariant :one
 UPDATE product_variants
-SET sku = $3, size = $4, color = $5, price_cents = $6, stock_qty = $7, active = $8
+SET sku = $3, option1 = $4, option2 = $5, option3 = $6,
+    price_cents = $7, stock_qty = $8, active = $9
 WHERE id = $1 AND product_id = $2
-RETURNING id, product_id, sku, size, color, price_cents, stock_qty, active
+RETURNING id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active
 `
 
 type UpdateVariantParams struct {
 	ID         string
 	ProductID  string
 	SKU        string
-	Size       string
-	Color      string
+	Option1    string
+	Option2    string
+	Option3    string
 	PriceCents int64
 	StockQty   int
 	Active     bool
@@ -895,8 +952,9 @@ func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (P
 		arg.ID,
 		arg.ProductID,
 		arg.SKU,
-		arg.Size,
-		arg.Color,
+		arg.Option1,
+		arg.Option2,
+		arg.Option3,
 		arg.PriceCents,
 		arg.StockQty,
 		arg.Active,
@@ -906,8 +964,9 @@ func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (P
 		&i.ID,
 		&i.ProductID,
 		&i.SKU,
-		&i.Size,
-		&i.Color,
+		&i.Option1,
+		&i.Option2,
+		&i.Option3,
 		&i.PriceCents,
 		&i.StockQty,
 		&i.Active,
@@ -946,12 +1005,15 @@ func (q *Queries) UpsertCategory(ctx context.Context, arg UpsertCategoryParams) 
 }
 
 const upsertProduct = `-- name: UpsertProduct :one
-INSERT INTO products (id, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
+INSERT INTO products (id, slug, title, description, active,
+                      option1_name, option2_name, option3_name)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (slug) DO UPDATE
 SET title = EXCLUDED.title, description = EXCLUDED.description,
-    active = EXCLUDED.active, updated_at = now()
-RETURNING id, slug, title, description, image_key, active, created_at, updated_at, search
+    active = EXCLUDED.active, option1_name = EXCLUDED.option1_name,
+    option2_name = EXCLUDED.option2_name, option3_name = EXCLUDED.option3_name,
+    updated_at = now()
+RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type UpsertProductParams struct {
@@ -959,6 +1021,9 @@ type UpsertProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Option1Name string
+	Option2Name string
+	Option3Name string
 }
 
 // Upserts by natural key — slug for a product, SKU for a variant — which is what
@@ -971,6 +1036,9 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Option1Name,
+		arg.Option2Name,
+		arg.Option3Name,
 	)
 	var i Product
 	err := row.Scan(
@@ -979,6 +1047,9 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Option1Name,
+		&i.Option2Name,
+		&i.Option3Name,
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -988,19 +1059,22 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 }
 
 const upsertVariant = `-- name: UpsertVariant :one
-INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+INSERT INTO product_variants (id, product_id, sku, option1, option2, option3,
+                              price_cents, stock_qty, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (sku) DO UPDATE
-SET product_id = EXCLUDED.product_id, size = EXCLUDED.size, color = EXCLUDED.color,
+SET product_id = EXCLUDED.product_id, option1 = EXCLUDED.option1,
+    option2 = EXCLUDED.option2, option3 = EXCLUDED.option3,
     price_cents = EXCLUDED.price_cents, active = EXCLUDED.active
-RETURNING id, product_id, sku, size, color, price_cents, stock_qty, active
+RETURNING id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active
 `
 
 type UpsertVariantParams struct {
 	ProductID  string
 	SKU        string
-	Size       string
-	Color      string
+	Option1    string
+	Option2    string
+	Option3    string
 	PriceCents int64
 	StockQty   int
 	Active     bool
@@ -1012,8 +1086,9 @@ func (q *Queries) UpsertVariant(ctx context.Context, arg UpsertVariantParams) (P
 	row := q.db.QueryRow(ctx, upsertVariant,
 		arg.ProductID,
 		arg.SKU,
-		arg.Size,
-		arg.Color,
+		arg.Option1,
+		arg.Option2,
+		arg.Option3,
 		arg.PriceCents,
 		arg.StockQty,
 		arg.Active,
@@ -1023,8 +1098,9 @@ func (q *Queries) UpsertVariant(ctx context.Context, arg UpsertVariantParams) (P
 		&i.ID,
 		&i.ProductID,
 		&i.SKU,
-		&i.Size,
-		&i.Color,
+		&i.Option1,
+		&i.Option2,
+		&i.Option3,
 		&i.PriceCents,
 		&i.StockQty,
 		&i.Active,

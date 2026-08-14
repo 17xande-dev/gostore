@@ -52,6 +52,37 @@
     change or vanish and a product page with a broken picture is worse than one with
     none.
   */}}
+  {{/*
+    The option NAMES live on the product; the values live on each variant below.
+    Naming them here rather than fixing them globally is what lets a t-shirt say
+    Size and Colour, a book say Cover, and a recording say Format — without any of
+    them inheriting headings that mean nothing for what they are.
+  */}}
+  <fieldset>
+    <legend>Variant options</legend>
+    <p><small>Name what tells this product's variants apart. Leave all three blank
+    if there is only one version of it. Fill them in order.</small></p>
+    <p>
+      <label>Option 1
+        <input name="option1_name" value="{{.Product.Option1Name}}" size="12"
+               placeholder="Size, Cover, Format">
+      </label>
+      {{template "err" index .Errors "option1_name"}}
+    </p>
+    <p>
+      <label>Option 2
+        <input name="option2_name" value="{{.Product.Option2Name}}" size="12"
+               placeholder="Colour">
+      </label>
+      {{template "err" index .Errors "option2_name"}}
+    </p>
+    <p>
+      <label>Option 3
+        <input name="option3_name" value="{{.Product.Option3Name}}" size="12">
+      </label>
+      {{template "err" index .Errors "option3_name"}}
+    </p>
+  </fieldset>
   <p>
     <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
   </p>
@@ -67,7 +98,7 @@
 {{else}}
   <h2>Variants</h2>
   <p><small>The variant is what a customer buys. A product with no options still
-  needs exactly one variant, with size and colour left blank.</small></p>
+  needs exactly one variant, with every option left blank.</small></p>
 
   {{if not .Product.Variants}}<p>No variants yet — this product cannot be bought.</p>{{end}}
 
@@ -76,8 +107,9 @@
     <form method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}">
       {{template "csrf" $.CSRFToken}}
       <label>SKU <input name="sku" value="{{.SKU}}" required></label>
-      <label>Size <input name="size" value="{{.Size}}" size="8"></label>
-      <label>Colour <input name="color" value="{{.Color}}" size="8"></label>
+      {{range $.Product.OptionsFor .}}
+      <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
+      {{end}}
       <label>Price ({{$.Currency}}) <input name="price" value="{{money .PriceCents}}" size="8" required></label>
       <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
       <label><input type="checkbox" name="active" value="1" {{if .Active}}checked{{end}}> Active</label>
@@ -95,8 +127,9 @@
   <form method="post" action="/admin/products/{{.Product.ID}}/variants">
     {{template "csrf" .CSRFToken}}
     <label>SKU <input name="sku" value="{{.VariantForm.SKU}}" required></label>
-    <label>Size <input name="size" value="{{.VariantForm.Size}}" size="8"></label>
-    <label>Colour <input name="color" value="{{.VariantForm.Color}}" size="8"></label>
+    {{range .Product.OptionsWith .VariantForm.Options}}
+    <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
+    {{end}}
     <label>Price ({{.Currency}}) <input name="price" value="{{.VariantForm.Price}}" size="8" required></label>
     <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
     <label><input type="checkbox" name="active" value="1" {{if .VariantForm.Active}}checked{{end}}> Active</label>
@@ -117,14 +150,15 @@
 {{end}}
 
 {{/*
-  Every message a variant form can produce, in one place. "options" is the
-  size-and-colour pair, which is unique per product and so belongs to no single
-  input.
+  Every message a variant form can produce, in one place. "options" is the set of
+  option values taken together, which is unique per product and so belongs to no
+  single input.
 */}}
 {{define "variant_errors"}}
 {{template "err" index . "sku"}}
-{{template "err" index . "size"}}
-{{template "err" index . "color"}}
+{{template "err" index . "option1"}}
+{{template "err" index . "option2"}}
+{{template "err" index . "option3"}}
 {{template "err" index . "options"}}
 {{template "err" index . "price"}}
 {{template "err" index . "stock_qty"}}

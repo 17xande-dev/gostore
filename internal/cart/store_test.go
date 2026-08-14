@@ -31,9 +31,9 @@ func setup(t *testing.T) fixture {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	f.tee = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 4, Active: true})
-	f.sock = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 19900, StockQty: 1, Active: true})
-	f.off = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-L", Size: "L", PriceCents: 39900, StockQty: 5, Active: false})
+	f.tee = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: 4, Active: true})
+	f.sock = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-S", Option1: "S", PriceCents: 19900, StockQty: 1, Active: true})
+	f.off = mustVariant(t, f.cat, catalog.Variant{ProductID: p.ID, SKU: "TEE-L", Option1: "L", PriceCents: 39900, StockQty: 5, Active: false})
 
 	draft, err := f.cat.Create(ctx, catalog.Product{Slug: "draft", Title: "Draft", Active: false})
 	if err != nil {

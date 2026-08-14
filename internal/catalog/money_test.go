@@ -1,6 +1,9 @@
 package catalog
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestParsePrice(t *testing.T) {
 	valid := []struct {
@@ -132,13 +135,68 @@ func TestVariantLabel(t *testing.T) {
 		want string
 	}{
 		{Variant{}, ""},
-		{Variant{Size: "L"}, "L"},
-		{Variant{Color: "Navy"}, "Navy"},
-		{Variant{Size: "L", Color: "Navy"}, "L / Navy"},
+		{Variant{Option1: "L"}, "L"},
+		{Variant{Option2: "Navy"}, "Navy"},
+		{Variant{Option1: "L", Option2: "Navy"}, "L / Navy"},
+		{Variant{Option1: "L", Option3: "Cotton"}, "L / Cotton"},
+		{Variant{Option1: "Audio"}, "Audio"},
 	}
 	for _, tc := range cases {
 		if got := tc.v.Label(); got != tc.want {
 			t.Errorf("Label(%+v) = %q, want %q", tc.v, got, tc.want)
 		}
+	}
+}
+
+func TestProductOptionsFor(t *testing.T) {
+	// Values are matched to names by position, so the slot number a form field is
+	// named after has to survive the skipping of unused slots. A product using
+	// slots 1 and 2 must not renumber them 0 and 1.
+	p := Product{Option1Name: "Size", Option2Name: "Colour"}
+	v := Variant{Option1: "L", Option2: "Navy", Option3: "ignored"}
+
+	got := p.OptionsFor(v)
+	want := []VariantOption{
+		{Slot: 1, Name: "Size", Value: "L"},
+		{Slot: 2, Name: "Colour", Value: "Navy"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("OptionsFor() = %+v, want %+v", got, want)
+	}
+}
+
+func TestProductOptionsFor_UnusedSlotsAreSkipped(t *testing.T) {
+	// A variant carrying a value in a slot the product does not name is not an
+	// error and is not rendered: the name is what makes a value mean anything, so
+	// a leftover from an earlier configuration simply does not appear.
+	p := Product{Option1Name: "Format"}
+	got := p.OptionsFor(Variant{Option1: "Audio", Option2: "leftover"})
+	if len(got) != 1 || got[0].Value != "Audio" {
+		t.Errorf("OptionsFor() = %+v, want just the named slot", got)
+	}
+}
+
+func TestProductOptionHeading(t *testing.T) {
+	cases := []struct {
+		p    Product
+		want string
+	}{
+		{Product{}, "Option"},
+		{Product{Option1Name: "Cover"}, "Cover"},
+		{Product{Option1Name: "Size", Option2Name: "Colour"}, "Size / Colour"},
+	}
+	for _, tc := range cases {
+		if got := tc.p.OptionHeading(); got != tc.want {
+			t.Errorf("OptionHeading(%+v) = %q, want %q", tc.p, got, tc.want)
+		}
+	}
+}
+
+func TestProductHasOptions(t *testing.T) {
+	if (Product{}).HasOptions() {
+		t.Error("a product declaring no option names reports HasOptions()")
+	}
+	if !(Product{Option1Name: "Format"}).HasOptions() {
+		t.Error("a product declaring an option name does not report HasOptions()")
 	}
 }

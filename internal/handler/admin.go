@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -275,9 +276,11 @@ type productFormPage struct {
 // rejected submission comes back with what was actually entered rather than a
 // reformatted guess at it.
 type variantForm struct {
-	SKU      string
-	Size     string
-	Color    string
+	SKU string
+	// Options are the variant's values in slot order, always OptionSlots long so a
+	// re-rendered form can index them against the product's names without a
+	// bounds check on every row.
+	Options  [catalog.OptionSlots]string
 	Price    string
 	StockQty string
 	Active   bool
@@ -495,7 +498,10 @@ func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request, known []c
 		Description: strings.TrimSpace(r.PostFormValue("description")),
 		// No image_url: the form does not offer one, and reading it here would be a
 		// way to set it by hand-crafting a request. Images arrive by upload only.
-		Active: r.PostFormValue("active") != "",
+		Active:      r.PostFormValue("active") != "",
+		Option1Name: strings.TrimSpace(r.PostFormValue("option1_name")),
+		Option2Name: strings.TrimSpace(r.PostFormValue("option2_name")),
+		Option3Name: strings.TrimSpace(r.PostFormValue("option3_name")),
 	}
 	if p.Slug == "" {
 		p.Slug = catalog.Slugify(p.Title)
@@ -530,17 +536,19 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.
 
 	form := variantForm{
 		SKU:      strings.TrimSpace(r.PostFormValue("sku")),
-		Size:     strings.TrimSpace(r.PostFormValue("size")),
-		Color:    strings.TrimSpace(r.PostFormValue("color")),
 		Price:    strings.TrimSpace(r.PostFormValue("price")),
 		StockQty: strings.TrimSpace(r.PostFormValue("stock_qty")),
 		Active:   r.PostFormValue("active") != "",
 	}
+	for i := range form.Options {
+		form.Options[i] = strings.TrimSpace(r.PostFormValue(fmt.Sprintf("option%d", i+1)))
+	}
 	v := catalog.Variant{
-		SKU:    form.SKU,
-		Size:   form.Size,
-		Color:  form.Color,
-		Active: form.Active,
+		SKU:     form.SKU,
+		Option1: form.Options[0],
+		Option2: form.Options[1],
+		Option3: form.Options[2],
+		Active:  form.Active,
 	}
 
 	errs := validate.FormErrors{}

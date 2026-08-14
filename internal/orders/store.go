@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -101,8 +102,7 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		items = append(items, Item{
 			VariantID:      l.VariantID,
 			Title:          l.Title,
-			Size:           l.Size,
-			Color:          l.Color,
+			VariantLabel:   catalog.OptionLabel(l.Option1, l.Option2, l.Option3),
 			UnitPriceCents: l.PriceCents,
 			Quantity:       l.Quantity,
 		})
@@ -145,8 +145,7 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 			OrderID:        row.ID,
 			VariantID:      i.VariantID,
 			Title:          i.Title,
-			Size:           i.Size,
-			Color:          i.Color,
+			VariantLabel:   i.VariantLabel,
 			UnitPriceCents: i.UnitPriceCents,
 			Quantity:       i.Quantity,
 		})
@@ -235,8 +234,7 @@ func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
 		items = append(items, Item{
 			VariantID:      r.VariantID,
 			Title:          r.Title,
-			Size:           r.Size,
-			Color:          r.Color,
+			VariantLabel:   r.VariantLabel,
 			UnitPriceCents: r.UnitPriceCents,
 			Quantity:       r.Quantity,
 		})

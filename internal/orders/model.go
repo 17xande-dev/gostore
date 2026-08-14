@@ -69,25 +69,21 @@ func (c Customer) LastName() string {
 type Item struct {
 	VariantID string
 
-	Title          string
-	Size           string
-	Color          string
+	Title string
+	// VariantLabel is the variant's options as they read at purchase — "L / Navy",
+	// "Hardcover" — rendered once when the order was created rather than stored as
+	// three values and joined at read time. A product that later renames its option
+	// slots therefore cannot relabel a completed sale, which is the same reason
+	// Title and UnitPriceCents are copies rather than lookups.
+	VariantLabel   string
 	UnitPriceCents int64
 	Quantity       int
 }
 
 // Label describes the item's options for display — "L / Navy", or "" for a
-// product with no options.
-func (i Item) Label() string {
-	switch {
-	case i.Size != "" && i.Color != "":
-		return i.Size + " / " + i.Color
-	case i.Size != "":
-		return i.Size
-	default:
-		return i.Color
-	}
-}
+// product with no options. It is the snapshot verbatim: unlike a cart line, this
+// must never be recomputed from the catalog as it stands now.
+func (i Item) Label() string { return i.VariantLabel }
 
 // LineTotalCents is what this line cost, at the price it was bought at.
 func (i Item) LineTotalCents() int64 { return i.UnitPriceCents * int64(i.Quantity) }

@@ -20,6 +20,23 @@ CREATE TABLE products (
     -- or putting a custom domain in front of one — would need an UPDATE across the
     -- table before any image loaded again.
     image_key   TEXT NOT NULL DEFAULT '',
+    -- The NAMES of this product's variant options; the values live on the variants.
+    -- Declared per product, which is what Shopify and WooCommerce do, so a t-shirt
+    -- says 'Size'/'Colour', a book says 'Cover' and a recording says 'Format'.
+    --
+    -- Deliberately NOT hung off the category. Categories here are many-to-many
+    -- precisely so a book can also be a gift, and option structure riding on them
+    -- would give that product two contradictory answers — while adding a 'Sale'
+    -- category for a promotion would change what a variant *is*. Magento, Saleor
+    -- and Sylius all have a reusable template for this and all keep it separate
+    -- from the browsing taxonomy for the same reason.
+    --
+    -- Empty means the slot is unused. Slots fill in order: a name in slot 2 with
+    -- slot 1 empty is refused by validate.ProductOptions, not by the schema, so the
+    -- admin gets a message on the field rather than a constraint violation.
+    option1_name TEXT NOT NULL DEFAULT '',
+    option2_name TEXT NOT NULL DEFAULT '',
+    option3_name TEXT NOT NULL DEFAULT '',
     active      BOOLEAN NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -61,18 +78,27 @@ CREATE TABLE product_categories (
 CREATE INDEX ON product_categories (category_id);
 
 -- The variant is the purchasable, priced, stocked unit. A single-edition book
--- still gets exactly one row (size='', color=''), so cart/order/stock logic
+-- still gets exactly one row (every option ''), so cart/order/stock logic
 -- never branches on "has options vs not" — one code path everywhere.
+--
+-- option1..3 are the VALUES for the names declared on the product: 'L'/'Navy' for
+-- apparel, 'Hardcover' for a book, 'Audio' for a recording. Three slots because
+-- that is where Shopify landed after a decade, and because a fourth column is free
+-- before publication and a migration after it.
 CREATE TABLE product_variants (
     id          UUID PRIMARY KEY,
     product_id  UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     sku         TEXT NOT NULL UNIQUE,
-    size        TEXT NOT NULL DEFAULT '',
-    color       TEXT NOT NULL DEFAULT '',
+    option1     TEXT NOT NULL DEFAULT '',
+    option2     TEXT NOT NULL DEFAULT '',
+    option3     TEXT NOT NULL DEFAULT '',
     price_cents BIGINT NOT NULL CHECK (price_cents >= 0),
     stock_qty   INTEGER NOT NULL DEFAULT 0 CHECK (stock_qty >= 0),
     active      BOOLEAN NOT NULL DEFAULT TRUE,
-    UNIQUE (product_id, size, color)
+    -- Named rather than left to Postgres, because catalog.translate() matches on
+    -- the constraint name to turn a violation into "options" on the admin form.
+    -- An auto-generated name would change the moment a column is added.
+    CONSTRAINT product_variants_options_key UNIQUE (product_id, option1, option2, option3)
 );
 CREATE INDEX ON product_variants (product_id);
 
@@ -139,8 +165,13 @@ CREATE TABLE order_items (
     variant_id       UUID NOT NULL REFERENCES product_variants(id),
     -- snapshots: later catalog edits must never rewrite purchase history
     title            TEXT NOT NULL,
-    size             TEXT NOT NULL DEFAULT '',
-    color            TEXT NOT NULL DEFAULT '',
+    -- The variant's options as they read at purchase — 'L / Navy', 'Hardcover' —
+    -- rather than the three values in their own columns. This snapshot is used for
+    -- display only, which is all size/color ever were here. Structured reporting
+    -- ("how many hardcovers sold") is still reachable, because variant_id
+    -- deliberately RESTRICTS rather than cascades, so the variant row is guaranteed
+    -- to still exist to join against.
+    variant_label    TEXT NOT NULL DEFAULT '',
     unit_price_cents BIGINT NOT NULL,
     quantity         INTEGER NOT NULL CHECK (quantity > 0)
 );

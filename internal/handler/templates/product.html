@@ -45,7 +45,7 @@
     <input type="hidden" name="variant_id" value="{{(index .Variants 0).ID}}">
   {{else}}
     <div class="field">
-    <label>Option
+    <label>{{.OptionHeading}}
       <select name="variant_id" required>
         {{range .Variants}}
         <option value="{{.ID}}" {{if not .InStock}}disabled{{end}}>
@@ -111,7 +111,7 @@
       {{end}}
     {{else}}
       <table>
-        <thead><tr><th>Option</th><th class="num">Price</th><th>Availability</th></tr></thead>
+        <thead><tr><th>{{.OptionHeading}}</th><th class="num">Price</th><th>Availability</th></tr></thead>
         <tbody>
         {{range .Variants}}
           <tr>

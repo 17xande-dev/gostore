@@ -179,5 +179,5 @@ func catalogProduct() catalog.Product {
 }
 
 func variantFor(productID string) catalog.Variant {
-	return catalog.Variant{ProductID: productID, SKU: "TEE-M", Size: "M", PriceCents: 29900, StockQty: 3, Active: true}
+	return catalog.Variant{ProductID: productID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: 3, Active: true}
 }

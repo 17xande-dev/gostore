@@ -25,15 +25,15 @@ func stockCart(t *testing.T, store *catalog.Store) map[string]catalog.Variant {
 
 	variants := map[string]catalog.Variant{}
 	for _, v := range []catalog.Variant{
-		{ProductID: p.ID, SKU: "TEE-S", Size: "S", PriceCents: 29900, StockQty: 4, Active: true},
-		{ProductID: p.ID, SKU: "TEE-M", Size: "M", PriceCents: 31900, StockQty: 1, Active: true},
-		{ProductID: p.ID, SKU: "TEE-L", Size: "L", PriceCents: 99900, StockQty: 5, Active: false},
+		{ProductID: p.ID, SKU: "TEE-S", Option1: "S", PriceCents: 29900, StockQty: 4, Active: true},
+		{ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 31900, StockQty: 1, Active: true},
+		{ProductID: p.ID, SKU: "TEE-L", Option1: "L", PriceCents: 99900, StockQty: 5, Active: false},
 	} {
 		out, err := store.CreateVariant(ctx, v)
 		if err != nil {
 			t.Fatalf("CreateVariant: %v", err)
 		}
-		variants[v.Size] = out
+		variants[v.Option1] = out
 	}
 
 	book, err := store.Create(ctx, catalog.Product{Slug: "a-book", Title: "A Book", Active: true})

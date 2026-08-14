@@ -18,13 +18,13 @@ SELECT * FROM carts WHERE id = $1;
 -- name: ListCartItems :many
 SELECT i.variant_id, i.quantity,
        p.slug AS product_slug, p.title AS product_title,
-       v.sku, v.size, v.color, v.price_cents, v.stock_qty,
+       v.sku, v.option1, v.option2, v.option3, v.price_cents, v.stock_qty,
        (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
 JOIN product_variants v ON v.id = i.variant_id
 JOIN products p ON p.id = v.product_id
 WHERE i.cart_id = $1
-ORDER BY p.title, v.size, v.color, v.sku;
+ORDER BY p.title, v.option1, v.option2, v.option3, v.sku;
 
 -- name: GetVariantAvailability :one
 SELECT v.stock_qty, (v.active AND p.active)::bool AS purchasable

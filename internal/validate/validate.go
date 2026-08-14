@@ -4,6 +4,7 @@
 package validate
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -78,10 +79,47 @@ func Product(p catalog.Product) FormErrors {
 		}
 	}
 
+	productOptions(e, p)
+
 	// There is deliberately nothing here about the image. The product form does not
 	// carry one: an image arrives by upload and its URL is whatever storage says it
 	// is, so there is no user input to validate.
 	return e
+}
+
+// productOptions checks the option *names* a product declares. Two rules, both
+// enforced here rather than in the schema so the admin gets a message on the
+// field instead of a constraint violation.
+//
+// No gaps: a name in slot 2 with slot 1 empty would leave every variant's first
+// value unlabelled, since values and names are matched by position. Filling slots
+// in order is the invariant that lets Product.OptionsFor skip by name alone.
+//
+// No duplicates: two slots both called "Size" makes a selector with two identical
+// headings, and the variant it produces is indistinguishable from another.
+func productOptions(e FormErrors, p catalog.Product) {
+	names := p.OptionNames()
+	seen := make(map[string]bool, len(names))
+	gap := false
+
+	for i, name := range names {
+		field := fmt.Sprintf("option%d_name", i+1)
+		if name == "" {
+			gap = true
+			continue
+		}
+		if gap {
+			e.Add(field, "Fill the earlier option in first.")
+			continue
+		}
+		maxLen(e, field, name, 100)
+
+		key := strings.ToLower(name)
+		if seen[key] {
+			e.Add(field, "Already used by another option.")
+		}
+		seen[key] = true
+	}
 }
 
 // ProductCategories resolves the category ids a product form submitted against
@@ -140,8 +178,9 @@ func Variant(v catalog.Variant) FormErrors {
 
 	required(e, "sku", v.SKU)
 	maxLen(e, "sku", v.SKU, 100)
-	maxLen(e, "size", v.Size, 100)
-	maxLen(e, "color", v.Color, 100)
+	for i, o := range v.Options() {
+		maxLen(e, fmt.Sprintf("option%d", i+1), o, 100)
+	}
 
 	if v.PriceCents < 0 {
 		e.Add("price", "Cannot be negative.")

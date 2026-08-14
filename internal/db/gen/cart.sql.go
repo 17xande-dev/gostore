@@ -104,13 +104,13 @@ func (q *Queries) GetVariantAvailability(ctx context.Context, id string) (GetVar
 const listCartItems = `-- name: ListCartItems :many
 SELECT i.variant_id, i.quantity,
        p.slug AS product_slug, p.title AS product_title,
-       v.sku, v.size, v.color, v.price_cents, v.stock_qty,
+       v.sku, v.option1, v.option2, v.option3, v.price_cents, v.stock_qty,
        (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
 JOIN product_variants v ON v.id = i.variant_id
 JOIN products p ON p.id = v.product_id
 WHERE i.cart_id = $1
-ORDER BY p.title, v.size, v.color, v.sku
+ORDER BY p.title, v.option1, v.option2, v.option3, v.sku
 `
 
 type ListCartItemsRow struct {
@@ -119,8 +119,9 @@ type ListCartItemsRow struct {
 	ProductSlug  string
 	ProductTitle string
 	SKU          string
-	Size         string
-	Color        string
+	Option1      string
+	Option2      string
+	Option3      string
 	PriceCents   int64
 	StockQty     int
 	Purchasable  bool
@@ -150,8 +151,9 @@ func (q *Queries) ListCartItems(ctx context.Context, cartID string) ([]ListCartI
 			&i.ProductSlug,
 			&i.ProductTitle,
 			&i.SKU,
-			&i.Size,
-			&i.Color,
+			&i.Option1,
+			&i.Option2,
+			&i.Option3,
 			&i.PriceCents,
 			&i.StockQty,
 			&i.Purchasable,

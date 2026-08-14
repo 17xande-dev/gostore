@@ -8,7 +8,7 @@
 SELECT * FROM products ORDER BY title;
 
 -- name: ListAllVariants :many
-SELECT * FROM product_variants ORDER BY size, color, sku;
+SELECT * FROM product_variants ORDER BY option1, option2, option3, sku;
 
 -- One statement serves search, category filtering and pagination, because they
 -- are one question — "which products, in what order, and which slice of them" —
@@ -81,7 +81,7 @@ LIMIT @row_limit;
 -- name: ListActiveVariantsByProducts :many
 SELECT * FROM product_variants
 WHERE active AND product_id = ANY(@product_ids::uuid[])
-ORDER BY size, color, sku;
+ORDER BY option1, option2, option3, sku;
 
 -- name: GetActiveProductBySlug :one
 SELECT * FROM products WHERE slug = $1 AND active;
@@ -89,7 +89,7 @@ SELECT * FROM products WHERE slug = $1 AND active;
 -- name: ListActiveVariantsByProduct :many
 SELECT * FROM product_variants
 WHERE product_id = $1 AND active
-ORDER BY size, color, sku;
+ORDER BY option1, option2, option3, sku;
 
 -- name: GetProduct :one
 SELECT * FROM products WHERE id = $1;
@@ -98,7 +98,7 @@ SELECT * FROM products WHERE id = $1;
 SELECT * FROM products WHERE slug = $1;
 
 -- name: ListVariantsByProduct :many
-SELECT * FROM product_variants WHERE product_id = $1 ORDER BY size, color, sku;
+SELECT * FROM product_variants WHERE product_id = $1 ORDER BY option1, option2, option3, sku;
 
 -- The database generates the id, which is why no UUID library reaches the binary.
 --
@@ -106,8 +106,9 @@ SELECT * FROM product_variants WHERE product_id = $1 ORDER BY size, color, sku;
 -- SetProductImage. There is no way to point a product at bytes this store does not
 -- hold.
 -- name: CreateProduct :one
-INSERT INTO products (id, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
+INSERT INTO products (id, slug, title, description, active,
+                      option1_name, option2_name, option3_name)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- updated_at is maintained here rather than by a trigger, so the write is visible
@@ -119,7 +120,8 @@ RETURNING *;
 -- silent way to blank the picture.
 -- name: UpdateProduct :one
 UPDATE products
-SET slug = $2, title = $3, description = $4, active = $5, updated_at = now()
+SET slug = $2, title = $3, description = $4, active = $5,
+    option1_name = $6, option2_name = $7, option3_name = $8, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
@@ -148,15 +150,17 @@ RETURNING *;
 DELETE FROM products WHERE id = $1;
 
 -- name: CreateVariant :one
-INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+INSERT INTO product_variants (id, product_id, sku, option1, option2, option3,
+                              price_cents, stock_qty, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- The product id is part of the WHERE clause, so a mismatched pair from a URL
 -- updates nothing instead of editing another product's variant.
 -- name: UpdateVariant :one
 UPDATE product_variants
-SET sku = $3, size = $4, color = $5, price_cents = $6, stock_qty = $7, active = $8
+SET sku = $3, option1 = $4, option2 = $5, option3 = $6,
+    price_cents = $7, stock_qty = $8, active = $9
 WHERE id = $1 AND product_id = $2
 RETURNING *;
 
@@ -168,20 +172,25 @@ DELETE FROM product_variants WHERE id = $1 AND product_id = $2;
 -- No image column here either, so a seed file cannot claim a product's image: a
 -- fixture has no way to upload bytes. Re-seeding leaves an uploaded image alone.
 -- name: UpsertProduct :one
-INSERT INTO products (id, slug, title, description, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
+INSERT INTO products (id, slug, title, description, active,
+                      option1_name, option2_name, option3_name)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (slug) DO UPDATE
 SET title = EXCLUDED.title, description = EXCLUDED.description,
-    active = EXCLUDED.active, updated_at = now()
+    active = EXCLUDED.active, option1_name = EXCLUDED.option1_name,
+    option2_name = EXCLUDED.option2_name, option3_name = EXCLUDED.option3_name,
+    updated_at = now()
 RETURNING *;
 
 -- stock_qty is deliberately absent from the DO UPDATE list: a seed file is a
 -- starting point, not the truth about inventory somebody has since counted.
 -- name: UpsertVariant :one
-INSERT INTO product_variants (id, product_id, sku, size, color, price_cents, stock_qty, active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+INSERT INTO product_variants (id, product_id, sku, option1, option2, option3,
+                              price_cents, stock_qty, active)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (sku) DO UPDATE
-SET product_id = EXCLUDED.product_id, size = EXCLUDED.size, color = EXCLUDED.color,
+SET product_id = EXCLUDED.product_id, option1 = EXCLUDED.option1,
+    option2 = EXCLUDED.option2, option3 = EXCLUDED.option3,
     price_cents = EXCLUDED.price_cents, active = EXCLUDED.active
 RETURNING *;
 
