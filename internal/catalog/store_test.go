@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
@@ -455,6 +456,198 @@ func mustCreateVariant(t *testing.T, s *catalog.Store, v catalog.Variant) catalo
 	out, err := s.CreateVariant(t.Context(), v)
 	if err != nil {
 		t.Fatalf("CreateVariant %q: %v", v.SKU, err)
+	}
+	return out
+}
+
+func TestStore_FilesAndVariantLinks(t *testing.T) {
+	// The conference-recording case the whole feature was designed around: two
+	// variants with disjoint file sets, plus one file that both include. The shared
+	// file is what makes a bundle possible without uploading the same two gigabytes
+	// twice, and a fixture where every file belonged to one variant would not
+	// exercise the join at all.
+	s := catalog.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	p := mustCreate(t, s, catalog.Product{
+		Slug: "conference", Title: "Conference", Active: true,
+		Kind: catalog.KindDigital, Option1Name: "Format",
+	})
+	audio := mustCreateVariant(t, s, catalog.Variant{
+		ProductID: p.ID, SKU: "C-A", Option1: "Audio", PriceCents: 15000, Active: true,
+	})
+	video := mustCreateVariant(t, s, catalog.Variant{
+		ProductID: p.ID, SKU: "C-V", Option1: "Video", PriceCents: 40000, Active: true,
+	})
+
+	add := func(title string, size int64, variants ...string) catalog.File {
+		f, err := s.AddFile(ctx, catalog.File{
+			ProductID: p.ID, Title: title, ObjectKey: "downloads/" + p.ID + "/" + title,
+			OriginalFilename: title, ContentType: "application/octet-stream", SizeBytes: size,
+		}, variants)
+		if err != nil {
+			t.Fatalf("AddFile %s: %v", title, err)
+		}
+		return f
+	}
+	mp3 := add("a.mp3", 1000, audio.ID)
+	add("a.mp4", 2000, video.ID)
+	notes := add("notes.pdf", 300, audio.ID, video.ID)
+
+	// Position is assigned in upload order, so the admin's list has a stable order
+	// before anybody has reordered anything.
+	files, err := s.Files(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("%d files, want 3", len(files))
+	}
+	for i, f := range files {
+		if f.Position != i {
+			t.Errorf("%s is at position %d, want %d", f.Title, f.Position, i)
+		}
+	}
+	if !files[0].InVariant(audio.ID) || files[0].InVariant(video.ID) {
+		t.Errorf("a.mp3 links to %v", files[0].VariantIDs)
+	}
+
+	// What each buyer actually gets.
+	audioFiles, err := s.VariantFiles(ctx, audio.ID)
+	if err != nil {
+		t.Fatalf("VariantFiles: %v", err)
+	}
+	if got := titles(audioFiles); !slices.Equal(got, []string{"a.mp3", "notes.pdf"}) {
+		t.Errorf("the audio variant grants %v", got)
+	}
+	videoFiles, err := s.VariantFiles(ctx, video.ID)
+	if err != nil {
+		t.Fatalf("VariantFiles: %v", err)
+	}
+	if got := titles(videoFiles); !slices.Equal(got, []string{"a.mp4", "notes.pdf"}) {
+		t.Errorf("the video variant grants %v", got)
+	}
+
+	// Retitling and re-ticking. The form submits the whole set every time, which is
+	// what makes unticking one mean something.
+	if _, err := s.UpdateFile(ctx, catalog.File{
+		ID: notes.ID, ProductID: p.ID, Title: "Programme", Position: 0,
+	}, []string{video.ID}); err != nil {
+		t.Fatalf("UpdateFile: %v", err)
+	}
+	audioFiles, _ = s.VariantFiles(ctx, audio.ID)
+	if got := titles(audioFiles); !slices.Equal(got, []string{"a.mp3"}) {
+		t.Errorf("after unticking, the audio variant grants %v", got)
+	}
+
+	// Deleting returns the key so the caller can remove the bytes afterwards.
+	key, err := s.DeleteFile(ctx, p.ID, mp3.ID)
+	if err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if key != mp3.ObjectKey {
+		t.Errorf("DeleteFile returned %q, want the stored key", key)
+	}
+	if _, err := s.File(ctx, p.ID, mp3.ID); !errors.Is(err, catalog.ErrNotFound) {
+		t.Errorf("the file is still readable: %v", err)
+	}
+}
+
+func TestStore_FileCannotBeLinkedToAnotherProductsVariant(t *testing.T) {
+	// A variant id borrowed from another product's page must link nothing, rather
+	// than granting that product's buyers somebody else's files.
+	s := catalog.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	mine := mustCreate(t, s, catalog.Product{Slug: "mine", Title: "Mine", Active: true, Kind: catalog.KindDigital})
+	theirs := mustCreate(t, s, catalog.Product{Slug: "theirs", Title: "Theirs", Active: true, Kind: catalog.KindDigital})
+	stranger := mustCreateVariant(t, s, catalog.Variant{
+		ProductID: theirs.ID, SKU: "T-1", PriceCents: 100, Active: true,
+	})
+
+	f, err := s.AddFile(ctx, catalog.File{
+		ProductID: mine.ID, Title: "secret.mp3", ObjectKey: "k",
+		OriginalFilename: "secret.mp3", ContentType: "audio/mpeg", SizeBytes: 1,
+	}, []string{stranger.ID})
+	if err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+	if got, err := s.VariantFiles(ctx, stranger.ID); err != nil || len(got) != 0 {
+		t.Errorf("the other product's variant grants %v (%v)", titles(got), err)
+	}
+	_ = f
+}
+
+func TestStore_KindIsFrozenOnceOrderedAndWhileFilesRemain(t *testing.T) {
+	s := catalog.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	p := mustCreate(t, s, catalog.Product{
+		Slug: "recording", Title: "Recording", Active: true, Kind: catalog.KindDigital,
+	})
+	v := mustCreateVariant(t, s, catalog.Variant{
+		ProductID: p.ID, SKU: "R-1", PriceCents: 100, Active: true,
+	})
+	if _, err := s.AddFile(ctx, catalog.File{
+		ProductID: p.ID, Title: "a.mp3", ObjectKey: "k",
+		OriginalFilename: "a.mp3", ContentType: "audio/mpeg", SizeBytes: 1,
+	}, []string{v.ID}); err != nil {
+		t.Fatalf("AddFile: %v", err)
+	}
+
+	// digital -> physical while files remain: refused, and the error says how many.
+	p.Kind = catalog.KindPhysical
+	_, err := s.Update(ctx, p)
+	var locked *catalog.KindLockedError
+	if !errors.As(err, &locked) || locked.Ordered || locked.Files != 1 {
+		t.Fatalf("Update with a file attached = %v, want a KindLockedError naming 1 file", err)
+	}
+
+	// Everything else about the product still saves — the refusal is about the kind
+	// alone, not a blanket lock on the row.
+	p.Kind = catalog.KindDigital
+	p.Title = "Recording, renamed"
+	if _, err := s.Update(ctx, p); err != nil {
+		t.Fatalf("Update without changing the kind: %v", err)
+	}
+
+	// Remove the file and it becomes changeable, so the guard is a step to take
+	// rather than a dead end.
+	files, _ := s.Files(ctx, p.ID)
+	if _, err := s.DeleteFile(ctx, p.ID, files[0].ID); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	p.Kind = catalog.KindPhysical
+	if _, err := s.Update(ctx, p); err != nil {
+		t.Fatalf("Update after removing the file: %v", err)
+	}
+}
+
+func TestStore_KindDefaultsToPhysical(t *testing.T) {
+	// A zero-valued Product — from a seed file that says nothing, or a test literal
+	// — must be a parcel rather than a CHECK constraint violation.
+	s := catalog.NewStore(dbtest.Pool(t))
+	p := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
+	if p.Kind != catalog.KindPhysical {
+		t.Errorf("Kind = %q, want physical", p.Kind)
+	}
+	if p.Digital() {
+		t.Error("a product with no kind reads as digital")
+	}
+
+	got, err := s.Get(t.Context(), p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Kind != catalog.KindPhysical {
+		t.Errorf("the stored kind is %q", got.Kind)
+	}
+}
+
+func titles(files []catalog.File) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.Title)
 	}
 	return out
 }

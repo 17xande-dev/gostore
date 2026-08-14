@@ -13,6 +13,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
@@ -291,8 +292,13 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	gateway := payment.NewFake()
-	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, store, cart.NewStore(pool),
-		orders.NewStore(pool), gateway, email.NewFake(), images, testSessions(t))
+	h := New(Deps{
+		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
+		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
+		Grants:  downloads.NewStore(pool, store),
+		Gateway: gateway, Mail: email.NewFake(), Images: images,
+		Files: blob.NewFakeDownloads(), Sessions: testSessions(t),
+	})
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)

@@ -13,13 +13,21 @@ Thank you — we have received your payment for order {{.Order.Reference}}.
 {{range .Order.Items}}  {{.Quantity}} x {{.Title}}{{with .Label}} ({{.}}){{end}} — {{$.Currency}} {{money .LineTotalCents}}
 {{end}}
   Total: {{.Currency}} {{money .Order.TotalCents}}
-
+{{if .Downloads}}
+YOUR DOWNLOADS
+{{range .Downloads}}
+{{.Title}}{{with .Label}} ({{.}}){{end}}
+{{.URL}}
+{{end}}
+Keep these links. They do not expire, and they are the only way back to your
+files — there is no account to log into.
+{{end}}{{if .Order.Customer.Address}}
 Delivering to:
 
 {{.Order.Customer.Address}}
 
-We will be in touch about delivery. If anything above is wrong, reply to this
-email and quote order {{.Order.Reference}}.
+We will be in touch about delivery.{{end}} If anything above is wrong, reply to
+this email and quote order {{.Order.Reference}}.
 
 {{.StoreName}}
 {{.BaseURL}}

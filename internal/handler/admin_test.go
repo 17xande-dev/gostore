@@ -21,6 +21,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
@@ -63,6 +64,11 @@ type shop struct {
 	gateway *payment.Fake
 	mail    *email.Fake
 	images  *blob.Fake
+	// files is the private download store. Separate from images on purpose, as in
+	// production: a test that used one for both would not notice the day a
+	// purchased file went into the public bucket.
+	files  *blob.FakeDownloads
+	grants *downloads.Store
 
 	// variants is the stocked catalog, by size, for the tests that put things in
 	// a cart. Empty until stockCart has run.
@@ -115,7 +121,22 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	sessions := testSessions(t)
 	gateway := payment.NewFake()
 	mail := email.NewFake()
-	h := New(cfg, log, tmpl, store, cart.NewStore(pool), orderStore, gateway, mail, images, sessions)
+	files := blob.NewFakeDownloads()
+	grants := downloads.NewStore(pool, store)
+	h := New(Deps{
+		Config:   cfg,
+		Log:      log,
+		Tmpl:     tmpl,
+		Catalog:  store,
+		Carts:    cart.NewStore(pool),
+		Orders:   orderStore,
+		Grants:   grants,
+		Gateway:  gateway,
+		Mail:     mail,
+		Images:   images,
+		Files:    files,
+		Sessions: sessions,
+	})
 
 	mux := http.NewServeMux()
 	// Everything main.go mounts, mounted the same way: the cart tests need the
@@ -123,6 +144,7 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	// be outside the CSRF group for the same reason it is in production.
 	h.RegisterStorefront(mux)
 	h.RegisterPayments(mux)
+	h.RegisterDownloads(mux)
 	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
 	mux.Handle("/admin/", firstParty)
 	mux.Handle("/cart", firstParty)
@@ -138,7 +160,10 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	// followed away.
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
-	return &shop{srv: srv, catalog: store, orders: orderStore, gateway: gateway, mail: mail, images: images}
+	return &shop{
+		srv: srv, catalog: store, orders: orderStore, gateway: gateway,
+		mail: mail, images: images, files: files, grants: grants,
+	}
 }
 
 // setup returns a signed-in server for the admin routes plus the catalog store
@@ -548,7 +573,7 @@ func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
 		t.Error("the duplicate SKU is not reported on the form")
 	}
 
-	// Same SKU rejected, and the same size/colour pair reported differently.
+	// Same SKU rejected, and the same set of option values reported differently.
 	res, body = post(t, srv, "/admin/products/"+p.ID+"/variants", url.Values{
 		"sku":       {"TEE-M-2"},
 		"option1":   {"M"},
@@ -558,8 +583,8 @@ func TestAdminVariants_DuplicateSKUIsAFieldError(t *testing.T) {
 	if res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("duplicate options = %d, want 422", res.StatusCode)
 	}
-	if !strings.Contains(body, "already has that size and colour") {
-		t.Error("the duplicate size/colour pair is not reported on the form")
+	if !strings.Contains(body, "already has those options") {
+		t.Error("the duplicate option values are not reported on the form")
 	}
 }
 

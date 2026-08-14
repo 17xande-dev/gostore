@@ -7,6 +7,7 @@
 package catalog
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -62,6 +63,15 @@ type Product struct {
 	// settable from JSON, so a seed file cannot claim an image it never uploaded.
 	ImageKey string `json:"-"`
 
+	// Kind is whether this is a parcel or a download. Defaults to physical, so a
+	// seed file that says nothing gets the behaviour every earlier product had.
+	Kind Kind `json:"kind,omitempty"`
+
+	// Files are the downloadable files this product is made of, populated only by
+	// the store methods that say so — nil otherwise, like Variants and Categories.
+	// Always empty for a physical product.
+	Files []File `json:"-"`
+
 	// Option1Name..Option3Name name this product's variant options — "Size" and
 	// "Colour" for a t-shirt, "Cover" for a book, "Format" for a recording. The
 	// values live on the variants; these are only the headings.
@@ -79,6 +89,9 @@ type Product struct {
 
 // HasImage reports whether the product has a picture to show.
 func (p Product) HasImage() bool { return p.ImageKey != "" }
+
+// Digital reports whether this product is a download rather than a parcel.
+func (p Product) Digital() bool { return p.Kind.Digital() }
 
 // OptionNames returns the declared names in slot order, including empties, so a
 // caller can line them up against a variant's values by index.
@@ -166,6 +179,90 @@ func TitleFromSlug(slug string) string {
 	return strings.Join(words, " ")
 }
 
+// Kind is how a product reaches its buyer.
+//
+// Two values and a CHECK constraint rather than a boolean, because a third case —
+// a service, a gift card — is a value here and a second interacting flag there.
+// WooCommerce is the cautionary tale, having grown both `virtual` and
+// `downloadable`; Magento's type_id and BigCommerce's type are this shape.
+//
+// Not called "fulfillment": in Shopify, Magento and Saleor that word names the
+// shipment record with a tracking number on it, and taking the term for something
+// else would collide the first time this store grows anything shipment-shaped.
+type Kind string
+
+const (
+	// KindPhysical is a parcel: it has stock, needs an address, and can be
+	// oversold.
+	KindPhysical Kind = "physical"
+	// KindDigital is a download: unlimited, needs no address, and cannot run out.
+	// Buying one mints an entitlement rather than decrementing anything.
+	KindDigital Kind = "digital"
+)
+
+// Valid reports whether k is one of the two the schema permits. Used to refuse a
+// hand-crafted form value before it reaches a CHECK constraint that would arrive
+// as a 500 with no field to hang a message on.
+func (k Kind) Valid() bool { return k == KindPhysical || k == KindDigital }
+
+// Digital is the test every caller actually wants to make, spelled once so that
+// `== "digital"` is not written in a dozen places.
+func (k Kind) Digital() bool { return k == KindDigital }
+
+// File is one downloadable file of a digital product.
+//
+// Files belong to the product, and VariantIDs says which variants include this
+// one. That indirection is what a conference recording needs: an audio variant
+// and a video variant have disjoint sets, and an "Audio + Video" bundle costs a
+// row rather than a second upload of the same two gigabytes.
+type File struct {
+	ID        int64
+	ProductID string
+	Position  int
+	// Title is what the buyer sees. It defaults to the uploaded filename, because
+	// a shop owner should be able to write "Session 1 — Opening" over "REC_0042".
+	Title string
+	// ObjectKey names the object in the PRIVATE download store. It never appears
+	// in a URL and is never sent to a browser: a download goes through this server,
+	// which authorises it and then either signs a short-lived URL or streams.
+	ObjectKey string
+	// OriginalFilename is only ever used for Content-Disposition, so the file saves
+	// under a name the buyer recognises. It is never used to build a key.
+	OriginalFilename string
+	ContentType      string
+	SizeBytes        int64
+	CreatedAt        time.Time
+
+	// VariantIDs are the variants that include this file, populated by the store
+	// methods that say so.
+	VariantIDs []string
+}
+
+// InVariant reports whether this file is included in a variant, which is what
+// decides whether a checkbox on the admin form is ticked.
+func (f File) InVariant(variantID string) bool {
+	return slices.Contains(f.VariantIDs, variantID)
+}
+
+// HumanSize renders the size for a person: "48.2 MB", "1.4 GB". Decimal units,
+// because that is what a file manager and a download dialog both show, and a
+// buyer comparing the two should not see different numbers.
+func (f File) HumanSize() string { return HumanBytes(f.SizeBytes) }
+
+// HumanBytes renders a byte count in decimal units.
+func HumanBytes(n int64) string {
+	const unit = 1000
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "kMGTPE"[exp])
+}
+
 // OptionSlots is how many option values a variant can carry, and therefore how
 // many names a product can declare. Three is where Shopify landed after a decade
 // of selling other people's inventory, and it comfortably covers the cases here:
@@ -231,7 +328,13 @@ func (p Product) TotalStock() int {
 }
 
 // InStock reports whether any of the product's loaded variants can be sold.
+//
+// Always true for a download: there is nothing to run out of, and a card marked
+// "sold out" over a file that is sitting in a bucket is simply wrong.
 func (p Product) InStock() bool {
+	if p.Digital() {
+		return true
+	}
 	for _, v := range p.Variants {
 		if v.InStock() {
 			return true
@@ -239,6 +342,13 @@ func (p Product) InStock() bool {
 	}
 	return false
 }
+
+// Available reports whether one variant of this product can be bought right now.
+//
+// It takes the variant rather than living on Variant, because the answer depends
+// on the product's kind and a variant does not carry one. Templates call this
+// instead of Variant.InStock for exactly that reason.
+func (p Product) Available(v Variant) bool { return p.Digital() || v.InStock() }
 
 // MinPriceCents and MaxPriceCents bracket the product's loaded variants, so a
 // listing can show one price or a range without the template doing arithmetic.

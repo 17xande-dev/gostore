@@ -36,18 +36,37 @@ type orderMailData struct {
 	// deliverable, in the same breath as confirming it, is not the way to find
 	// out.
 	Oversold []string
+
+	// Downloads are the links this payment created, one per digital line. They
+	// appear only in the customer's copy: the owner has no use for somebody else's
+	// download link, and putting a working credential in a second inbox is the
+	// kind of thing that is obvious once it has happened.
+	//
+	// This is the only moment these exist in readable form — only the hash is
+	// stored — so an email that fails to send costs the buyer their link, and the
+	// admin has to issue a new entitlement. That is the deliberate cost of a
+	// database dump not being a set of working links.
+	Downloads []DownloadLink
+}
+
+// DownloadLink is one buyer's link, ready to render.
+type DownloadLink struct {
+	Title string
+	Label string
+	URL   string
 }
 
 // sendOrderEmails delivers the receipt and the notification for a paid order. It
 // returns nothing: every outcome here is logged and none of them changes what the
 // caller does.
-func (h *Handler) sendOrderEmails(ctx context.Context, order orders.Order, oversold []string) {
+func (h *Handler) sendOrderEmails(ctx context.Context, order orders.Order, oversold []string, grants []orders.Grant) {
 	data := orderMailData{
 		StoreName: h.cfg.StoreName,
 		Currency:  h.cfg.Currency,
 		BaseURL:   h.cfg.BaseURL,
 		Order:     order,
 		Oversold:  oversold,
+		Downloads: h.downloadLinks(grants),
 	}
 	log := h.log.With("order", order.ID)
 
@@ -75,6 +94,26 @@ func (h *Handler) sendOrderEmails(ctx context.Context, order orders.Order, overs
 		return
 	}
 	log.Info("notified the store owner", "to", h.cfg.OrderNotifyEmail)
+}
+
+// downloadLinks turns freshly minted grants into absolute URLs.
+//
+// Absolute, and from BaseURL rather than from the request: this renders into an
+// email, where a relative href points at the reader's mail client and nothing at
+// all.
+func (h *Handler) downloadLinks(grants []orders.Grant) []DownloadLink {
+	if len(grants) == 0 {
+		return nil
+	}
+	out := make([]DownloadLink, 0, len(grants))
+	for _, g := range grants {
+		out = append(out, DownloadLink{
+			Title: g.Title,
+			Label: g.VariantLabel,
+			URL:   h.cfg.BaseURL + "/downloads/" + g.Token,
+		})
+	}
+	return out
 }
 
 func (h *Handler) sendConfirmation(ctx context.Context, data orderMailData) error {

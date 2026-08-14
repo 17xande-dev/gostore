@@ -28,6 +28,25 @@ type Category struct {
 	Position int
 }
 
+type DownloadEvent struct {
+	ID            int64
+	EntitlementID string
+	FileID        int64
+	Ip            string
+	UserAgent     string
+	CreatedAt     time.Time
+}
+
+type Entitlement struct {
+	ID          string
+	OrderID     string
+	OrderItemID int64
+	VariantID   string
+	TokenHash   []byte
+	RevokedAt   *time.Time
+	CreatedAt   time.Time
+}
+
 type Order struct {
 	ID              string
 	CartID          *string
@@ -55,6 +74,7 @@ type OrderItem struct {
 	VariantID      string
 	Title          string
 	VariantLabel   string
+	Kind           string
 	UnitPriceCents int64
 	Quantity       int
 }
@@ -65,6 +85,7 @@ type Product struct {
 	Title       string
 	Description string
 	ImageKey    string
+	Kind        string
 	Option1Name string
 	Option2Name string
 	Option3Name string
@@ -79,6 +100,18 @@ type ProductCategory struct {
 	CategoryID string
 }
 
+type ProductFile struct {
+	ID               int64
+	ProductID        string
+	Position         int
+	Title            string
+	ObjectKey        string
+	OriginalFilename string
+	ContentType      string
+	SizeBytes        int64
+	CreatedAt        time.Time
+}
+
 type ProductVariant struct {
 	ID         string
 	ProductID  string
@@ -89,4 +122,9 @@ type ProductVariant struct {
 	PriceCents int64
 	StockQty   int
 	Active     bool
+}
+
+type VariantFile struct {
+	VariantID string
+	FileID    int64
 }

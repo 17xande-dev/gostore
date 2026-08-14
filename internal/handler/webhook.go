@@ -168,12 +168,18 @@ func (h *Handler) applyCallback(r *http.Request, cb payment.Callback) {
 		log.Error("order paid but stock could not be decremented — oversold",
 			"items", result.Oversold)
 	}
-	log.Info("order paid", "total_cents", order.TotalCents, "items", order.Count())
+	log.Info("order paid", "total_cents", order.TotalCents, "items", order.Count(),
+		"downloads", len(result.Grants))
 
 	// Mail last, and only now that the order is recorded paid: a mail server
 	// having a bad afternoon must not be able to lose a sale. Nothing below can
 	// fail this request — see internal/handler/order_mail.go.
-	h.sendOrderEmails(r.Context(), order, result.Oversold)
+	// The grants carry plaintext download tokens, which exist nowhere else — only
+	// their hashes are stored. If this send fails the buyer has no link and the
+	// admin has to issue a fresh entitlement, so a digital order's mail failure is
+	// worse than a physical one's and the log line above records how many were at
+	// stake.
+	h.sendOrderEmails(r.Context(), order, result.Oversold, result.Grants)
 }
 
 // unpaidStatus maps a gateway's own vocabulary onto this store's. Anything

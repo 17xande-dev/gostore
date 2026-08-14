@@ -555,3 +555,154 @@ func TestLoad_RefusesRealPaymentsWithDemoCredentials(t *testing.T) {
 		t.Errorf("real credentials with the sandbox off were refused: %v", err)
 	}
 }
+
+func TestLoad_DownloadStorageIsAllOrNothing(t *testing.T) {
+	// The same stance the image bucket takes: a partial configuration would fail at
+	// the first upload with whichever piece is missing, which is a worse place to
+	// find out than at boot.
+	for _, key := range []string{
+		"DOWNLOAD_BUCKET", "DOWNLOAD_ACCESS_KEY_ID", "DOWNLOAD_SECRET_ACCESS_KEY",
+	} {
+		setRequired(t)
+		t.Setenv("DOWNLOAD_ENDPOINT", "storage.googleapis.com")
+		t.Setenv("DOWNLOAD_BUCKET", "gostore-downloads")
+		t.Setenv("DOWNLOAD_ACCESS_KEY_ID", "key")
+		t.Setenv("DOWNLOAD_SECRET_ACCESS_KEY", "secret")
+		t.Setenv(key, "")
+
+		_, err := Load()
+		if err == nil {
+			t.Errorf("%s unset: expected an error", key)
+			continue
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("%s unset: error %q does not name it", key, err)
+		}
+	}
+
+	// And the other way round: settings that would do nothing without an endpoint
+	// are a mistake worth naming, not a silent no-op that leaves uploads off.
+	setRequired(t)
+	t.Setenv("DOWNLOAD_BUCKET", "gostore-downloads")
+	if _, err := Load(); err == nil {
+		t.Error("DOWNLOAD_BUCKET without DOWNLOAD_ENDPOINT was accepted")
+	}
+}
+
+func TestLoad_RefusesTwoDownloadBackends(t *testing.T) {
+	setRequired(t)
+	t.Setenv("DOWNLOAD_DIR", t.TempDir())
+	t.Setenv("DOWNLOAD_ENDPOINT", "storage.googleapis.com")
+	t.Setenv("DOWNLOAD_BUCKET", "gostore-downloads")
+	t.Setenv("DOWNLOAD_ACCESS_KEY_ID", "key")
+	t.Setenv("DOWNLOAD_SECRET_ACCESS_KEY", "secret")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("both download backends configured was accepted")
+	}
+	if !strings.Contains(err.Error(), "one or the other") {
+		t.Errorf("error %q does not explain the exclusion", err)
+	}
+}
+
+func TestLoad_RefusesADownloadDirInsideTheImageDir(t *testing.T) {
+	// The check that matters most in this whole feature. Everything under IMAGE_DIR
+	// is served publicly and unauthenticated at /images/, so an overlap would
+	// publish every purchased file to anybody who guessed a key — the exact failure
+	// the private store exists to prevent, arrived at by configuration rather than
+	// by a bug. Boot is the only place to catch it.
+	images := t.TempDir()
+
+	cases := map[string]string{
+		"download dir inside the image dir": images + "/files",
+		"the same directory":                images,
+	}
+	for name, downloads := range cases {
+		setRequired(t)
+		t.Setenv("IMAGE_DIR", images)
+		t.Setenv("DOWNLOAD_DIR", downloads)
+
+		_, err := Load()
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "/images/") {
+			t.Errorf("%s: error %q does not explain that IMAGE_DIR is public", name, err)
+		}
+	}
+
+	// The reverse containment too, which is just as bad and easier to miss.
+	setRequired(t)
+	downloads := t.TempDir()
+	t.Setenv("DOWNLOAD_DIR", downloads)
+	t.Setenv("IMAGE_DIR", downloads+"/pictures")
+	if _, err := Load(); err == nil {
+		t.Error("an image dir inside the download dir was accepted")
+	}
+
+	// Two separate directories are fine, or the check would be useless.
+	setRequired(t)
+	t.Setenv("IMAGE_DIR", t.TempDir())
+	t.Setenv("DOWNLOAD_DIR", t.TempDir())
+	if _, err := Load(); err != nil {
+		t.Errorf("two separate directories were refused: %v", err)
+	}
+}
+
+func TestLoad_RefusesTheImageBucketForDownloads(t *testing.T) {
+	// The bucket half of the same mistake. The image bucket is publicly readable by
+	// design, so pointing downloads at it would make every purchased file
+	// anonymously fetchable — and nothing downstream would notice.
+	setRequired(t)
+	t.Setenv("BLOB_ENDPOINT", "storage.googleapis.com")
+	t.Setenv("BLOB_BUCKET", "gostore-assets")
+	t.Setenv("BLOB_ACCESS_KEY_ID", "key")
+	t.Setenv("BLOB_SECRET_ACCESS_KEY", "secret")
+	t.Setenv("BLOB_PUBLIC_BASE_URL", "https://cdn.example/gostore-assets")
+	t.Setenv("DOWNLOAD_ENDPOINT", "storage.googleapis.com")
+	t.Setenv("DOWNLOAD_BUCKET", "GOSTORE-ASSETS") // case-insensitively the same
+	t.Setenv("DOWNLOAD_ACCESS_KEY_ID", "key")
+	t.Setenv("DOWNLOAD_SECRET_ACCESS_KEY", "secret")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("the public image bucket was accepted as the download bucket")
+	}
+	if !strings.Contains(err.Error(), "publicly readable") {
+		t.Errorf("error %q does not explain why", err)
+	}
+
+	// A different bucket on the same endpoint is the normal setup and must pass.
+	t.Setenv("DOWNLOAD_BUCKET", "gostore-downloads")
+	if _, err := Load(); err != nil {
+		t.Errorf("a separate download bucket was refused: %v", err)
+	}
+}
+
+func TestBytesEnv(t *testing.T) {
+	const def = int64(2 << 30)
+	cases := map[string]int64{
+		"":            def,
+		"1024":        1024,
+		"5MB":         5_000_000,
+		"5MiB":        5 << 20,
+		"2GiB":        2 << 30,
+		"2G":          2 << 30,
+		"  512 KiB  ": 512 << 10,
+		// A malformed or absurd value falls back rather than failing the boot: this
+		// is a cap on an admin's own upload, and refusing to start a shop over it
+		// would be out of proportion.
+		"abc":                   def,
+		"-1":                    def,
+		"0":                     def,
+		"99999999999999999 GiB": def,
+	}
+	for in, want := range cases {
+		t.Setenv("TEST_BYTES", in)
+		if got := bytesEnv("TEST_BYTES", def); got != want {
+			t.Errorf("bytesEnv(%q) = %d, want %d", in, got, want)
+		}
+	}
+}

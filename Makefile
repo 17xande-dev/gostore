@@ -22,7 +22,23 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 	PAYFAST_MERCHANT_ID="$(PAYFAST_MERCHANT_ID)" \
 	PAYFAST_MERCHANT_KEY="$(PAYFAST_MERCHANT_KEY)" \
 	PAYFAST_PASSPHRASE="$(PAYFAST_PASSPHRASE)" \
-	PAYFAST_SANDBOX="$(PAYFAST_SANDBOX)"
+	PAYFAST_SANDBOX="$(PAYFAST_SANDBOX)" \
+	DOWNLOAD_ENDPOINT="$(DOWNLOAD_ENDPOINT)" \
+	DOWNLOAD_BUCKET="$(DOWNLOAD_BUCKET)" \
+	DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \
+	DOWNLOAD_SECRET_ACCESS_KEY="$(DOWNLOAD_SECRET_ACCESS_KEY)" \
+	DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)"
+
+# `make run` serves purchased files from the compose MinIO, which is the one place
+# the signed-URL path can be exercised locally: the server and the browser both
+# reach it at localhost:9000, so a URL signed for one works for the other. The
+# compose *server* cannot, because it reaches MinIO at minio:9000 — hence the
+# directory default there.
+DOWNLOAD_ENDPOINT ?= localhost:9000
+DOWNLOAD_BUCKET ?= gostore-downloads
+DOWNLOAD_ACCESS_KEY_ID ?= gostore
+DOWNLOAD_SECRET_ACCESS_KEY ?= gostore123
+DOWNLOAD_USE_TLS ?= false
 
 SEED_FILE ?= testdata/products.json
 

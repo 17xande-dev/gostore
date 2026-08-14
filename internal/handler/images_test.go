@@ -14,6 +14,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
@@ -38,8 +39,14 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	h := New(cfg, slog.New(slog.DiscardHandler), tmpl, catalog.NewStore(pool), cart.NewStore(pool),
-		orders.NewStore(pool), payment.NewFake(), email.NewFake(), storage, testSessions(t))
+	cat := catalog.NewStore(pool)
+	h := New(Deps{
+		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
+		Catalog: cat, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
+		Grants:  downloads.NewStore(pool, cat),
+		Gateway: payment.NewFake(), Mail: email.NewFake(), Images: storage,
+		Files: blob.NewFakeDownloads(), Sessions: testSessions(t),
+	})
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)

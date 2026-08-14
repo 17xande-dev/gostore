@@ -7,14 +7,17 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/email"
 )
 
@@ -95,6 +98,25 @@ type Config struct {
 	// belong to somebody else, who can change or delete them, and a product page
 	// with a broken image is worse than one with none.
 	ImageDir string
+
+	// Downloads is PRIVATE object storage for the files a digital product is made
+	// of. Separate from Blob, and it has to be: the image bucket is publicly
+	// readable by design, so a paid file in it would be one URL guess away from
+	// everybody. A private prefix inside a public bucket is not an option either,
+	// because public access on GCS and R2 is a whole-bucket toggle.
+	Downloads Downloads
+
+	// DownloadDir is the local-directory alternative, on the same terms as
+	// ImageDir. Mutually exclusive with Downloads, and it must not be the
+	// directory images are served from — that one is published at /images/, which
+	// would hand every purchased file to anybody who guessed a key.
+	DownloadDir string
+
+	// DownloadMaxBytes caps an uploaded file. Audio and video, so the default is
+	// gigabytes rather than the megabytes an image gets. The upload streams
+	// straight to storage, so this is about what a shop should store and how long
+	// a request may hold open, not about memory.
+	DownloadMaxBytes int64
 
 	// RateLimits are the per-IP limits on the three surfaces worth protecting.
 	// Defaults are deliberately loose enough that no real shopper or operator
@@ -251,6 +273,30 @@ func (b Blob) PublicOrigin() string {
 	return u.Scheme + "://" + u.Host
 }
 
+// Downloads is private object storage for purchased files.
+//
+// It has no PublicBaseURL, and the absence is the design. These objects are never
+// addressed publicly: a buyer's link points at this server, which checks the
+// entitlement, records the click and only then produces a short-lived signed URL.
+// A base URL here would be a standing invitation to build a permanent one.
+type Downloads struct {
+	Endpoint  string
+	Bucket    string
+	AccessKey string
+	SecretKey string
+
+	Region string
+	UseTLS bool
+}
+
+// Configured reports whether download storage is set up.
+func (d Downloads) Configured() bool { return d.Endpoint != "" }
+
+// DownloadsEnabled reports whether this shop can sell digital products at all.
+// With neither backend configured the admin says so rather than offering an
+// upload form that could only fail.
+func (c Config) DownloadsEnabled() bool { return c.Downloads.Configured() || c.DownloadDir != "" }
+
 // ImagesEnabled reports whether a product can have an image at all — by upload to
 // object storage or to a local directory. With neither, the admin says so rather
 // than offering a form that could only fail.
@@ -270,6 +316,11 @@ type RateLimits struct {
 	// a throttled notification is retried, but throttling a busy shop's genuine
 	// traffic delays real payments.
 	CallbackPerMinute int
+	// DownloadPerMinute guards the buyer's download links, which mint a signed URL
+	// per click. Generous on purpose: somebody working through a conference
+	// recording's twenty files is ordinary use, and a limit that fires on it would
+	// be switched off rather than tuned.
+	DownloadPerMinute int
 }
 
 // SMTP is the mail relay's configuration. Username and Password may be empty, for
@@ -322,6 +373,7 @@ func Load() (Config, error) {
 			LoginPerMinute:    10,
 			CheckoutPerMinute: 20,
 			CallbackPerMinute: 120,
+			DownloadPerMinute: 60,
 		},
 		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
 		ImageDir:         strings.TrimSpace(os.Getenv("IMAGE_DIR")),
@@ -333,6 +385,16 @@ func Load() (Config, error) {
 			Region:        env("BLOB_REGION", "auto"),
 			UseTLS:        boolEnv("BLOB_USE_TLS", true),
 			PublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("BLOB_PUBLIC_BASE_URL")), "/"),
+		},
+		DownloadDir:      strings.TrimSpace(os.Getenv("DOWNLOAD_DIR")),
+		DownloadMaxBytes: bytesEnv("DOWNLOAD_MAX_BYTES", blob.DefaultMaxDownloadBytes),
+		Downloads: Downloads{
+			Endpoint:  strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
+			Bucket:    strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
+			AccessKey: os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
+			SecretKey: os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
+			Region:    env("DOWNLOAD_REGION", "auto"),
+			UseTLS:    boolEnv("DOWNLOAD_USE_TLS", true),
 		},
 		SMTP: SMTP{
 			Host:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
@@ -488,6 +550,7 @@ func Load() (Config, error) {
 		{"RATE_LIMIT_LOGIN_PER_MINUTE", &c.RateLimits.LoginPerMinute},
 		{"RATE_LIMIT_CHECKOUT_PER_MINUTE", &c.RateLimits.CheckoutPerMinute},
 		{"RATE_LIMIT_CALLBACK_PER_MINUTE", &c.RateLimits.CallbackPerMinute},
+		{"RATE_LIMIT_DOWNLOAD_PER_MINUTE", &c.RateLimits.DownloadPerMinute},
 	} {
 		if v, ok := os.LookupEnv(l.key); ok {
 			n, err := strconv.Atoi(v)
@@ -563,6 +626,10 @@ func Load() (Config, error) {
 	} else if c.Blob.Bucket != "" || c.Blob.AccessKey != "" || c.Blob.PublicBaseURL != "" {
 		return Config{}, fmt.Errorf(
 			"config: BLOB_* variables are set but BLOB_ENDPOINT is not, so uploads would be off")
+	}
+
+	if err := c.checkDownloads(); err != nil {
+		return Config{}, err
 	}
 
 	// "any" is spelled out rather than being an empty list, so disabling a
@@ -710,4 +777,117 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// checkDownloads validates the private download store, on the same all-or-nothing
+// terms as the image bucket: a partial configuration would fail at the first
+// upload with whichever piece is missing, which is a worse place to find out.
+//
+// The overlap check is the one that matters most and is unique to this store.
+func (c Config) checkDownloads() error {
+	if c.Downloads.Configured() && c.DownloadDir != "" {
+		return fmt.Errorf(
+			"config: DOWNLOAD_ENDPOINT and DOWNLOAD_DIR are both set; purchased files come from one or the other")
+	}
+
+	// The download directory must not be, or contain, or sit inside, the directory
+	// images are served from. /images/ is public and unauthenticated, so an overlap
+	// would publish every purchased file to anybody who guessed a key — the exact
+	// failure this whole feature exists to prevent, arrived at by a configuration
+	// mistake rather than a bug. Refusing at boot is the only place to catch it.
+	if c.DownloadDir != "" && c.ImageDir != "" {
+		dl, err1 := filepath.Abs(c.DownloadDir)
+		img, err2 := filepath.Abs(c.ImageDir)
+		if err1 == nil && err2 == nil && overlaps(dl, img) {
+			return fmt.Errorf(
+				"config: DOWNLOAD_DIR %q overlaps IMAGE_DIR %q; everything under IMAGE_DIR is served publicly at /images/, so purchased files must not live there",
+				dl, img)
+		}
+	}
+
+	if c.Downloads.Configured() {
+		var missing []string
+		for _, f := range []struct{ name, value string }{
+			{"DOWNLOAD_BUCKET", c.Downloads.Bucket},
+			{"DOWNLOAD_ACCESS_KEY_ID", c.Downloads.AccessKey},
+			{"DOWNLOAD_SECRET_ACCESS_KEY", c.Downloads.SecretKey},
+		} {
+			if strings.TrimSpace(f.value) == "" {
+				missing = append(missing, f.name)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf(
+				"config: DOWNLOAD_ENDPOINT is set, so these are required too: %s", strings.Join(missing, ", "))
+		}
+
+		// Same endpoint and same bucket as the images means the download store is
+		// the public one. Nothing downstream would notice, and every purchased file
+		// would be anonymously fetchable.
+		if c.Blob.Configured() &&
+			strings.EqualFold(c.Downloads.Endpoint, c.Blob.Endpoint) &&
+			strings.EqualFold(c.Downloads.Bucket, c.Blob.Bucket) {
+			return fmt.Errorf(
+				"config: DOWNLOAD_BUCKET %q is the same bucket as BLOB_BUCKET, which is publicly readable; purchased files need a private bucket of their own",
+				c.Downloads.Bucket)
+		}
+	} else if c.Downloads.Bucket != "" || c.Downloads.AccessKey != "" {
+		return fmt.Errorf(
+			"config: DOWNLOAD_* variables are set but DOWNLOAD_ENDPOINT is not, so digital products would be off")
+	}
+	return nil
+}
+
+// overlaps reports whether either path is the other, or is inside it.
+func overlaps(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return strings.HasPrefix(a, b+string(filepath.Separator)) ||
+		strings.HasPrefix(b, a+string(filepath.Separator))
+}
+
+// bytesEnv reads a byte count, accepting a plain number of bytes or a suffix —
+// "2GiB", "500MB", "2G". Written because the alternative is an operator typing
+// 2147483648 and getting a digit wrong, and because a size limit expressed in raw
+// bytes in a .env file is unreadable to the person who has to change it.
+//
+// A malformed or non-positive value falls back to the default rather than failing
+// the boot: this is a cap on an admin's own upload, and refusing to start a shop
+// over it would be out of proportion. Load logs nothing here, so the check that
+// catches a typo is the admin form saying a smaller number than expected.
+func bytesEnv(key string, def int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+
+	mult := int64(1)
+	upper := strings.ToUpper(raw)
+	for _, s := range []struct {
+		suffix string
+		factor int64
+	}{
+		{"KIB", 1 << 10}, {"MIB", 1 << 20}, {"GIB", 1 << 30},
+		{"KB", 1000}, {"MB", 1000 * 1000}, {"GB", 1000 * 1000 * 1000},
+		{"K", 1 << 10}, {"M", 1 << 20}, {"G", 1 << 30},
+		{"B", 1},
+	} {
+		if strings.HasSuffix(upper, s.suffix) {
+			mult = s.factor
+			upper = strings.TrimSpace(strings.TrimSuffix(upper, s.suffix))
+			break
+		}
+	}
+
+	n, err := strconv.ParseInt(upper, 10, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	// Overflow would turn a huge number into a negative cap, which reads as "no
+	// limit" to a caller comparing against it.
+	if n > math.MaxInt64/mult {
+		return def
+	}
+	return n * mult
 }

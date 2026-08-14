@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
+	"github.com/17xande-dev/gostore/internal/orders"
 )
 
 func TestFormErrors(t *testing.T) {
@@ -143,5 +144,61 @@ func TestProductOptionNames(t *testing.T) {
 		if _, ok := errs[tc.field]; !ok {
 			t.Errorf("%s: no error on %q, got %s", tc.name, tc.field, errs)
 		}
+	}
+}
+
+func TestCustomer_AddressDependsOnWhetherAnythingShips(t *testing.T) {
+	// Asking a buyer for their street address to receive an mp3 is friction for
+	// them and personal data the shop has no use for. A mixed basket still needs
+	// one: a single parcel among the downloads has to go somewhere.
+	base := orders.Customer{Name: "Jane Doe", Email: "jane@example.com"}
+
+	if errs := Customer(base, false); errs.Any() {
+		t.Errorf("a downloads-only order was refused for having no address: %s", errs)
+	}
+	errs := Customer(base, true)
+	if _, ok := errs["address"]; !ok {
+		t.Errorf("an order that ships was accepted with no address: %s", errs)
+	}
+
+	// With one supplied, both agree.
+	withAddress := base
+	withAddress.Address = "1 Example Road"
+	for _, ships := range []bool{true, false} {
+		if errs := Customer(withAddress, ships); errs.Any() {
+			t.Errorf("ships=%v: a complete form was refused: %s", ships, errs)
+		}
+	}
+
+	// The length cap still applies to a downloads-only order: not required is not
+	// the same as unchecked, and an unbounded field is a free way to write two
+	// kilobytes of anything into the orders table.
+	long := base
+	long.Address = strings.Repeat("x", 2_001)
+	if errs := Customer(long, false); !errs.Any() {
+		t.Error("an oversized address was accepted because none was required")
+	}
+}
+
+func TestProduct_RefusesAnUnknownKind(t *testing.T) {
+	base := catalog.Product{Slug: "tee", Title: "Tee"}
+
+	// Empty is the physical default, which is what a form with no such field
+	// submits and what every seed file relies on.
+	for _, kind := range []catalog.Kind{"", catalog.KindPhysical, catalog.KindDigital} {
+		p := base
+		p.Kind = kind
+		if errs := Product(p); errs.Any() {
+			t.Errorf("kind %q was refused: %s", kind, errs)
+		}
+	}
+
+	// Anything else is a hand-crafted request. Without this it would reach the
+	// CHECK constraint, which arrives as a 500 with no field to hang a message on.
+	p := base
+	p.Kind = "subscription"
+	errs := Product(p)
+	if _, ok := errs["kind"]; !ok {
+		t.Errorf("an invented kind was accepted: %s", errs)
 	}
 }

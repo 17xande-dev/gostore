@@ -21,6 +21,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/handler"
 	"github.com/17xande-dev/gostore/internal/middleware"
@@ -142,9 +143,31 @@ func run() error {
 		handler.SetAssetReload(true)
 		tmpl.SetReload(true)
 	}
+	// Private storage for purchased files, entirely separate from the public image
+	// store above. Two backends rather than one is the honest shape: images are
+	// cached forever at a public URL, downloads are signed per click and have no
+	// public URL at all.
+	files, err := newDownloadStorage(cfg, log)
+	if err != nil {
+		return err
+	}
+
 	carts := cart.NewStore(pool)
-	h := handler.New(cfg, log, tmpl, catalog.NewStore(pool), carts,
-		orders.NewStore(pool), gateway, mail, images, sessions)
+	cat := catalog.NewStore(pool)
+	h := handler.New(handler.Deps{
+		Config:   cfg,
+		Log:      log,
+		Tmpl:     tmpl,
+		Catalog:  cat,
+		Carts:    carts,
+		Orders:   orders.NewStore(pool),
+		Grants:   downloads.NewStore(pool, cat),
+		Gateway:  gateway,
+		Mail:     mail,
+		Images:   images,
+		Files:    files,
+		Sessions: sessions,
+	})
 
 	// Abandoned carts are swept in-process, on this context, so it stops with the
 	// server rather than outliving it.
@@ -274,6 +297,52 @@ func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
 // is doing and watching, so it should fail with a message. Nothing else in the store
 // depends on this — the catalog, cart, checkout and payment path never touch it — so
 // a deployment without object storage is a complete shop that pastes image URLs.
+// newDownloadStorage builds the private store purchased files live in.
+//
+// It mirrors newBlobStorage and stays a separate function on purpose: the two
+// stores are configured separately, fail separately, and must never be the same
+// bucket. Config refuses that overlap at boot; keeping the constructors apart is
+// what makes the refusal readable.
+func newDownloadStorage(cfg config.Config, log *slog.Logger) (blob.Downloads, error) {
+	if cfg.DownloadDir != "" {
+		store, err := blob.NewDiskDownloads(cfg.DownloadDir)
+		if err != nil {
+			return nil, err
+		}
+		// Loud about the trade, because it is invisible until the shop is busy:
+		// with no bucket to sign a URL, every byte of every download passes through
+		// this process.
+		log.Info("purchased files stored on disk", "dir", store.Dir(),
+			"note", "every download streams through this server; use DOWNLOAD_* for a bucket that signs its own URLs")
+		return store, nil
+	}
+
+	if !cfg.Downloads.Configured() {
+		log.Info("no download storage configured: digital products are unavailable",
+			"enable", "set DOWNLOAD_DIR for a local directory, or the DOWNLOAD_* variables for a private bucket")
+		return blob.NoDownloads{}, nil
+	}
+
+	if !cfg.Downloads.UseTLS {
+		log.Warn("download storage TLS is disabled: credentials and purchased files go over the network in the clear",
+			"endpoint", cfg.Downloads.Endpoint)
+	}
+	store, err := blob.NewS3Downloads(blob.S3Config{
+		Endpoint:  cfg.Downloads.Endpoint,
+		Bucket:    cfg.Downloads.Bucket,
+		AccessKey: cfg.Downloads.AccessKey,
+		SecretKey: cfg.Downloads.SecretKey,
+		Region:    cfg.Downloads.Region,
+		UseTLS:    cfg.Downloads.UseTLS,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Info("download storage configured", "endpoint", cfg.Downloads.Endpoint, "bucket", cfg.Downloads.Bucket,
+		"note", "this bucket must NOT be publicly readable")
+	return store, nil
+}
+
 func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	// A directory this server serves itself: one binary, one volume, working
 	// photographs, and no object storage to run. Not for a deployment behind a load
@@ -337,6 +406,12 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 	// provider cannot carry a token. It authenticates itself instead; see
 	// internal/handler/webhook.go.
 	h.RegisterPayments(mux)
+
+	// Buyers' download links. Outside the CSRF group deliberately, like the payment
+	// callback: they are safe GETs carrying their own credential in the path, they
+	// arrive from an email in whatever browser the person happens to be using, and
+	// nosurf would set a cookie on every one of them.
+	h.RegisterDownloads(mux)
 
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:

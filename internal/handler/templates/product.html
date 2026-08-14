@@ -31,6 +31,9 @@
 
 {{define "add_to_cart"}}
 {{with .Product}}
+{{/* $prod, because inside the range below the dot is a variant and $ is the
+     page — and whether a variant can be bought depends on the product's kind. */}}
+{{$prod := .}}
 {{if .InStock}}
 <form method="post" action="/cart/items" hx-post="/cart/items" hx-target="#cart-status">
   {{template "csrf" $.CSRFToken}}
@@ -48,8 +51,8 @@
     <label>{{.OptionHeading}}
       <select name="variant_id" required>
         {{range .Variants}}
-        <option value="{{.ID}}" {{if not .InStock}}disabled{{end}}>
-          {{.Label}} — {{$.Currency}} {{money .PriceCents}}{{if not .InStock}} (sold out){{end}}
+        <option value="{{.ID}}" {{if not ($prod.Available .)}}disabled{{end}}>
+          {{.Label}} — {{$.Currency}} {{money .PriceCents}}{{if not ($prod.Available .)}} (sold out){{end}}
         </option>
         {{end}}
       </select>
@@ -96,6 +99,7 @@
     {{else}}<img src="{{asset "placeholder.svg"}}" alt="" fetchpriority="high" decoding="async">{{end}}
   </span>
   <div class="info">
+    {{$prod := .}}
     <h1>{{.Title}}</h1>
     {{with .Description}}<p>{{.}}</p>{{end}}
 
@@ -107,7 +111,7 @@
     {{if and (eq (len .Variants) 1) (eq (index .Variants 0).Label "")}}
       {{with index .Variants 0}}
         <p class="price-lead">{{$.Currency}} {{money .PriceCents}}</p>
-        <p class="muted">{{if .InStock}}In stock{{else}}Sold out{{end}}</p>
+        <p class="muted">{{if $prod.Available .}}{{if $prod.Digital}}Instant download{{else}}In stock{{end}}{{else}}Sold out{{end}}</p>
       {{end}}
     {{else}}
       <table>
@@ -117,7 +121,7 @@
           <tr>
             <td>{{.Label}}</td>
             <td class="num">{{$.Currency}} {{money .PriceCents}}</td>
-            <td>{{if .InStock}}In stock{{else}}<span class="muted">Sold out</span>{{end}}</td>
+            <td>{{if $prod.Available .}}{{if $prod.Digital}}Instant download{{else}}In stock{{end}}{{else}}<span class="muted">Sold out</span>{{end}}</td>
           </tr>
         {{end}}
         </tbody>

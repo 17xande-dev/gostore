@@ -53,6 +53,27 @@
     none.
   */}}
   {{/*
+    Physical or digital. Frozen once the product has been ordered, and while a
+    digital product still has files attached — see kindLock. Rendered as text
+    rather than a disabled select in that case, because a disabled control the
+    server also refuses is two mechanisms where one is load-bearing.
+  */}}
+  <p>
+    {{if .KindLocked}}
+      <strong>Kind:</strong> {{if .Product.Digital}}Digital download{{else}}Physical product{{end}}
+      <br><small>{{.KindLockReason}}</small>
+    {{else}}
+      <label>Kind<br>
+        <select name="kind">
+          <option value="physical" {{if not .Product.Digital}}selected{{end}}>Physical product — shipped</option>
+          <option value="digital" {{if .Product.Digital}}selected{{end}}>Digital download — files</option>
+        </select>
+      </label>
+      <br><small>A download has no stock and needs no delivery address.</small>
+    {{end}}
+    {{template "err" index .Errors "kind"}}
+  </p>
+  {{/*
     The option NAMES live on the product; the values live on each variant below.
     Naming them here rather than fixing them globally is what lets a t-shirt say
     Size and Colour, a book say Cover, and a recording say Format — without any of
@@ -91,6 +112,7 @@
 
 {{if not .IsNew}}
 {{template "product_image" .}}
+{{if .Product.Digital}}{{template "product_files" .}}{{end}}
 {{end}}
 
 {{if .IsNew}}
@@ -98,7 +120,9 @@
 {{else}}
   <h2>Variants</h2>
   <p><small>The variant is what a customer buys. A product with no options still
-  needs exactly one variant, with every option left blank.</small></p>
+  needs exactly one variant, with every option left blank.{{if .Product.Digital}}
+  Each variant grants the files ticked against it below — so a recording sold as
+  audio and as video is two variants with different files.{{end}}</small></p>
 
   {{if not .Product.Variants}}<p>No variants yet — this product cannot be bought.</p>{{end}}
 
@@ -111,7 +135,13 @@
       <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
       {{end}}
       <label>Price ({{$.Currency}}) <input name="price" value="{{money .PriceCents}}" size="8" required></label>
-      <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
+      {{if $.Product.Digital}}
+        {{/* A download cannot run out, so the field would be a number nothing
+             reads. Submitted as 0 so the form still round-trips. */}}
+        <input type="hidden" name="stock_qty" value="0">
+      {{else}}
+        <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
+      {{end}}
       <label><input type="checkbox" name="active" value="1" {{if .Active}}checked{{end}}> Active</label>
       <button type="submit">Save</button>
     </form>
@@ -131,7 +161,11 @@
     <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
     {{end}}
     <label>Price ({{.Currency}}) <input name="price" value="{{.VariantForm.Price}}" size="8" required></label>
-    <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
+    {{if .Product.Digital}}
+      <input type="hidden" name="stock_qty" value="0">
+    {{else}}
+      <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
+    {{end}}
     <label><input type="checkbox" name="active" value="1" {{if .VariantForm.Active}}checked{{end}}> Active</label>
     <button type="submit">Add variant</button>
   </form>
@@ -211,5 +245,101 @@
   <p><small>No image storage is configured, so products cannot have images. Set
   <code>IMAGE_DIR</code> to a directory this server can write to, or the
   <code>BLOB_*</code> variables for object storage.</small></p>
+{{end}}
+{{end}}
+
+{{/*
+  The files a digital product is made of, and which variants include each one.
+
+  The variant tick list is the load-bearing part. Files belong to the product, not
+  to a variant, so a conference recording's audio and video sets are two variants
+  ticking different files — and a bundle variant ticks both without either file
+  being uploaded twice.
+*/}}
+{{define "product_files"}}
+<h2>Files</h2>
+
+{{template "err" index .Errors "file"}}
+
+{{if not .DownloadsEnabled}}
+  <p>Download storage is not configured, so this product cannot have files yet.
+  Set <code>DOWNLOAD_DIR</code> for a local directory, or the <code>DOWNLOAD_*</code>
+  variables for a private bucket. It must not be the bucket product images use —
+  that one is public.</p>
+{{else}}
+  {{if not .Product.Variants}}
+    <p>Add a variant first. A file is only reachable through the variant that
+    grants it, so files uploaded now could not be bought.</p>
+  {{end}}
+
+  {{if .Files}}
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th><th class="num">Size</th><th>Included in</th>
+        <th class="num">Position</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range $file := .Files}}
+      <tr>
+        <td colspan="5">
+          <form method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}">
+            {{template "csrf" $.CSRFToken}}
+            <label>Title <input name="title" value="{{$file.Title}}" size="30" required></label>
+            <label>Position <input name="position" value="{{$file.Position}}" size="4" required></label>
+            <span>{{$file.HumanSize}} · <code>{{$file.ContentType}}</code></span>
+            {{range $.Product.Variants}}
+            <label>
+              <input type="checkbox" name="variant" value="{{.ID}}"
+                     {{if $file.InVariant .ID}}checked{{end}}>
+              {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
+            </label>
+            {{end}}
+            <button type="submit">Save</button>
+          </form>
+          <form method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}/delete">
+            {{template "csrf" $.CSRFToken}}
+            <button type="submit">Delete file</button>
+            <small>Buyers who already have this keep working links, with one file
+            fewer. Check the download count first.</small>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p><a href="/admin/products/{{.Product.ID}}/downloads">Download statistics</a></p>
+  {{else}}
+    <p>No files yet.</p>
+  {{end}}
+
+  <h3>Add a file</h3>
+  <form method="post" action="/admin/products/{{.Product.ID}}/files" enctype="multipart/form-data">
+    {{template "csrf" .CSRFToken}}
+    <p>
+      <label>File <input type="file" name="file" required></label>
+      <br><small>Up to {{.DownloadMaxLabel}}. Audio, video, PDF — anything a buyer
+      should receive. It goes to private storage and is only ever served to
+      somebody who has paid.</small>
+    </p>
+    <p>
+      <label>Title <input name="title" size="30" placeholder="defaults to the filename"></label>
+    </p>
+    {{if .Product.Variants}}
+    <fieldset>
+      <legend>Included in</legend>
+      {{range .Product.Variants}}
+      <label>
+        <input type="checkbox" name="variant" value="{{.ID}}">
+        {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
+      </label>
+      {{end}}
+      <p><small>A file with no variant ticked is stored but nobody can download
+      it.</small></p>
+    </fieldset>
+    {{end}}
+    <p><button type="submit">Upload file</button></p>
+  </form>
 {{end}}
 {{end}}

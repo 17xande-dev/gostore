@@ -83,7 +83,7 @@ func (q *Queries) GetCartLineQuantity(ctx context.Context, arg GetCartLineQuanti
 }
 
 const getVariantAvailability = `-- name: GetVariantAvailability :one
-SELECT v.stock_qty, (v.active AND p.active)::bool AS purchasable
+SELECT v.stock_qty, p.kind, (v.active AND p.active)::bool AS purchasable
 FROM product_variants v
 JOIN products p ON p.id = v.product_id
 WHERE v.id = $1
@@ -91,19 +91,20 @@ WHERE v.id = $1
 
 type GetVariantAvailabilityRow struct {
 	StockQty    int
+	Kind        string
 	Purchasable bool
 }
 
 func (q *Queries) GetVariantAvailability(ctx context.Context, id string) (GetVariantAvailabilityRow, error) {
 	row := q.db.QueryRow(ctx, getVariantAvailability, id)
 	var i GetVariantAvailabilityRow
-	err := row.Scan(&i.StockQty, &i.Purchasable)
+	err := row.Scan(&i.StockQty, &i.Kind, &i.Purchasable)
 	return i, err
 }
 
 const listCartItems = `-- name: ListCartItems :many
 SELECT i.variant_id, i.quantity,
-       p.slug AS product_slug, p.title AS product_title,
+       p.slug AS product_slug, p.title AS product_title, p.kind,
        v.sku, v.option1, v.option2, v.option3, v.price_cents, v.stock_qty,
        (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
@@ -118,6 +119,7 @@ type ListCartItemsRow struct {
 	Quantity     int
 	ProductSlug  string
 	ProductTitle string
+	Kind         string
 	SKU          string
 	Option1      string
 	Option2      string
@@ -150,6 +152,7 @@ func (q *Queries) ListCartItems(ctx context.Context, cartID string) ([]ListCartI
 			&i.Quantity,
 			&i.ProductSlug,
 			&i.ProductTitle,
+			&i.Kind,
 			&i.SKU,
 			&i.Option1,
 			&i.Option2,

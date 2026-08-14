@@ -79,6 +79,14 @@ func Product(p catalog.Product) FormErrors {
 		}
 	}
 
+	// An empty kind is the physical default, which is what a form with no such
+	// field submits. Anything else that is not one of the two is a hand-crafted
+	// request: without this it would reach the CHECK constraint, which arrives as
+	// a 500 with no field to hang a message on.
+	if p.Kind != "" && !p.Kind.Valid() {
+		e.Add("kind", "Choose either a physical product or a download.")
+	}
+
 	productOptions(e, p)
 
 	// There is deliberately nothing here about the image. The product form does not
@@ -199,14 +207,21 @@ func Variant(v catalog.Variant) FormErrors {
 // no comma in it loses a sale to no purpose. The email address is the exception
 // because it is the only way the confirmation reaches anybody, and a typo there is
 // silent.
-func Customer(c orders.Customer) FormErrors {
+//
+// needsShipping is false for a cart of downloads only, which then asks for no
+// address at all. Collecting a street address in order to send somebody an mp3 is
+// friction for the shopper and personal data the shop has no use for. A mixed
+// cart still needs one: a single parcel among the downloads has to go somewhere.
+func Customer(c orders.Customer, needsShipping bool) FormErrors {
 	e := FormErrors{}
 
 	required(e, "name", c.Name)
 	maxLen(e, "name", c.Name, 200)
 	maxLen(e, "phone", c.Phone, 50)
 
-	required(e, "address", c.Address)
+	if needsShipping {
+		required(e, "address", c.Address)
+	}
 	maxLen(e, "address", c.Address, 2_000)
 
 	switch {

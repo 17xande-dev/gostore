@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
 )
 
@@ -26,6 +27,9 @@ type ordersPage struct {
 type orderPage struct {
 	page
 	Order orders.Order
+	// Entitlements are the download grants this order created, with a revoke
+	// button each. Empty for an order of physical goods only.
+	Entitlements []downloads.OrderEntitlement
 }
 
 func (h *Handler) adminOrderList(w http.ResponseWriter, r *http.Request) {
@@ -47,9 +51,19 @@ func (h *Handler) adminOrderShow(w http.ResponseWriter, r *http.Request) {
 		h.orderError(w, r, err)
 		return
 	}
+	// Read unconditionally rather than only for an order with digital lines: the
+	// kind lives on order_items, so deciding here would mean scanning them for the
+	// same answer this query already gives, and the query is a no-op for the
+	// common case.
+	grants, err := h.grants.ForOrder(r.Context(), order.ID)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
 	h.render(w, r, http.StatusOK, "admin_order", orderPage{
-		page:  h.newPage(r, "Order "+order.Reference()),
-		Order: order,
+		page:         h.newPage(r, "Order "+order.Reference()),
+		Order:        order,
+		Entitlements: grants,
 	})
 }
 

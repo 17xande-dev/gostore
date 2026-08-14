@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/17xande-dev/gostore/internal/cart"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
@@ -62,6 +63,15 @@ type successPageData struct {
 	HaveOrder  bool
 	Cancelled  bool
 	SupportRef string
+
+	// Grants are the download entitlements this order created, with their files.
+	//
+	// The emailed link cannot be shown here — the plaintext token existed only
+	// while that email was rendered — so these link through a route authorised by
+	// the cart cookie instead. That cookie already identifies the buyer well
+	// enough for this page to show their name and address, so it grants nothing
+	// further.
+	Grants []downloads.Grant
 }
 
 // checkoutForm is the shipping form's raw input, kept as typed so a rejected
@@ -80,6 +90,10 @@ func (h *Handler) registerCheckout(mux *http.ServeMux) {
 	mux.Handle("POST /cart/checkout", h.limits.checkout(http.HandlerFunc(h.checkoutSubmit)))
 	mux.HandleFunc("GET /cart/checkout/success", h.checkoutSuccess)
 	mux.HandleFunc("GET /cart/checkout/cancel", h.checkoutCancel)
+	// Downloads straight after paying, authorised by the cart cookie rather than
+	// by the emailed token. Inside the cart's path so that cookie is in scope.
+	mux.Handle("GET /cart/checkout/downloads/{entitlementID}/{fileID}",
+		h.limits.download(http.HandlerFunc(h.checkoutDownload)))
 }
 
 func (h *Handler) checkoutShow(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +129,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	customer := orders.Customer{Name: form.Name, Email: form.Email, Phone: form.Phone, Address: form.Address}
 
-	if errs := validate.Customer(customer); errs.Any() {
+	if errs := validate.Customer(customer, c.NeedsShipping()); errs.Any() {
 		h.renderCheckout(w, r, http.StatusUnprocessableEntity, c, form, errs, "")
 		return
 	}
@@ -200,6 +214,14 @@ func (h *Handler) renderOutcome(w http.ResponseWriter, r *http.Request, name str
 			data.Order = order
 			data.HaveOrder = true
 			data.SupportRef = order.Reference()
+			// Only for a paid order: entitlements exist from the moment payment is
+			// recorded, and offering a download beside "we are waiting for the
+			// payment to be confirmed" would contradict the page.
+			if order.Paid() {
+				if data.Grants, err = h.grants.GrantsForOrder(r.Context(), order.ID); err != nil {
+					h.log.Error("read downloads for outcome page", "order", order.ID, "error", err)
+				}
+			}
 		case errors.Is(err, orders.ErrNotFound):
 		default:
 			h.log.Error("read order for outcome page", "error", err)

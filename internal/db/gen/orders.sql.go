@@ -66,8 +66,8 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Creat
 }
 
 const createOrderItem = `-- name: CreateOrderItem :exec
-INSERT INTO order_items (order_id, variant_id, title, variant_label, unit_price_cents, quantity)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO order_items (order_id, variant_id, title, variant_label, kind, unit_price_cents, quantity)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type CreateOrderItemParams struct {
@@ -75,6 +75,7 @@ type CreateOrderItemParams struct {
 	VariantID      string
 	Title          string
 	VariantLabel   string
+	Kind           string
 	UnitPriceCents int64
 	Quantity       int
 }
@@ -91,6 +92,7 @@ func (q *Queries) CreateOrderItem(ctx context.Context, arg CreateOrderItemParams
 		arg.VariantID,
 		arg.Title,
 		arg.VariantLabel,
+		arg.Kind,
 		arg.UnitPriceCents,
 		arg.Quantity,
 	)
@@ -202,7 +204,7 @@ func (q *Queries) GetOrderStatus(ctx context.Context, id string) (string, error)
 
 const listCartLinesForOrder = `-- name: ListCartLinesForOrder :many
 
-SELECT i.variant_id, i.quantity, p.title, v.option1, v.option2, v.option3,
+SELECT i.variant_id, i.quantity, p.title, p.kind, v.option1, v.option2, v.option3,
        v.price_cents, v.stock_qty, (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
 JOIN product_variants v ON v.id = i.variant_id
@@ -215,6 +217,7 @@ type ListCartLinesForOrderRow struct {
 	VariantID   string
 	Quantity    int
 	Title       string
+	Kind        string
 	Option1     string
 	Option2     string
 	Option3     string
@@ -243,6 +246,7 @@ func (q *Queries) ListCartLinesForOrder(ctx context.Context, cartID string) ([]L
 			&i.VariantID,
 			&i.Quantity,
 			&i.Title,
+			&i.Kind,
 			&i.Option1,
 			&i.Option2,
 			&i.Option3,
@@ -260,15 +264,60 @@ func (q *Queries) ListCartLinesForOrder(ctx context.Context, cartID string) ([]L
 	return items, nil
 }
 
+const listDigitalOrderItems = `-- name: ListDigitalOrderItems :many
+SELECT id, variant_id, title, variant_label
+FROM order_items
+WHERE order_id = $1 AND kind = 'digital'
+ORDER BY id
+`
+
+type ListDigitalOrderItemsRow struct {
+	ID           int64
+	VariantID    string
+	Title        string
+	VariantLabel string
+}
+
+// The digital lines of a paid order, which are the ones that need entitlements.
+// Read inside MarkPaid's transaction, from the order_items snapshot rather than
+// from products, so a product flipped afterwards cannot change what an order
+// granted.
+func (q *Queries) ListDigitalOrderItems(ctx context.Context, orderID string) ([]ListDigitalOrderItemsRow, error) {
+	rows, err := q.db.Query(ctx, listDigitalOrderItems, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDigitalOrderItemsRow{}
+	for rows.Next() {
+		var i ListDigitalOrderItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.VariantID,
+			&i.Title,
+			&i.VariantLabel,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrderItems = `-- name: ListOrderItems :many
-SELECT variant_id, title, variant_label, unit_price_cents, quantity
+SELECT id, variant_id, title, variant_label, kind, unit_price_cents, quantity
 FROM order_items WHERE order_id = $1 ORDER BY id
 `
 
 type ListOrderItemsRow struct {
+	ID             int64
 	VariantID      string
 	Title          string
 	VariantLabel   string
+	Kind           string
 	UnitPriceCents int64
 	Quantity       int
 }
@@ -283,9 +332,11 @@ func (q *Queries) ListOrderItems(ctx context.Context, orderID string) ([]ListOrd
 	for rows.Next() {
 		var i ListOrderItemsRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.VariantID,
 			&i.Title,
 			&i.VariantLabel,
+			&i.Kind,
 			&i.UnitPriceCents,
 			&i.Quantity,
 		); err != nil {

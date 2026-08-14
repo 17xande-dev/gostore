@@ -14,6 +14,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
@@ -25,15 +26,21 @@ import (
 // Handler holds everything the HTTP layer needs. It is created once at startup
 // and is safe for concurrent use.
 type Handler struct {
-	cfg      config.Config
-	log      *slog.Logger
-	tmpl     *Templates
-	cat      *catalog.Store
-	cart     *cart.Store
-	orders   *orders.Store
-	gateway  payment.Gateway
-	mail     email.Sender
+	cfg     config.Config
+	log     *slog.Logger
+	tmpl    *Templates
+	cat     *catalog.Store
+	cart    *cart.Store
+	orders  *orders.Store
+	grants  *downloads.Store
+	gateway payment.Gateway
+	mail    email.Sender
+	// blob is the PUBLIC image store and files is the PRIVATE download store.
+	// They are never interchangeable: putting a purchased file through blob would
+	// publish it, and it is worth the two fields being named differently enough
+	// that the mistake looks wrong at the call site.
 	blob     blob.Storage
+	files    blob.Downloads
 	sessions *auth.Sessions
 
 	// limits are built here from cfg rather than passed in, so that a rate limit is
@@ -50,6 +57,7 @@ type limiters struct {
 	login    middleware.Middleware
 	checkout middleware.Middleware
 	callback middleware.Middleware
+	download middleware.Middleware
 }
 
 // perMinute builds a limiter allowing n requests a minute, or a pass-through when
@@ -77,12 +85,44 @@ func (h *Handler) rateLimited(w http.ResponseWriter, r *http.Request) {
 			"Retry-After header on this response says how long.")
 }
 
-func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Store, carts *cart.Store,
-	ord *orders.Store, gateway payment.Gateway, mail email.Sender, images blob.Storage,
-	sessions *auth.Sessions) *Handler {
+// Deps is everything a Handler needs, by name.
+//
+// It replaced a positional constructor when the twelfth argument arrived. The
+// argument for that is the one this project already made about sqlc and the
+// orders table: `images` and `downloads` are both blob interfaces, `cat` and
+// `carts` are both stores, and a positional call is one careless edit away from
+// putting the public image bucket where the private download store belongs —
+// which would compile, pass most tests, and publish every purchased file.
+type Deps struct {
+	Config   config.Config
+	Log      *slog.Logger
+	Tmpl     *Templates
+	Catalog  *catalog.Store
+	Carts    *cart.Store
+	Orders   *orders.Store
+	Grants   *downloads.Store
+	Gateway  payment.Gateway
+	Mail     email.Sender
+	Images   blob.Storage
+	Files    blob.Downloads
+	Sessions *auth.Sessions
+}
+
+func New(d Deps) *Handler {
+	cfg, log := d.Config, d.Log
 	h := &Handler{
-		cfg: cfg, log: log, tmpl: tmpl, cat: cat, cart: carts,
-		orders: ord, gateway: gateway, mail: mail, blob: images, sessions: sessions,
+		cfg: cfg, log: log, tmpl: d.Tmpl, cat: d.Catalog, cart: d.Carts,
+		orders: d.Orders, grants: d.Grants, gateway: d.Gateway, mail: d.Mail,
+		blob: d.Images, files: d.Files, sessions: d.Sessions,
+	}
+	// Both storage backends are optional and both must be non-nil, so that a
+	// caller omitting one gets a refusal with a message rather than a nil panic on
+	// the first upload.
+	if h.blob == nil {
+		h.blob = blob.Unconfigured{}
+	}
+	if h.files == nil {
+		h.files = blob.NoDownloads{}
 	}
 	page := http.HandlerFunc(h.rateLimited)
 	h.limits = limiters{
@@ -91,6 +131,11 @@ func New(cfg config.Config, log *slog.Logger, tmpl *Templates, cat *catalog.Stor
 		// No page for the gateway: it is a machine, and the plain status with
 		// Retry-After is exactly what it acts on.
 		callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.TrustProxyIP, log, nil),
+		// Signed URLs are cheap to mint, so a loop over one valid token should not
+		// be able to produce them without bound. The allowance is generous: a buyer
+		// clicking through a conference recording's twenty files in a minute is
+		// ordinary, and a limit that fires on that would be turned off.
+		download: perMinute("downloads", cfg.RateLimits.DownloadPerMinute, cfg.TrustProxyIP, log, page),
 	}
 	return h
 }
@@ -187,6 +232,10 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("GET /admin/products/new", h.adminProductNew)
 	admin("POST /admin/products", h.adminProductCreate)
 	admin("GET /admin/products/{id}/edit", h.adminProductEdit)
+	admin("GET /admin/products/{id}/downloads", h.adminProductDownloads)
+	admin("POST /admin/products/{id}/files", h.adminProductFileUpload)
+	admin("POST /admin/products/{id}/files/{fileID}", h.adminProductFileUpdate)
+	admin("POST /admin/products/{id}/files/{fileID}/delete", h.adminProductFileDelete)
 	admin("POST /admin/products/{id}", h.adminProductUpdate)
 	admin("POST /admin/products/{id}/delete", h.adminProductDelete)
 	admin("POST /admin/products/{id}/variants", h.adminVariantCreate)
@@ -206,6 +255,10 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	// an order. See internal/handler/admin_orders.go.
 	admin("GET /admin/orders", h.adminOrderList)
 	admin("GET /admin/orders/{id}", h.adminOrderShow)
+	// The only mutating routes under /admin/orders. See adminEntitlementRevoke for
+	// why they do not break the read-only rule the order pages otherwise keep.
+	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", h.adminEntitlementRevoke)
+	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/restore", h.adminEntitlementRestore)
 }
 
 // page is what every rendered page needs regardless of what it shows. It is
@@ -270,6 +323,21 @@ type productFormPage struct {
 	UploadsEnabled bool
 	AcceptTypes    string
 	MaxUploadMB    int64
+
+	// Download file state, rendered only for a digital product.
+	// DownloadsEnabled is false when no private download store is configured, in
+	// which case the page says so rather than offering an upload that could only
+	// fail.
+	DownloadsEnabled bool
+	DownloadMaxLabel string
+	Files            []catalog.File
+
+	// KindLocked is set when this product's kind can no longer be changed, with
+	// KindLockReason saying why. The form then shows the kind as text rather than
+	// a select — a disabled control the server also refuses is two mechanisms
+	// where one will do, and only the server's is load-bearing.
+	KindLocked     bool
+	KindLockReason string
 }
 
 // variantForm is the add-variant form's raw input, kept as typed so a
@@ -351,7 +419,9 @@ func (h *Handler) adminProductEdit(w http.ResponseWriter, r *http.Request) {
 		h.storeError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "admin_product_form", h.productForm(r, p, cats, false, nil))
+	form := h.productForm(r, p, cats, false, nil)
+	h.attachFiles(w, r, &form)
+	h.render(w, r, http.StatusOK, "admin_product_form", form)
 }
 
 func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
@@ -381,6 +451,27 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 			errs := validate.FormErrors{}
 			errs.Add(conflict.Field, "Already used by another product.")
 			h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, cats, errs)
+			return
+		}
+		// The kind is frozen. The form usually renders it as text rather than a
+		// select in this state, so reaching here means either a hand-crafted
+		// request or a page rendered before the product was ordered — both of which
+		// want the same explanation on the same form.
+		if locked, ok := errors.AsType[*catalog.KindLockedError](err); ok {
+			errs := validate.FormErrors{}
+			if locked.Ordered {
+				errs.Add("kind", "This product has been ordered, so its kind is fixed. "+
+					"Deactivate it and create a new one instead.")
+			} else {
+				errs.Add("kind", fmt.Sprintf("Remove the %d attached file(s) first. Switching to a "+
+					"physical product would leave them in storage with nothing listing them.", locked.Files))
+			}
+			// The submitted kind is refused, so the form must show the stored one —
+			// otherwise the page argues with itself.
+			if stored, err := h.cat.Get(r.Context(), p.ID); err == nil {
+				p.Kind = stored.Kind
+			}
+			h.renderProductForm(w, r, http.StatusConflict, p, cats, errs)
 			return
 		}
 		h.storeError(w, r, err)
@@ -499,6 +590,7 @@ func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request, known []c
 		// No image_url: the form does not offer one, and reading it here would be a
 		// way to set it by hand-crafting a request. Images arrive by upload only.
 		Active:      r.PostFormValue("active") != "",
+		Kind:        catalog.Kind(strings.TrimSpace(r.PostFormValue("kind"))),
 		Option1Name: strings.TrimSpace(r.PostFormValue("option1_name")),
 		Option2Name: strings.TrimSpace(r.PostFormValue("option2_name")),
 		Option3Name: strings.TrimSpace(r.PostFormValue("option3_name")),
@@ -586,7 +678,55 @@ func (h *Handler) productForm(r *http.Request, p catalog.Product, cats []catalog
 		UploadsEnabled: h.cfg.ImagesEnabled(),
 		AcceptTypes:    strings.Join(blob.SupportedTypes(), ","),
 		MaxUploadMB:    blob.MaxUploadBytes >> 20,
+
+		DownloadsEnabled: h.cfg.DownloadsEnabled(),
+		DownloadMaxLabel: catalog.HumanBytes(h.downloadMaxBytes()),
 	}
+}
+
+// attachFiles loads a digital product's files onto the form, and works out
+// whether its kind is still changeable.
+//
+// Both are reads the form needs and neither belongs in productForm, which is also
+// used for a product that does not exist yet. A failure here is logged rather than
+// answered: the form is usually being rendered *because* something else already
+// went wrong, and replacing that message with a different one would lose it.
+func (h *Handler) attachFiles(w http.ResponseWriter, r *http.Request, form *productFormPage) {
+	if form.IsNew || form.Product.ID == "" {
+		return
+	}
+	if form.Product.Digital() {
+		files, err := h.cat.Files(r.Context(), form.Product.ID)
+		if err != nil {
+			h.logger(r).Error("could not read a product's files", "product", form.Product.ID, "error", err)
+		}
+		form.Files = files
+	}
+	form.KindLocked, form.KindLockReason = h.kindLock(r, form.Product)
+}
+
+// kindLock reports whether a product's kind is frozen, and why.
+//
+// The reasons are shown before the operator tries, because a select that silently
+// refuses on submit is worse than a sentence saying it cannot be changed. The
+// server refuses either way — catalog.Update checks the same two facts against the
+// stored row — so this is presentation and not the guard.
+func (h *Handler) kindLock(r *http.Request, p catalog.Product) (bool, string) {
+	ordered, files, err := h.cat.KindChangeBlockers(r.Context(), p.ID)
+	if err != nil {
+		h.logger(r).Error("could not check whether a kind may change", "product", p.ID, "error", err)
+		return false, ""
+	}
+	switch {
+	case ordered > 0:
+		return true, "This product has been ordered, so its kind is fixed. An order records how " +
+			"something was actually fulfilled, and changing that afterwards would rewrite it. " +
+			"Deactivate this product and create a new one instead."
+	case p.Digital() && files > 0:
+		return true, fmt.Sprintf("Remove the %d attached file(s) before changing this to a physical "+
+			"product. Switching would leave them in storage with nothing listing them.", files)
+	}
+	return false, ""
 }
 
 // renderProductForm re-renders the edit page for a rejected product form,
@@ -598,7 +738,9 @@ func (h *Handler) renderProductForm(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	p.Variants = variants
-	h.render(w, r, status, "admin_product_form", h.productForm(r, p, cats, false, errs))
+	form := h.productForm(r, p, cats, false, errs)
+	h.attachFiles(w, r, &form)
+	h.render(w, r, status, "admin_product_form", form)
 }
 
 // renderVariantErrors re-renders the edit page after a variant form was
@@ -618,12 +760,13 @@ func (h *Handler) renderVariantErrors(w http.ResponseWriter, r *http.Request, st
 	page.VariantForm = form
 	page.VariantErrors = errs
 	page.VariantErrorID = variantID
+	h.attachFiles(w, r, &page)
 	h.render(w, r, status, "admin_product_form", page)
 }
 
 func conflictMessage(field string) string {
 	if field == "options" {
-		return "Another variant of this product already has that size and colour."
+		return "Another variant of this product already has those options."
 	}
 	return "Already used by another variant."
 }

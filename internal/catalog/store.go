@@ -152,6 +152,7 @@ func (s *Store) SearchActive(ctx context.Context, q Search) (Results, error) {
 			CreatedAt:   r.CreatedAt,
 			UpdatedAt:   r.UpdatedAt,
 			ImageKey:    r.ImageKey,
+			Kind:        Kind(r.Kind),
 			Option1Name: r.Option1Name,
 			Option2Name: r.Option2Name,
 			Option3Name: r.Option3Name,
@@ -278,6 +279,7 @@ func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
 			Title:       p.Title,
 			Description: p.Description,
 			Active:      p.Active,
+			Kind:        string(p.kindOrDefault()),
 			Option1Name: p.Option1Name,
 			Option2Name: p.Option2Name,
 			Option3Name: p.Option3Name,
@@ -298,12 +300,16 @@ func (s *Store) Create(ctx context.Context, p Product) (Product, error) {
 // category that is not in p is one that was unticked.
 func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 	return s.inTx(ctx, func(q *gen.Queries) (Product, error) {
+		if err := checkKindChange(ctx, q, p); err != nil {
+			return Product{}, err
+		}
 		row, err := q.UpdateProduct(ctx, gen.UpdateProductParams{
 			ID:          p.ID,
 			Slug:        p.Slug,
 			Title:       p.Title,
 			Description: p.Description,
 			Active:      p.Active,
+			Kind:        string(p.kindOrDefault()),
 			Option1Name: p.Option1Name,
 			Option2Name: p.Option2Name,
 			Option3Name: p.Option3Name,
@@ -317,6 +323,80 @@ func (s *Store) Update(ctx context.Context, p Product) (Product, error) {
 		}
 		return out, nil
 	})
+}
+
+// kindOrDefault is what actually reaches the database, so a zero-valued Product
+// — from a seed file that says nothing, or a test literal — is a parcel rather
+// than a CHECK constraint violation.
+func (p Product) kindOrDefault() Kind {
+	if p.Kind == "" {
+		return KindPhysical
+	}
+	return p.Kind
+}
+
+// KindLockedError says a product's kind cannot change, and why.
+//
+// It is its own type rather than ErrInUse because the two refusals need different
+// sentences on the form: one is "somebody bought this", the other is "there are
+// still files attached", and the second tells the operator what to do next.
+type KindLockedError struct {
+	// Ordered is true when an order references this product, which freezes the
+	// kind permanently.
+	Ordered bool
+	// Files is how many files are still attached, when that is the obstacle.
+	Files int64
+}
+
+func (e *KindLockedError) Error() string {
+	if e.Ordered {
+		return "catalog: the kind of an ordered product cannot be changed"
+	}
+	return fmt.Sprintf("catalog: %d file(s) are still attached", e.Files)
+}
+
+// checkKindChange enforces the two rules that freeze a product's kind.
+//
+// Neither protects purchase history — order_items snapshots the kind, so a
+// completed sale is already safe. What they protect is *live* state, where the
+// failure is silent: flipping physical to digital leaves a stock count nothing
+// decrements any more, and flipping the other way leaves files and live
+// entitlements on a product that now ships.
+//
+// It reads the current row rather than trusting the submitted one, so a
+// hand-crafted request cannot claim the product was already digital.
+func checkKindChange(ctx context.Context, q *gen.Queries, p Product) error {
+	current, err := q.GetProduct(ctx, p.ID)
+	if err != nil {
+		return translate(fmt.Errorf("catalog: read product: %w", err))
+	}
+	if Kind(current.Kind) == p.kindOrDefault() {
+		return nil
+	}
+
+	ordered, err := q.CountProductOrderItems(ctx, p.ID)
+	if err != nil {
+		return fmt.Errorf("catalog: count order items: %w", err)
+	}
+	if ordered > 0 {
+		return &KindLockedError{Ordered: true}
+	}
+
+	// Only in this direction. Going physical→digital with no files is the ordinary
+	// way a digital product is created, and refusing it would make the kind
+	// unsettable. Going digital→physical while files exist would strand objects in
+	// the bucket with nothing in the admin still listing them — and deleting them
+	// as a side effect of a dropdown is worse, so the operator is asked to do it.
+	if p.kindOrDefault() == KindPhysical {
+		files, err := q.CountProductFiles(ctx, p.ID)
+		if err != nil {
+			return fmt.Errorf("catalog: count files: %w", err)
+		}
+		if files > 0 {
+			return &KindLockedError{Files: files}
+		}
+	}
+	return nil
 }
 
 // inTx runs fn against a transaction and commits it, so the several writes a
@@ -548,6 +628,7 @@ func (s *Store) Upsert(ctx context.Context, p Product) (Product, error) {
 		Title:       p.Title,
 		Description: p.Description,
 		Active:      p.Active,
+		Kind:        string(p.kindOrDefault()),
 		Option1Name: p.Option1Name,
 		Option2Name: p.Option2Name,
 		Option3Name: p.Option3Name,
@@ -661,6 +742,7 @@ func product(r gen.Product) Product {
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 		ImageKey:    r.ImageKey,
+		Kind:        Kind(r.Kind),
 		Option1Name: r.Option1Name,
 		Option2Name: r.Option2Name,
 		Option3Name: r.Option3Name,
@@ -745,4 +827,219 @@ func translate(err error) error {
 		}
 	}
 	return err
+}
+
+// Files returns a product's downloadable files, each carrying the variants that
+// include it.
+//
+// Two queries rather than a join, matching how variants and categories are
+// attached: a join would fan each file's columns out once per variant, and a
+// digital product has a handful of files rather than thousands.
+func (s *Store) Files(ctx context.Context, productID string) ([]File, error) {
+	rows, err := s.q.ListProductFiles(ctx, productID)
+	if err != nil {
+		return nil, translate(fmt.Errorf("catalog: list files: %w", err))
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, file(r))
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	links, err := s.q.ListProductFileVariants(ctx, productID)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list file variants: %w", err)
+	}
+	byFile := make(map[int64][]string, len(out))
+	for _, l := range links {
+		byFile[l.FileID] = append(byFile[l.FileID], l.VariantID)
+	}
+	for i := range out {
+		out[i].VariantIDs = byFile[out[i].ID]
+	}
+	return out, nil
+}
+
+// VariantFiles returns the files one variant grants, which is exactly what a
+// buyer of that variant may download.
+func (s *Store) VariantFiles(ctx context.Context, variantID string) ([]File, error) {
+	rows, err := s.q.ListVariantFiles(ctx, variantID)
+	if err != nil {
+		return nil, translate(fmt.Errorf("catalog: list variant files: %w", err))
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, file(r))
+	}
+	return out, nil
+}
+
+// File returns one file of one product. The product id is part of the lookup, so
+// a file id from another product's page finds nothing rather than leaking a title.
+func (s *Store) File(ctx context.Context, productID string, id int64) (File, error) {
+	row, err := s.q.GetProductFile(ctx, gen.GetProductFileParams{ID: id, ProductID: productID})
+	if err != nil {
+		return File{}, translate(fmt.Errorf("catalog: get file: %w", err))
+	}
+	return file(row), nil
+}
+
+// AddFile records an uploaded file and links it to the given variants, in one
+// transaction so a file can never exist with no variants because the second write
+// failed — which would be a file nobody can download and nothing in the admin
+// explains.
+//
+// The object is already in storage by the time this is called. That order is
+// deliberate and matches the image path: a row pointing at bytes that are not
+// there is a broken download, while bytes with no row are a logged orphan.
+func (s *Store) AddFile(ctx context.Context, f File, variantIDs []string) (File, error) {
+	var out File
+	err := s.tx(ctx, func(q *gen.Queries) error {
+		pos, err := q.NextProductFilePosition(ctx, f.ProductID)
+		if err != nil {
+			return fmt.Errorf("catalog: next file position: %w", err)
+		}
+		row, err := q.CreateProductFile(ctx, gen.CreateProductFileParams{
+			ProductID:        f.ProductID,
+			Position:         int(pos),
+			Title:            f.Title,
+			ObjectKey:        f.ObjectKey,
+			OriginalFilename: f.OriginalFilename,
+			ContentType:      f.ContentType,
+			SizeBytes:        f.SizeBytes,
+		})
+		if err != nil {
+			return translate(fmt.Errorf("catalog: create file: %w", err))
+		}
+		out = file(row)
+		out.VariantIDs, err = setFileVariants(ctx, q, f.ProductID, out.ID, variantIDs)
+		return err
+	})
+	if err != nil {
+		return File{}, err
+	}
+	return out, nil
+}
+
+// UpdateFile renames a file and rewrites which variants include it. The object
+// key is deliberately not touched: bytes are replaced by uploading a new file,
+// never by repointing a row, because repointing would orphan the old object with
+// nothing recording that it existed.
+func (s *Store) UpdateFile(ctx context.Context, f File, variantIDs []string) (File, error) {
+	var out File
+	err := s.tx(ctx, func(q *gen.Queries) error {
+		row, err := q.UpdateProductFile(ctx, gen.UpdateProductFileParams{
+			ID:        f.ID,
+			ProductID: f.ProductID,
+			Title:     f.Title,
+			Position:  f.Position,
+		})
+		if err != nil {
+			return translate(fmt.Errorf("catalog: update file: %w", err))
+		}
+		out = file(row)
+		out.VariantIDs, err = setFileVariants(ctx, q, f.ProductID, out.ID, variantIDs)
+		return err
+	})
+	if err != nil {
+		return File{}, err
+	}
+	return out, nil
+}
+
+// DeleteFile removes the row and returns the object key, so the caller can delete
+// the bytes afterwards.
+//
+// The row goes first and the object second, which is the reverse of AddFile and
+// right for the same reason: the end state has no file either way, and a deleted
+// object still referenced by a live row would be a download that 500s, while a
+// row deleted before its object is a logged orphan.
+//
+// download_events referencing this file cascade away with it. That is a real loss
+// of history and it is the right trade: the alternative is keeping rows that point
+// at a file whose title nobody can look up, and the statistics a shop owner wants
+// are about files they still sell.
+func (s *Store) DeleteFile(ctx context.Context, productID string, id int64) (string, error) {
+	key, err := s.q.DeleteProductFile(ctx, gen.DeleteProductFileParams{ID: id, ProductID: productID})
+	if err != nil {
+		return "", translate(fmt.Errorf("catalog: delete file: %w", err))
+	}
+	return key, nil
+}
+
+// setFileVariants replaces a file's variant links, returning the ids that were
+// actually written.
+//
+// Clear-then-insert rather than a diff: the form submits the whole set every
+// time, which is what makes unticking one mean something, and the set is a
+// handful of rows.
+func setFileVariants(ctx context.Context, q *gen.Queries, productID string, fileID int64, variantIDs []string) ([]string, error) {
+	if err := q.ClearFileVariants(ctx, fileID); err != nil {
+		return nil, fmt.Errorf("catalog: clear file variants: %w", err)
+	}
+	written := make([]string, 0, len(variantIDs))
+	for _, id := range variantIDs {
+		// The insert checks the variant belongs to this product, so a variant id
+		// borrowed from another product's page links nothing instead of granting
+		// its buyers somebody else's files.
+		err := q.AddFileVariant(ctx, gen.AddFileVariantParams{
+			VariantID: id, FileID: fileID, ProductID: productID,
+		})
+		if err != nil {
+			return nil, translate(fmt.Errorf("catalog: link file to variant: %w", err))
+		}
+		written = append(written, id)
+	}
+	return written, nil
+}
+
+// tx is inTx for the writes that do not return a Product.
+func (s *Store) tx(ctx context.Context, fn func(*gen.Queries) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog: begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := fn(s.q.WithTx(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("catalog: commit: %w", err)
+	}
+	return nil
+}
+
+func file(r gen.ProductFile) File {
+	return File{
+		ID:               r.ID,
+		ProductID:        r.ProductID,
+		Position:         r.Position,
+		Title:            r.Title,
+		ObjectKey:        r.ObjectKey,
+		OriginalFilename: r.OriginalFilename,
+		ContentType:      r.ContentType,
+		SizeBytes:        r.SizeBytes,
+		CreatedAt:        r.CreatedAt,
+	}
+}
+
+// KindChangeBlockers reports the two facts that freeze a product's kind: how many
+// order items reference it, and how many files are attached.
+//
+// Exported so the admin form can say *before* the operator tries, rather than
+// only refusing on submit. It is not the guard — checkKindChange re-reads both
+// inside Update's transaction, against the stored row rather than the submitted
+// one — because a check done at render time is already stale by the time the form
+// comes back.
+func (s *Store) KindChangeBlockers(ctx context.Context, productID string) (ordered, files int64, err error) {
+	if ordered, err = s.q.CountProductOrderItems(ctx, productID); err != nil {
+		return 0, 0, translate(fmt.Errorf("catalog: count order items: %w", err))
+	}
+	if files, err = s.q.CountProductFiles(ctx, productID); err != nil {
+		return 0, 0, translate(fmt.Errorf("catalog: count files: %w", err))
+	}
+	return ordered, files, nil
 }

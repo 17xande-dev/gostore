@@ -1,0 +1,40 @@
+{{define "downloads"}}
+{{template "head" .}}
+
+{{/*
+  The page a buyer reaches from their confirmation email.
+
+  There is no account and no login: the token in the URL is the credential, which
+  is why the page says to keep the link. Every file below points back at this
+  server rather than at storage — the store authorises the click and records it
+  before producing any bytes, and only then hands over a URL that expires.
+*/}}
+<h1>{{.Entitlement.ProductTitle}}</h1>
+
+<p class="muted">Your download{{if gt (len .Files) 1}}s{{end}}. Keep this page's
+address — it is the only link to these files, and it does not expire.</p>
+
+{{if .Files}}
+<table>
+  <thead><tr><th>File</th><th class="num">Size</th><th></th></tr></thead>
+  <tbody>
+  {{range .Files}}
+    <tr>
+      <td>{{.Title}}</td>
+      <td class="num">{{.HumanSize}}</td>
+      <td><a href="/downloads/{{$.Token}}/{{.ID}}">Download</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+  {{/* Bought, paid for, and nothing attached yet. Saying so is better than an
+       empty table, because the buyer needs to know it is the shop's end. */}}
+  <p>There are no files on this download yet. That is on our side, not yours —
+  get in touch by replying to your order confirmation and we will sort it out.</p>
+{{end}}
+
+<p><a href="{{.BaseURL}}/products">Back to {{.StoreName}}</a></p>
+
+{{template "foot" .}}
+{{end}}

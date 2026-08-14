@@ -7,7 +7,7 @@
 -- be NULL, but sqlc cannot prove that and would otherwise hand the store a *bool
 -- — implying a third state that does not exist. The cast says so in SQL.
 -- name: ListCartLinesForOrder :many
-SELECT i.variant_id, i.quantity, p.title, v.option1, v.option2, v.option3,
+SELECT i.variant_id, i.quantity, p.title, p.kind, v.option1, v.option2, v.option3,
        v.price_cents, v.stock_qty, (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
 JOIN product_variants v ON v.id = i.variant_id
@@ -28,8 +28,8 @@ RETURNING id, created_at;
 -- display. Rendering it here rather than at read time also means a product that
 -- later renames its option slots cannot relabel a completed sale.
 -- name: CreateOrderItem :exec
-INSERT INTO order_items (order_id, variant_id, title, variant_label, unit_price_cents, quantity)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO order_items (order_id, variant_id, title, variant_label, kind, unit_price_cents, quantity)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: GetOrder :one
 SELECT * FROM orders WHERE id = $1;
@@ -50,7 +50,7 @@ SELECT * FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1;
 SELECT * FROM orders ORDER BY created_at DESC LIMIT $1;
 
 -- name: ListOrderItems :many
-SELECT variant_id, title, variant_label, unit_price_cents, quantity
+SELECT id, variant_id, title, variant_label, kind, unit_price_cents, quantity
 FROM order_items WHERE order_id = $1 ORDER BY id;
 
 -- FOR UPDATE is the whole safety mechanism of MarkPaid: it serialises concurrent
@@ -107,3 +107,13 @@ WHERE id = $1;
 
 -- name: MarkOrderEmailed :exec
 UPDATE orders SET emailed = TRUE WHERE id = $1;
+
+-- The digital lines of a paid order, which are the ones that need entitlements.
+-- Read inside MarkPaid's transaction, from the order_items snapshot rather than
+-- from products, so a product flipped afterwards cannot change what an order
+-- granted.
+-- name: ListDigitalOrderItems :many
+SELECT id, variant_id, title, variant_label
+FROM order_items
+WHERE order_id = $1 AND kind = 'digital'
+ORDER BY id;

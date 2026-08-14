@@ -67,7 +67,17 @@ func (c Customer) LastName() string {
 // decremented and the admin can follow the link, but nothing on this row is read
 // through that reference.
 type Item struct {
+	// ID is the order_items row, which entitlements reference. Zero on an item
+	// that has not been written yet.
+	ID        int64
 	VariantID string
+
+	// Kind is 'physical' or 'digital', snapshotted at purchase like everything
+	// else here. It decides two things after the fact: whether stock is
+	// decremented — a download cannot run out — and whether payment mints a
+	// download entitlement. Reading it from the product instead would let a
+	// product flipped afterwards change how a completed sale behaved.
+	Kind string
 
 	Title string
 	// VariantLabel is the variant's options as they read at purchase — "L / Navy",

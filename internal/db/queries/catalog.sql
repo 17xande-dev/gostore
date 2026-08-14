@@ -106,9 +106,9 @@ SELECT * FROM product_variants WHERE product_id = $1 ORDER BY option1, option2, 
 -- SetProductImage. There is no way to point a product at bytes this store does not
 -- hold.
 -- name: CreateProduct :one
-INSERT INTO products (id, slug, title, description, active,
+INSERT INTO products (id, slug, title, description, active, kind,
                       option1_name, option2_name, option3_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- updated_at is maintained here rather than by a trigger, so the write is visible
@@ -120,8 +120,8 @@ RETURNING *;
 -- silent way to blank the picture.
 -- name: UpdateProduct :one
 UPDATE products
-SET slug = $2, title = $3, description = $4, active = $5,
-    option1_name = $6, option2_name = $7, option3_name = $8, updated_at = now()
+SET slug = $2, title = $3, description = $4, active = $5, kind = $6,
+    option1_name = $7, option2_name = $8, option3_name = $9, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
@@ -172,12 +172,13 @@ DELETE FROM product_variants WHERE id = $1 AND product_id = $2;
 -- No image column here either, so a seed file cannot claim a product's image: a
 -- fixture has no way to upload bytes. Re-seeding leaves an uploaded image alone.
 -- name: UpsertProduct :one
-INSERT INTO products (id, slug, title, description, active,
+INSERT INTO products (id, slug, title, description, active, kind,
                       option1_name, option2_name, option3_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (slug) DO UPDATE
 SET title = EXCLUDED.title, description = EXCLUDED.description,
-    active = EXCLUDED.active, option1_name = EXCLUDED.option1_name,
+    active = EXCLUDED.active, kind = EXCLUDED.kind,
+    option1_name = EXCLUDED.option1_name,
     option2_name = EXCLUDED.option2_name, option3_name = EXCLUDED.option3_name,
     updated_at = now()
 RETURNING *;
@@ -267,3 +268,75 @@ ON CONFLICT DO NOTHING;
 INSERT INTO product_categories (product_id, category_id)
 SELECT $1, c.id FROM categories c WHERE c.slug = $2
 ON CONFLICT DO NOTHING;
+
+-- Digital downloads. The files hang off the product, and variant_files says which
+-- variants include each one — so an "Audio + Video" bundle variant costs a row
+-- rather than a second upload of the same 2 GB file.
+
+-- name: ListProductFiles :many
+SELECT * FROM product_files WHERE product_id = $1 ORDER BY position, id;
+
+-- Every (file, variant) link for one product, so the admin's tick list can be
+-- assembled in one round trip rather than one per file.
+-- name: ListProductFileVariants :many
+SELECT vf.file_id, vf.variant_id
+FROM variant_files vf
+JOIN product_files f ON f.id = vf.file_id
+WHERE f.product_id = $1;
+
+-- name: GetProductFile :one
+SELECT * FROM product_files WHERE id = $1 AND product_id = $2;
+
+-- name: CreateProductFile :one
+INSERT INTO product_files (product_id, position, title, object_key,
+                           original_filename, content_type, size_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- The object key is deliberately absent: bytes are replaced by uploading a new
+-- file, never by repointing a row at a different object. Repointing would leave
+-- the old object orphaned with nothing recording that it ever existed.
+-- name: UpdateProductFile :one
+UPDATE product_files SET title = $3, position = $4
+WHERE id = $1 AND product_id = $2
+RETURNING *;
+
+-- name: DeleteProductFile :one
+DELETE FROM product_files WHERE id = $1 AND product_id = $2
+RETURNING object_key;
+
+-- name: NextProductFilePosition :one
+SELECT COALESCE(MAX(position), -1) + 1 FROM product_files WHERE product_id = $1;
+
+-- name: ClearFileVariants :exec
+DELETE FROM variant_files WHERE file_id = $1;
+
+-- WHERE EXISTS rather than a bare VALUES, matching how product categories are
+-- linked: a variant deleted between rendering the form and submitting it quietly
+-- links nothing instead of raising a foreign key violation the form cannot show.
+-- name: AddFileVariant :exec
+INSERT INTO variant_files (variant_id, file_id)
+SELECT $1, $2
+WHERE EXISTS (SELECT 1 FROM product_variants WHERE id = $1 AND product_id = $3)
+ON CONFLICT DO NOTHING;
+
+-- The files one variant grants, which is exactly what a buyer of that variant may
+-- download. Ordered the way the admin arranged them.
+-- name: ListVariantFiles :many
+SELECT f.*
+FROM product_files f
+JOIN variant_files vf ON vf.file_id = f.id
+WHERE vf.variant_id = $1
+ORDER BY f.position, f.id;
+
+-- Whether this product has ever been ordered, which is what freezes its kind.
+-- Flipping physical to digital afterwards would leave a stock count nothing
+-- decrements; flipping the other way would leave live entitlements for a product
+-- that now ships.
+-- name: CountProductOrderItems :one
+SELECT COUNT(*) FROM order_items oi
+JOIN product_variants v ON v.id = oi.variant_id
+WHERE v.product_id = $1;
+
+-- name: CountProductFiles :one
+SELECT COUNT(*) FROM product_files WHERE product_id = $1;

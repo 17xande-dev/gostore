@@ -20,6 +20,22 @@ CREATE TABLE products (
     -- or putting a custom domain in front of one — would need an UPDATE across the
     -- table before any image loaded again.
     image_key   TEXT NOT NULL DEFAULT '',
+    -- How this product reaches the buyer: a parcel, or a file they download.
+    --
+    -- 'kind' held 'book'/'apparel' in an earlier schema and became `categories`;
+    -- the CHECK is what makes the new meaning unambiguous. It is not called
+    -- `fulfillment` because in Shopify, Magento and Saleor a "fulfillment" is the
+    -- shipment record with a tracking number, and colliding with that term would
+    -- bite the first time this store grows anything shipment-shaped. The enum
+    -- shape follows Magento's type_id and BigCommerce's type; a boolean
+    -- (`requires_shipping`) is what WooCommerce grew into two interacting flags
+    -- nobody can remember.
+    --
+    -- Read by: stock decrementing (a download cannot run out), the checkout's
+    -- shipping address, the admin product form, and whether payment mints
+    -- entitlements.
+    kind        TEXT NOT NULL DEFAULT 'physical'
+                CHECK (kind IN ('physical', 'digital')),
     -- The NAMES of this product's variant options; the values live on the variants.
     -- Declared per product, which is what Shopify and WooCommerce do, so a t-shirt
     -- says 'Size'/'Colour', a book says 'Cover' and a recording says 'Format'.
@@ -172,10 +188,92 @@ CREATE TABLE order_items (
     -- deliberately RESTRICTS rather than cascades, so the variant row is guaranteed
     -- to still exist to join against.
     variant_label    TEXT NOT NULL DEFAULT '',
+    -- Snapshotted for the same reason as the title: a product flipped from
+    -- physical to digital afterwards must not relabel how a completed sale was
+    -- fulfilled. It is also what MarkPaid reads to decide whether to decrement
+    -- stock, so a line's behaviour is fixed at the moment it was bought.
+    kind             TEXT NOT NULL DEFAULT 'physical',
     unit_price_cents BIGINT NOT NULL,
     quantity         INTEGER NOT NULL CHECK (quantity > 0)
 );
 CREATE INDEX ON order_items (order_id);
+
+-- The files a digital product is made of. They hang off the PRODUCT rather than
+-- a variant, with variant_files below saying which variants include each one:
+-- a conference recording sold as an audio set and a video set has two disjoint
+-- sets, but an "Audio + Video" bundle variant must not mean uploading the same
+-- 2 GB file a second time.
+--
+-- object_key names an object in the PRIVATE download store — never the public
+-- image bucket, where anything is one URL guess away from everybody. As with
+-- image_key, only the key is stored and the URL is resolved against whichever
+-- backend is configured, at download time.
+CREATE TABLE product_files (
+    id                BIGSERIAL PRIMARY KEY,
+    product_id        UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    position          INTEGER NOT NULL DEFAULT 0,
+    -- What the buyer sees. Defaults to the uploaded filename, but a shop owner
+    -- should be able to say "Session 1 — Opening" rather than "REC_0042.mp4".
+    title             TEXT NOT NULL,
+    object_key        TEXT NOT NULL,
+    -- Used for Content-Disposition so the file saves under a sensible name. It is
+    -- never used to build a key: a filename is client-controlled, and the key is
+    -- this store's to choose.
+    original_filename TEXT NOT NULL,
+    content_type      TEXT NOT NULL,
+    size_bytes        BIGINT NOT NULL CHECK (size_bytes >= 0),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON product_files (product_id, position);
+
+CREATE TABLE variant_files (
+    variant_id UUID   NOT NULL REFERENCES product_variants(id) ON DELETE CASCADE,
+    file_id    BIGINT NOT NULL REFERENCES product_files(id)    ON DELETE CASCADE,
+    PRIMARY KEY (variant_id, file_id)
+);
+CREATE INDEX ON variant_files (file_id);
+
+-- One row per purchased digital line, and the whole point of the feature: this
+-- is what makes person A's download revocable without touching person B's.
+--
+-- token_hash is SHA-256 of the token, never the token. The URL is a bearer
+-- credential to paid goods — there is no account and no login — so a database
+-- leak must not also be a licence to download the catalogue. Lookup is by hash,
+-- so the index still does its job.
+CREATE TABLE entitlements (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id      UUID   NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_item_id BIGINT NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+    variant_id    UUID   NOT NULL REFERENCES product_variants(id),
+    token_hash    BYTEA  NOT NULL UNIQUE,
+    -- Unlimited and never expiring by default: a buyer who lost a file on a new
+    -- phone should not have to email the shop. Revoking is the one lever, and it
+    -- is per-buyer by construction.
+    revoked_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON entitlements (order_id);
+
+-- One row per authorised download click. Recorded by the store rather than read
+-- back from the bucket, for two reasons that are not about API limitations:
+-- neither GCS nor R2 exposes per-object read counts at all, and a presigned URL
+-- is anonymous to the bucket — it has no idea which buyer, order or entitlement,
+-- and that mapping exists only here.
+--
+-- What this counts is the authorisation, not the completed transfer. A
+-- connection that drops at 80% is one row. Counting real bytes would mean
+-- proxying every video through Go, which is the cost the redirect exists to
+-- avoid, and the admin says so rather than implying otherwise.
+CREATE TABLE download_events (
+    id             BIGSERIAL PRIMARY KEY,
+    entitlement_id UUID   NOT NULL REFERENCES entitlements(id) ON DELETE CASCADE,
+    file_id        BIGINT NOT NULL REFERENCES product_files(id) ON DELETE CASCADE,
+    ip             TEXT NOT NULL DEFAULT '',
+    user_agent     TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON download_events (file_id, created_at DESC);
+CREATE INDEX ON download_events (entitlement_id);
 
 -- +goose Down
 -- Down exists for local development resets only. Production is forward-only:
@@ -183,6 +281,10 @@ CREATE INDEX ON order_items (order_id);
 --
 -- pg_trgm is deliberately not dropped. An extension is database-wide and may have
 -- other users, so tearing one schema down must not remove it from under them.
+DROP TABLE download_events;
+DROP TABLE entitlements;
+DROP TABLE variant_files;
+DROP TABLE product_files;
 DROP TABLE order_items;
 DROP TABLE orders;
 DROP TABLE cart_items;

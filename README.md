@@ -102,9 +102,17 @@ list with defaults.
 | `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
 | `BLOB_REGION` | no | `auto` | What R2 wants; GCS and MinIO ignore it |
 | `BLOB_USE_TLS` | no | `true` | `false` only for a MinIO on the same machine |
+| `DOWNLOAD_DIR` | no⁴ | — | Store purchased files in this directory — **never** served publicly |
+| `DOWNLOAD_ENDPOINT` | no⁴ | — | Private bucket host[:port], no scheme |
+| `DOWNLOAD_BUCKET` | no⁴ | — | Bucket name; must not be `BLOB_BUCKET` |
+| `DOWNLOAD_ACCESS_KEY_ID` / `DOWNLOAD_SECRET_ACCESS_KEY` | no⁴ | — | Credentials |
+| `DOWNLOAD_REGION` | no | `auto` | As `BLOB_REGION` |
+| `DOWNLOAD_USE_TLS` | no | `true` | As `BLOB_USE_TLS` |
+| `DOWNLOAD_MAX_BYTES` | no | `2GiB` | Cap on one uploaded file; accepts `500MB`, `2G`, or plain bytes |
 | `RATE_LIMIT_LOGIN_PER_MINUTE` | no | `10` | Per client IP; `0` disables |
 | `RATE_LIMIT_CHECKOUT_PER_MINUTE` | no | `20` | Per client IP; `0` disables |
 | `RATE_LIMIT_CALLBACK_PER_MINUTE` | no | `120` | Per client IP; `0` disables |
+| `RATE_LIMIT_DOWNLOAD_PER_MINUTE` | no | `60` | Download links per IP; each click mints a signed URL |
 | `CART_TTL_DAYS` | no | `60` | How long an untouched cart survives |
 
 ¹ `SMTP_HOST` and `EMAIL_FROM` are individually optional but must be set **together** — a
@@ -117,6 +125,14 @@ others missing refuses to boot rather than failing at the first upload.
 ³ `IMAGE_DIR` and `BLOB_ENDPOINT` are the two image backends and are mutually exclusive —
 both set refuses to boot, because which one wins would otherwise be a guess. With neither,
 products cannot have images and the admin says so.
+
+⁴ The `DOWNLOAD_*` set is the **private** store for purchased files, and is separate from the
+image one in every respect. `DOWNLOAD_DIR` and `DOWNLOAD_ENDPOINT` are mutually exclusive;
+the bucket set is all-or-nothing; with none of it, the shop sells no digital products and
+the admin says so. Two overlaps refuse to boot, and both would otherwise publish files
+somebody paid for: a `DOWNLOAD_DIR` that is, contains, or sits inside `IMAGE_DIR` — which is
+served publicly at `/images/` — and a `DOWNLOAD_BUCKET` equal to `BLOB_BUCKET`, which is
+anonymously readable.
 
 ## Admin
 
@@ -266,6 +282,12 @@ X-Content-Type-Options: nosniff
 Strict-Transport-Security: max-age=63072000; includeSubDomains   (https deployments only)
 ```
 
+**Digital downloads add no directive**, which is worth stating because the download bucket
+looks like something that ought to be named here. A buyer's download is a top-level
+navigation to a signed URL, and no fetch directive governs one — `connect-src` would only
+come into it if the browser uploaded straight to the bucket, which is exactly the design
+that was declined.
+
 `img-src` is `'self'` plus the bucket and nothing else, because a product image is always
 bytes this store holds. The angle-bracketed placeholders are the only external origins any
 directive gets, each one named by a deployment: the bucket, the payment gateway, the embedders,
@@ -323,14 +345,36 @@ grows a little longer, which is not worth waking anyone for.
 
 A **product** is a catalog entry; a **variant** is what a customer actually buys, and
 carries the price and the stock count. A product with no options — a single-edition book —
-still has exactly one variant, with size and colour left blank. That is deliberate: cart,
+still has exactly one variant, with every option left blank. That is deliberate: cart,
 order and stock code then never branches on "has options versus not".
+
+A product is either **physical** or a **digital download**, set by its *kind*. A download
+has no stock, needs no delivery address, and is delivered by a per-buyer link rather than a
+parcel — see [Digital downloads](#digital-downloads).
 
 Prices are **integer cents** everywhere in the code and the database. The decimal point
 exists only in forms and rendered pages, because a float total rounded differently from a
 payment gateway's amount string is a real and hard-to-find class of bug.
 
 Manage the catalog at `/admin/products`.
+
+### Variant options
+
+A variant is told apart from its siblings by up to **three options, named per product**. A
+t-shirt declares `Size` and `Colour`; a book declares `Cover`; a conference recording
+declares `Format`. The names live on the product and the values on each variant, so the
+storefront's selector is headed in the shop's own words rather than in ours.
+
+Names fill in order, and two slots may not share a name. Both are refused on the form
+rather than by a constraint, so the message lands on the field.
+
+**The names are not attached to the category, deliberately.** Categories here are
+many-to-many precisely so that a book can also be a gift — so option structure hanging off
+them would give that product two contradictory answers, and adding a "Sale" category for a
+promotion would change what a variant *is*. Shopify and WooCommerce declare options per
+product exactly like this; Magento, Saleor and Sylius add a reusable template on top and
+every one of them keeps that template separate from the browsing taxonomy. A template layer
+here would be strictly additive later, because the values live in these columns either way.
 
 ### Categories
 
@@ -437,6 +481,93 @@ no layout shift left to prevent — and the store never records a photograph's r
 so any numbers put there would be a guess about an image that is going to be cropped to the
 frame anyway.
 
+### Digital downloads
+
+A product whose kind is **digital** is delivered as files rather than as a parcel. It has no
+stock, needs no delivery address, and each buyer gets a link that can be withdrawn without
+touching anybody else's.
+
+**Files belong to the product; variants say which files they grant.** A conference recording
+sold as an audio set and a video set is one product, two variants, and a tick list saying
+which files each includes — so an "Audio + Video" bundle costs a row rather than a second
+upload of the same two gigabytes.
+
+**Private storage, always.** `DOWNLOAD_DIR` or the `DOWNLOAD_*` bucket, configured separately
+from images and never the same place. The image bucket is anonymously readable by design —
+that is what lets a CDN serve product photographs — so a purchased file in it would be one URL
+guess away from everybody, and public access on GCS and R2 is a whole-bucket toggle rather
+than something a prefix can carry. The server **refuses to boot** if the download directory
+overlaps `IMAGE_DIR`, or if the download bucket is the image bucket.
+
+#### How a buyer gets their file
+
+```
+paid order
+  └─ entitlement per digital line, with a 32-byte token
+       └─ emailed as  {BASE_URL}/downloads/{token}
+
+GET /downloads/{token}            the files this entitlement grants
+GET /downloads/{token}/{fileID}   check it is not revoked, check the file
+                                  belongs to this variant, record the download,
+                                  then 302 to a signed URL that expires in five
+                                  minutes — or stream, on the disk backend
+```
+
+The token in the URL is the whole credential: there is no account and no login. **Only its
+SHA-256 hash is stored**, so a dump of the entitlements table is a list of hashes rather than
+a set of working links — and the consequence, stated plainly, is that a confirmation email
+that never arrives cannot be recovered from. Issue a fresh entitlement in that case.
+
+The link never points at the bucket. Authorising and recording happen before any bytes move,
+which is what makes revocation take effect on the next click and makes the counts trustworthy.
+The signed URL is minted per click, so one forwarded to a friend is already expired.
+
+#### Revoking
+
+`/admin/orders/{id}` lists an order's downloads with a **Revoke** button and how many times
+each has been taken. Revoking stops that buyer and nobody else, takes effect on their next
+click, and is reversible. These are the only forms on the order page — everything else there
+is read-only, because an order records what happened and a button that changed it would be a
+way to record money that never arrived. Revoking changes no financial fact.
+
+#### Statistics
+
+`/admin/products/{id}/downloads` reports total downloads, how many distinct buyers took
+something, per-file counts, and the most recent downloads with the buyer against each.
+
+**A count is an authorised click, not a completed transfer**, and the page says so. With a
+signed URL the bytes never come through the store, so it cannot know how a transfer ended; a
+connection that dropped at 80% and was started again is two.
+
+Asking the bucket instead does not work, and not for a reason that might be fixed later:
+neither GCS nor R2 exposes per-object read counts, and a presigned URL is *anonymous* to the
+bucket — it has no idea which buyer, order or entitlement. That mapping exists only here.
+
+#### Uploads
+
+Through the server, streamed to storage. The request is spooled to a temporary file and
+streamed on from there, so memory does not track the file size — measured, a 477 MB upload
+grew the server by 75 MB and a 1.43 GB upload by 65 MB. What it does cost is temporary disk
+(the file exists twice for the length of the request) and a held-open connection.
+
+Uploading straight from the browser to the bucket would avoid both, and is deliberately not
+built: it needs a CORS policy on the bucket, a widened `connect-src`, a JavaScript uploader
+and an orphan sweep, and uploads here are rare and done by one operator watching them.
+
+`DOWNLOAD_MAX_BYTES` caps one file, default 2 GiB. Unlike images there is no allow-list of
+types: the bucket is private, every read is authorised, and the response carries the stored
+`Content-Type`, `nosniff` and an attachment disposition — so refusing an unusual format would
+only stop a shop selling what it sells.
+
+#### Changing a product's kind
+
+Frozen once the product has been **ordered**, and while a digital product still has **files
+attached**. Neither protects purchase history — `order_items` snapshots the kind, so a
+completed sale is already safe. What they protect is live state: flipping to digital would
+leave a stock count nothing decrements, and flipping the other way would leave objects in
+storage with nothing listing them. The second is a step rather than a dead end: remove the
+files and the kind becomes changeable.
+
 ### Seeding
 
 `cmd/seed` loads a plain products JSON file:
@@ -449,12 +580,20 @@ frame anyway.
     "title": "The Quiet Machine",
     "description": "Paperback, 248 pages.",
     "active": true,
+    "option1_name": "Cover",
     "variants": [
-      { "sku": "BOOK-TQM-PB", "size": "", "color": "", "price_cents": 24900, "stock_qty": 12, "active": true }
+      { "sku": "BOOK-TQM-PB", "option1": "Paperback", "price_cents": 24900, "stock_qty": 12, "active": true },
+      { "sku": "BOOK-TQM-HC", "option1": "Hardcover", "price_cents": 34900, "stock_qty": 3, "active": true }
     ]
   }
 ]
 ```
+
+`option1_name` through `option3_name` name the product's variant options; `option1` through
+`option3` are each variant's values for them. Omit them all for a product with only one
+version of itself. `kind` may be `"digital"`, but a seed file cannot attach files to one —
+there is no way for a fixture to upload bytes — so a seeded download has nothing to
+download until somebody uploads through the admin.
 
 `slug` may be omitted and is then derived from the title. Seeding is rerunnable: products
 match on `slug` and variants on `sku`, so a second run updates titles and prices rather

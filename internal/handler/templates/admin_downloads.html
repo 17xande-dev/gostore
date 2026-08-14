@@ -1,0 +1,77 @@
+{{define "admin_downloads"}}
+{{template "head" .}}
+{{template "adminnav" .}}
+
+<h1>Downloads — {{.Product.Title}}</h1>
+<p><a href="/admin/products/{{.Product.ID}}/edit">Back to the product</a></p>
+
+{{/*
+  What a count here means, said on the page rather than only in the code.
+
+  A row is recorded when the store authorises a click, not when a transfer
+  finishes — with a signed bucket URL it cannot be, because the bytes never come
+  through this server. A buyer whose connection drops at 80% and starts again is
+  two. Saying so is the difference between a number an operator can reason about
+  and one they will quietly misread.
+*/}}
+<p><small>A download is counted when the store authorises the click. A transfer
+that failed halfway, or was started twice, counts twice — we hand the file to the
+buyer's browser and do not see how it ends.</small></p>
+
+<table>
+  <tbody>
+    <tr><th>Downloads</th><td class="num">{{.Stats.TotalDownloads}}</td></tr>
+    <tr><th>Buyers who downloaded</th><td class="num">{{.Stats.UniqueBuyers}}</td></tr>
+    <tr><th>Entitlements issued</th><td class="num">{{.Stats.EntitlementsIssued}}</td></tr>
+    <tr><th>Of those, revoked</th><td class="num">{{.Stats.EntitlementsRevoked}}</td></tr>
+    <tr><th>Last download</th>
+      <td>{{if .Stats.LastDownload}}{{.Stats.LastDownload.Format "2006-01-02 15:04"}}{{else}}never{{end}}</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Per file</h2>
+{{if .Stats.Files}}
+<table>
+  <thead>
+    <tr><th>File</th><th class="num">Size</th><th class="num">Downloads</th><th>Last</th></tr>
+  </thead>
+  <tbody>
+  {{range .Stats.Files}}
+    <tr>
+      <td>{{.Title}}</td>
+      <td class="num">{{.HumanSize}}</td>
+      <td class="num">{{.DownloadCount}}</td>
+      <td>{{if .LastDownload}}{{.LastDownload.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+  <p>This product has no files.</p>
+{{end}}
+
+<h2>Recent downloads</h2>
+{{if .Stats.Recent}}
+<table>
+  <thead><tr><th>When</th><th>File</th><th>Buyer</th><th>From</th><th>Order</th></tr></thead>
+  <tbody>
+  {{range .Stats.Recent}}
+    <tr>
+      <td>{{.At.Format "2006-01-02 15:04"}}</td>
+      <td>{{.FileTitle}}</td>
+      <td>{{.Customer}}</td>
+      <td>{{.IP}}</td>
+      <td><a href="/admin/orders/{{.OrderID}}">view</a></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<p><small>An order's page is where a download can be revoked, one buyer at a
+time.</small></p>
+{{else}}
+  <p>Nothing downloaded yet.</p>
+{{end}}
+
+{{template "foot" .}}
+{{end}}

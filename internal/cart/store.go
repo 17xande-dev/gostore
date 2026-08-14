@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -101,6 +102,7 @@ func (s *Store) Get(ctx context.Context, token string) (Cart, error) {
 			Quantity:       l.Quantity,
 			ProductSlug:    l.ProductSlug,
 			ProductTitle:   l.ProductTitle,
+			Kind:           l.Kind,
 			SKU:            l.SKU,
 			Option1:        l.Option1,
 			Option2:        l.Option2,
@@ -233,6 +235,16 @@ func availableStock(ctx context.Context, q *gen.Queries, variantID string) (int,
 		return 0, fmt.Errorf("cart: read variant: %w", err)
 	case !row.Purchasable:
 		return 0, ErrUnavailable
+	}
+	// A download cannot run out, so there is no stock to check and none to reserve.
+	// Its stock_qty is 0 and nothing ever decrements it, so without this every
+	// digital variant would be refused as sold out — which is what happened the
+	// first time this was wired up.
+	//
+	// MaxQuantity still applies above, so a basket of 500 of the same download is
+	// refused by the same rule that governs everything else.
+	if catalog.Kind(row.Kind).Digital() {
+		return MaxQuantity, nil
 	}
 	return row.StockQty, nil
 }

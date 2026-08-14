@@ -58,7 +58,9 @@ services:
       mc alias set local http://minio:9000 gostore gostore123 &&
       mc mb --ignore-existing local/gostore-images &&
       mc anonymous set download local/gostore-images &&
-      echo 'bucket gostore-images ready, public read'
+      mc mb --ignore-existing local/gostore-downloads &&
+      mc anonymous set none local/gostore-downloads &&
+      echo 'gostore-images ready (public read), gostore-downloads ready (private)'
       "
 
   server:
@@ -120,6 +122,25 @@ services:
       BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-gostore123}
       BLOB_USE_TLS: ${BLOB_USE_TLS:-false}
       BLOB_PUBLIC_BASE_URL: ${BLOB_PUBLIC_BASE_URL:-http://localhost:9000/gostore-images}
+      # Private storage for the files a digital product is made of. It is NEVER the
+      # image bucket: that one is anonymously readable above, so a purchased file in
+      # it would be one URL guess away from everybody — and public access on GCS and
+      # R2 is a whole-bucket toggle rather than something a prefix can carry. The
+      # config refuses the overlap at boot.
+      #
+      # A directory here rather than the MinIO bucket, and the reason is specific to
+      # compose. A presigned URL is signed against the host the *browser* will
+      # eventually fetch from, and in this stack those are two different names: the
+      # server reaches MinIO at minio:9000, a browser reaches it at localhost:9000.
+      # Signing with either one breaks the other half. Real deployments have a single
+      # address and do not have this problem.
+      #
+      # So the default exercises the streaming path, which is the honest local
+      # default anyway: one binary, one volume, no object storage. To exercise the
+      # signed-URL path instead, run the server on the host with `make run`, where
+      # localhost:9000 is correct for both — minio-init has already created the
+      # private bucket for exactly that.
+      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/downloads}
       # Theming. The paths are the container's and so are deliberately not
       # interpolated, for the same reason DATABASE_URL is not: a local .env
       # pointing TEMPLATE_DIR at a host-relative ./theme/templates for `make run`
@@ -136,6 +157,9 @@ services:
     volumes:
       # Read-only: the store renders a theme, it never writes one.
       - ./theme:/theme:ro
+      # Purchased files. A named volume rather than a bind mount, so they are not
+      # sitting in the working tree waiting to be committed by accident.
+      - downloads:/downloads
     ports:
       - "8080:8080"
     depends_on:
@@ -149,3 +173,6 @@ services:
 volumes:
   pgdata:
   miniodata:
+  # Purchased files, deliberately not the volume images live in: everything under
+  # the image directory is served publicly at /images/, and these bytes must not be.
+  downloads:

@@ -84,6 +84,48 @@ forward payment only.</p>
 </table>
 
 {{/*
+  Downloads, and the only forms on this page.
+
+  Everything else here is read-only on purpose — an order records what happened,
+  and a button that changed it would be a way to record money that never arrived.
+  Revoking is outside that rule rather than an exception to it: it changes no
+  financial fact about the order, only whether one buyer's link still works.
+*/}}
+{{if .Entitlements}}
+<h2>Downloads</h2>
+<table>
+  <thead>
+    <tr><th>Product</th><th class="num">Times downloaded</th><th>State</th><th></th></tr>
+  </thead>
+  <tbody>
+  {{range .Entitlements}}
+    <tr>
+      <td>{{.ProductTitle}}{{with .VariantLabel}} <small>{{.}}</small>{{end}}</td>
+      <td class="num">{{.DownloadCount}}</td>
+      <td>{{if .Revoked}}revoked {{.RevokedAt.Format "2006-01-02"}}{{else}}active{{end}}</td>
+      <td>
+        {{if .Revoked}}
+        <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/restore">
+          {{template "csrf" $.CSRFToken}}
+          <button type="submit">Restore</button>
+        </form>
+        {{else}}
+        <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/revoke">
+          {{template "csrf" $.CSRFToken}}
+          <button type="submit">Revoke</button>
+        </form>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+<p><small>Revoking stops this buyer and nobody else. It takes effect on their next
+click; a download link they were handed in the last few minutes may still
+complete. Revoking is reversible.</small></p>
+{{end}}
+
+{{/*
   The raw notification body, kept for the day a customer and a bank disagree about
   what happened. It is the gateway's own words, unedited.
 */}}

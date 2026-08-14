@@ -85,8 +85,26 @@ func NewS3(cfg S3Config) (*S3, error) {
 		return nil, fmt.Errorf("blob: public base URL %q must be an absolute URL", cfg.PublicBaseURL)
 	}
 
+	client, err := newMinioClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &S3{
+		client:     client,
+		bucket:     cfg.Bucket,
+		publicBase: strings.TrimRight(cfg.PublicBaseURL, "/"),
+	}, nil
+}
+
+// newMinioClient builds the client both the public and the private store use.
+// Shared so that a change to how this project talks to a bucket — the region
+// default, the credential type — cannot apply to images and not to downloads.
+func newMinioClient(cfg S3Config) (*minio.Client, error) {
 	region := cfg.Region
 	if region == "" {
+		// "auto" is what R2 wants and what GCS and MinIO ignore. AWS would not,
+		// which is the one backend this project is least likely to be pointed at.
 		region = "auto"
 	}
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
@@ -97,12 +115,7 @@ func NewS3(cfg S3Config) (*S3, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blob: build client for %s: %w", cfg.Endpoint, err)
 	}
-
-	return &S3{
-		client:     client,
-		bucket:     cfg.Bucket,
-		publicBase: strings.TrimRight(cfg.PublicBaseURL, "/"),
-	}, nil
+	return client, nil
 }
 
 func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error) {

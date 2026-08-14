@@ -17,7 +17,7 @@ SELECT * FROM carts WHERE id = $1;
 -- — implying a third state that does not exist. The cast says so in SQL.
 -- name: ListCartItems :many
 SELECT i.variant_id, i.quantity,
-       p.slug AS product_slug, p.title AS product_title,
+       p.slug AS product_slug, p.title AS product_title, p.kind,
        v.sku, v.option1, v.option2, v.option3, v.price_cents, v.stock_qty,
        (v.active AND p.active)::bool AS purchasable
 FROM cart_items i
@@ -27,7 +27,7 @@ WHERE i.cart_id = $1
 ORDER BY p.title, v.option1, v.option2, v.option3, v.sku;
 
 -- name: GetVariantAvailability :one
-SELECT v.stock_qty, (v.active AND p.active)::bool AS purchasable
+SELECT v.stock_qty, p.kind, (v.active AND p.active)::bool AS purchasable
 FROM product_variants v
 JOIN products p ON p.id = v.product_id
 WHERE v.id = $1;

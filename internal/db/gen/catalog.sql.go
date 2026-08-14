@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+const addFileVariant = `-- name: AddFileVariant :exec
+INSERT INTO variant_files (variant_id, file_id)
+SELECT $1, $2
+WHERE EXISTS (SELECT 1 FROM product_variants WHERE id = $1 AND product_id = $3)
+ON CONFLICT DO NOTHING
+`
+
+type AddFileVariantParams struct {
+	VariantID string
+	FileID    int64
+	ProductID string
+}
+
+// WHERE EXISTS rather than a bare VALUES, matching how product categories are
+// linked: a variant deleted between rendering the form and submitting it quietly
+// links nothing instead of raising a foreign key violation the form cannot show.
+func (q *Queries) AddFileVariant(ctx context.Context, arg AddFileVariantParams) error {
+	_, err := q.db.Exec(ctx, addFileVariant, arg.VariantID, arg.FileID, arg.ProductID)
+	return err
+}
+
 const addProductCategory = `-- name: AddProductCategory :exec
 INSERT INTO product_categories (product_id, category_id)
 SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM categories WHERE id = $2)
@@ -47,6 +68,15 @@ func (q *Queries) AddProductCategoryBySlug(ctx context.Context, arg AddProductCa
 	return err
 }
 
+const clearFileVariants = `-- name: ClearFileVariants :exec
+DELETE FROM variant_files WHERE file_id = $1
+`
+
+func (q *Queries) ClearFileVariants(ctx context.Context, fileID int64) error {
+	_, err := q.db.Exec(ctx, clearFileVariants, fileID)
+	return err
+}
+
 const clearProductCategories = `-- name: ClearProductCategories :exec
 DELETE FROM product_categories WHERE product_id = $1
 `
@@ -63,7 +93,7 @@ const clearProductImage = `-- name: ClearProductImage :one
 UPDATE products
 SET image_key = '', updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, error) {
@@ -75,6 +105,7 @@ func (q *Queries) ClearProductImage(ctx context.Context, id string) (Product, er
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -95,6 +126,34 @@ SELECT COUNT(*) FROM product_categories WHERE category_id = $1
 // same silent success.
 func (q *Queries) CountCategoryProducts(ctx context.Context, categoryID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countCategoryProducts, categoryID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countProductFiles = `-- name: CountProductFiles :one
+SELECT COUNT(*) FROM product_files WHERE product_id = $1
+`
+
+func (q *Queries) CountProductFiles(ctx context.Context, productID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countProductFiles, productID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countProductOrderItems = `-- name: CountProductOrderItems :one
+SELECT COUNT(*) FROM order_items oi
+JOIN product_variants v ON v.id = oi.variant_id
+WHERE v.product_id = $1
+`
+
+// Whether this product has ever been ordered, which is what freezes its kind.
+// Flipping physical to digital afterwards would leave a stock count nothing
+// decrements; flipping the other way would leave live entitlements for a product
+// that now ships.
+func (q *Queries) CountProductOrderItems(ctx context.Context, productID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countProductOrderItems, productID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -125,10 +184,10 @@ func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) 
 }
 
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (id, slug, title, description, active,
+INSERT INTO products (id, slug, title, description, active, kind,
                       option1_name, option2_name, option3_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type CreateProductParams struct {
@@ -136,6 +195,7 @@ type CreateProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Kind        string
 	Option1Name string
 	Option2Name string
 	Option3Name string
@@ -152,6 +212,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Kind,
 		arg.Option1Name,
 		arg.Option2Name,
 		arg.Option3Name,
@@ -163,6 +224,7 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -170,6 +232,48 @@ func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Search,
+	)
+	return i, err
+}
+
+const createProductFile = `-- name: CreateProductFile :one
+INSERT INTO product_files (product_id, position, title, object_key,
+                           original_filename, content_type, size_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, product_id, position, title, object_key, original_filename, content_type, size_bytes, created_at
+`
+
+type CreateProductFileParams struct {
+	ProductID        string
+	Position         int
+	Title            string
+	ObjectKey        string
+	OriginalFilename string
+	ContentType      string
+	SizeBytes        int64
+}
+
+func (q *Queries) CreateProductFile(ctx context.Context, arg CreateProductFileParams) (ProductFile, error) {
+	row := q.db.QueryRow(ctx, createProductFile,
+		arg.ProductID,
+		arg.Position,
+		arg.Title,
+		arg.ObjectKey,
+		arg.OriginalFilename,
+		arg.ContentType,
+		arg.SizeBytes,
+	)
+	var i ProductFile
+	err := row.Scan(
+		&i.ID,
+		&i.ProductID,
+		&i.Position,
+		&i.Title,
+		&i.ObjectKey,
+		&i.OriginalFilename,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -247,6 +351,23 @@ func (q *Queries) DeleteProduct(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteProductFile = `-- name: DeleteProductFile :one
+DELETE FROM product_files WHERE id = $1 AND product_id = $2
+RETURNING object_key
+`
+
+type DeleteProductFileParams struct {
+	ID        int64
+	ProductID string
+}
+
+func (q *Queries) DeleteProductFile(ctx context.Context, arg DeleteProductFileParams) (string, error) {
+	row := q.db.QueryRow(ctx, deleteProductFile, arg.ID, arg.ProductID)
+	var object_key string
+	err := row.Scan(&object_key)
+	return object_key, err
+}
+
 const deleteVariant = `-- name: DeleteVariant :execrows
 DELETE FROM product_variants WHERE id = $1 AND product_id = $2
 `
@@ -265,7 +386,7 @@ func (q *Queries) DeleteVariant(ctx context.Context, arg DeleteVariantParams) (i
 }
 
 const getActiveProductBySlug = `-- name: GetActiveProductBySlug :one
-SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1 AND active
+SELECT id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1 AND active
 `
 
 func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -277,6 +398,7 @@ func (q *Queries) GetActiveProductBySlug(ctx context.Context, slug string) (Prod
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -305,7 +427,7 @@ func (q *Queries) GetCategory(ctx context.Context, id string) (Category, error) 
 }
 
 const getProduct = `-- name: GetProduct :one
-SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE id = $1
+SELECT id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE id = $1
 `
 
 func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
@@ -317,6 +439,7 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -329,7 +452,7 @@ func (q *Queries) GetProduct(ctx context.Context, id string) (Product, error) {
 }
 
 const getProductBySlug = `-- name: GetProductBySlug :one
-SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1
+SELECT id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products WHERE slug = $1
 `
 
 func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, error) {
@@ -341,6 +464,7 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -348,6 +472,32 @@ func (q *Queries) GetProductBySlug(ctx context.Context, slug string) (Product, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Search,
+	)
+	return i, err
+}
+
+const getProductFile = `-- name: GetProductFile :one
+SELECT id, product_id, position, title, object_key, original_filename, content_type, size_bytes, created_at FROM product_files WHERE id = $1 AND product_id = $2
+`
+
+type GetProductFileParams struct {
+	ID        int64
+	ProductID string
+}
+
+func (q *Queries) GetProductFile(ctx context.Context, arg GetProductFileParams) (ProductFile, error) {
+	row := q.db.QueryRow(ctx, getProductFile, arg.ID, arg.ProductID)
+	var i ProductFile
+	err := row.Scan(
+		&i.ID,
+		&i.ProductID,
+		&i.Position,
+		&i.Title,
+		&i.ObjectKey,
+		&i.OriginalFilename,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -567,7 +717,7 @@ func (q *Queries) ListCategoriesByProduct(ctx context.Context, productID string)
 }
 
 const listNewestActiveProducts = `-- name: ListNewestActiveProducts :many
-SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products p
+SELECT id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.active)
 ORDER BY p.created_at DESC, p.title
@@ -604,6 +754,7 @@ func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) 
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Kind,
 			&i.Option1Name,
 			&i.Option2Name,
 			&i.Option3Name,
@@ -622,9 +773,81 @@ func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) 
 	return items, nil
 }
 
+const listProductFileVariants = `-- name: ListProductFileVariants :many
+SELECT vf.file_id, vf.variant_id
+FROM variant_files vf
+JOIN product_files f ON f.id = vf.file_id
+WHERE f.product_id = $1
+`
+
+type ListProductFileVariantsRow struct {
+	FileID    int64
+	VariantID string
+}
+
+// Every (file, variant) link for one product, so the admin's tick list can be
+// assembled in one round trip rather than one per file.
+func (q *Queries) ListProductFileVariants(ctx context.Context, productID string) ([]ListProductFileVariantsRow, error) {
+	rows, err := q.db.Query(ctx, listProductFileVariants, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProductFileVariantsRow{}
+	for rows.Next() {
+		var i ListProductFileVariantsRow
+		if err := rows.Scan(&i.FileID, &i.VariantID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductFiles = `-- name: ListProductFiles :many
+
+SELECT id, product_id, position, title, object_key, original_filename, content_type, size_bytes, created_at FROM product_files WHERE product_id = $1 ORDER BY position, id
+`
+
+// Digital downloads. The files hang off the product, and variant_files says which
+// variants include each one — so an "Audio + Video" bundle variant costs a row
+// rather than a second upload of the same 2 GB file.
+func (q *Queries) ListProductFiles(ctx context.Context, productID string) ([]ProductFile, error) {
+	rows, err := q.db.Query(ctx, listProductFiles, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProductFile{}
+	for rows.Next() {
+		var i ProductFile
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.Position,
+			&i.Title,
+			&i.ObjectKey,
+			&i.OriginalFilename,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProducts = `-- name: ListProducts :many
 
-SELECT id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products ORDER BY title
+SELECT id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search FROM products ORDER BY title
 `
 
 // Queries behind internal/catalog. See sqlc.yaml; regenerate with `make sqlc`.
@@ -647,6 +870,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Kind,
 			&i.Option1Name,
 			&i.Option2Name,
 			&i.Option3Name,
@@ -654,6 +878,46 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Search,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVariantFiles = `-- name: ListVariantFiles :many
+SELECT f.id, f.product_id, f.position, f.title, f.object_key, f.original_filename, f.content_type, f.size_bytes, f.created_at
+FROM product_files f
+JOIN variant_files vf ON vf.file_id = f.id
+WHERE vf.variant_id = $1
+ORDER BY f.position, f.id
+`
+
+// The files one variant grants, which is exactly what a buyer of that variant may
+// download. Ordered the way the admin arranged them.
+func (q *Queries) ListVariantFiles(ctx context.Context, variantID string) ([]ProductFile, error) {
+	rows, err := q.db.Query(ctx, listVariantFiles, variantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProductFile{}
+	for rows.Next() {
+		var i ProductFile
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProductID,
+			&i.Position,
+			&i.Title,
+			&i.ObjectKey,
+			&i.OriginalFilename,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -699,8 +963,19 @@ func (q *Queries) ListVariantsByProduct(ctx context.Context, productID string) (
 	return items, nil
 }
 
+const nextProductFilePosition = `-- name: NextProductFilePosition :one
+SELECT COALESCE(MAX(position), -1) + 1 FROM product_files WHERE product_id = $1
+`
+
+func (q *Queries) NextProductFilePosition(ctx context.Context, productID string) (int32, error) {
+	row := q.db.QueryRow(ctx, nextProductFilePosition, productID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const searchActiveProducts = `-- name: SearchActiveProducts :many
-SELECT p.id, p.slug, p.title, p.description, p.image_key, p.option1_name, p.option2_name, p.option3_name, p.active, p.created_at, p.updated_at, p.search, COUNT(*) OVER () AS total_count
+SELECT p.id, p.slug, p.title, p.description, p.image_key, p.kind, p.option1_name, p.option2_name, p.option3_name, p.active, p.created_at, p.updated_at, p.search, COUNT(*) OVER () AS total_count
 FROM products p
 WHERE p.active
   AND EXISTS (SELECT 1 FROM product_variants v
@@ -733,6 +1008,7 @@ type SearchActiveProductsRow struct {
 	Title       string
 	Description string
 	ImageKey    string
+	Kind        string
 	Option1Name string
 	Option2Name string
 	Option3Name string
@@ -784,6 +1060,7 @@ func (q *Queries) SearchActiveProducts(ctx context.Context, arg SearchActiveProd
 			&i.Title,
 			&i.Description,
 			&i.ImageKey,
+			&i.Kind,
 			&i.Option1Name,
 			&i.Option2Name,
 			&i.Option3Name,
@@ -807,7 +1084,7 @@ const setProductImage = `-- name: SetProductImage :one
 UPDATE products
 SET image_key = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type SetProductImageParams struct {
@@ -831,6 +1108,7 @@ func (q *Queries) SetProductImage(ctx context.Context, arg SetProductImageParams
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -872,10 +1150,10 @@ func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) 
 
 const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
-SET slug = $2, title = $3, description = $4, active = $5,
-    option1_name = $6, option2_name = $7, option3_name = $8, updated_at = now()
+SET slug = $2, title = $3, description = $4, active = $5, kind = $6,
+    option1_name = $7, option2_name = $8, option3_name = $9, updated_at = now()
 WHERE id = $1
-RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type UpdateProductParams struct {
@@ -884,6 +1162,7 @@ type UpdateProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Kind        string
 	Option1Name string
 	Option2Name string
 	Option3Name string
@@ -903,6 +1182,7 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Kind,
 		arg.Option1Name,
 		arg.Option2Name,
 		arg.Option3Name,
@@ -914,6 +1194,7 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,
@@ -921,6 +1202,44 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Search,
+	)
+	return i, err
+}
+
+const updateProductFile = `-- name: UpdateProductFile :one
+UPDATE product_files SET title = $3, position = $4
+WHERE id = $1 AND product_id = $2
+RETURNING id, product_id, position, title, object_key, original_filename, content_type, size_bytes, created_at
+`
+
+type UpdateProductFileParams struct {
+	ID        int64
+	ProductID string
+	Title     string
+	Position  int
+}
+
+// The object key is deliberately absent: bytes are replaced by uploading a new
+// file, never by repointing a row at a different object. Repointing would leave
+// the old object orphaned with nothing recording that it ever existed.
+func (q *Queries) UpdateProductFile(ctx context.Context, arg UpdateProductFileParams) (ProductFile, error) {
+	row := q.db.QueryRow(ctx, updateProductFile,
+		arg.ID,
+		arg.ProductID,
+		arg.Title,
+		arg.Position,
+	)
+	var i ProductFile
+	err := row.Scan(
+		&i.ID,
+		&i.ProductID,
+		&i.Position,
+		&i.Title,
+		&i.ObjectKey,
+		&i.OriginalFilename,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1005,15 +1324,16 @@ func (q *Queries) UpsertCategory(ctx context.Context, arg UpsertCategoryParams) 
 }
 
 const upsertProduct = `-- name: UpsertProduct :one
-INSERT INTO products (id, slug, title, description, active,
+INSERT INTO products (id, slug, title, description, active, kind,
                       option1_name, option2_name, option3_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (slug) DO UPDATE
 SET title = EXCLUDED.title, description = EXCLUDED.description,
-    active = EXCLUDED.active, option1_name = EXCLUDED.option1_name,
+    active = EXCLUDED.active, kind = EXCLUDED.kind,
+    option1_name = EXCLUDED.option1_name,
     option2_name = EXCLUDED.option2_name, option3_name = EXCLUDED.option3_name,
     updated_at = now()
-RETURNING id, slug, title, description, image_key, option1_name, option2_name, option3_name, active, created_at, updated_at, search
+RETURNING id, slug, title, description, image_key, kind, option1_name, option2_name, option3_name, active, created_at, updated_at, search
 `
 
 type UpsertProductParams struct {
@@ -1021,6 +1341,7 @@ type UpsertProductParams struct {
 	Title       string
 	Description string
 	Active      bool
+	Kind        string
 	Option1Name string
 	Option2Name string
 	Option3Name string
@@ -1036,6 +1357,7 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		arg.Title,
 		arg.Description,
 		arg.Active,
+		arg.Kind,
 		arg.Option1Name,
 		arg.Option2Name,
 		arg.Option3Name,
@@ -1047,6 +1369,7 @@ func (q *Queries) UpsertProduct(ctx context.Context, arg UpsertProductParams) (P
 		&i.Title,
 		&i.Description,
 		&i.ImageKey,
+		&i.Kind,
 		&i.Option1Name,
 		&i.Option2Name,
 		&i.Option3Name,

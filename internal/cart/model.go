@@ -34,10 +34,13 @@ type Item struct {
 
 	ProductSlug  string
 	ProductTitle string
-	SKU          string
-	Option1      string
-	Option2      string
-	Option3      string
+	// Kind is the product's, read live like the price. It decides whether this
+	// line needs a delivery address; the order snapshots its own copy at purchase.
+	Kind    string
+	SKU     string
+	Option1 string
+	Option2 string
+	Option3 string
 
 	UnitPriceCents int64
 	StockQty       int
@@ -59,7 +62,11 @@ func (i Item) Label() string {
 func (i Item) LineTotalCents() int64 { return i.UnitPriceCents * int64(i.Quantity) }
 
 // InStock reports whether the requested quantity is actually available.
-func (i Item) InStock() bool { return i.StockQty >= i.Quantity }
+// A download cannot run out, so it is always in stock however many are asked
+// for. Everything below that reports a shortage goes through this.
+func (i Item) InStock() bool {
+	return catalog.Kind(i.Kind).Digital() || i.StockQty >= i.Quantity
+}
 
 // Available reports whether this line could be bought as it stands.
 func (i Item) Available() bool { return i.Purchasable && i.InStock() }
@@ -83,6 +90,25 @@ func (c Cart) Count() int {
 	}
 	return n
 }
+
+// NeedsShipping reports whether anything in the cart has to be posted, which is
+// what decides whether checkout asks for an address.
+//
+// True for a mixed cart, and that is the only sensible answer: one parcel in a
+// basket of downloads still has to go somewhere. An empty cart needs no address,
+// but it also cannot be checked out, so that branch never matters.
+func (c Cart) NeedsShipping() bool {
+	for _, i := range c.Items {
+		if !catalog.Kind(i.Kind).Digital() {
+			return true
+		}
+	}
+	return false
+}
+
+// Digital reports whether the cart is downloads only, which is what a page saying
+// "nothing to post" checks.
+func (c Cart) Digital() bool { return !c.Empty() && !c.NeedsShipping() }
 
 // Empty reports whether there is nothing in the cart.
 func (c Cart) Empty() bool { return len(c.Items) == 0 }
@@ -109,9 +135,12 @@ func (c Cart) Problems() []string {
 		switch {
 		case !i.Purchasable:
 			problems = append(problems, i.ProductTitle+" is no longer for sale.")
+		case i.InStock():
+			// Nothing to say. A download is always in stock, so this is also the
+			// branch every digital line takes.
 		case i.StockQty == 0:
 			problems = append(problems, i.ProductTitle+" is sold out.")
-		case !i.InStock():
+		default:
 			problems = append(problems, fmt.Sprintf("%s only has %d left.", i.ProductTitle, i.StockQty))
 		}
 	}

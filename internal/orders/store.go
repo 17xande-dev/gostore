@@ -55,6 +55,28 @@ type PaidResult struct {
 	// there was not enough left. The order is still recorded paid — the money has
 	// been taken, and pretending otherwise loses it — so these need a human.
 	Oversold []string
+
+	// Grants are the download entitlements this payment created, one per digital
+	// line, each carrying its plaintext token.
+	//
+	// This is the only time the token exists in readable form. Only its SHA-256
+	// hash is stored, so if the confirmation email does not go out the link cannot
+	// be recovered — a new entitlement has to be issued. That is the deliberate
+	// trade for a database leak not being a licence to download the catalogue, and
+	// it is why the email is sent on the same request that mints these.
+	Grants []Grant
+}
+
+// Grant is one buyer's new download link.
+type Grant struct {
+	EntitlementID string
+	OrderItemID   int64
+	VariantID     string
+	Title         string
+	VariantLabel  string
+	// Token is the plaintext credential, to be put in the email and then
+	// forgotten. It is never stored and never logged.
+	Token string
 }
 
 // Store is the orders' persistence. The SQL lives in
@@ -102,6 +124,7 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		items = append(items, Item{
 			VariantID:      l.VariantID,
 			Title:          l.Title,
+			Kind:           l.Kind,
 			VariantLabel:   catalog.OptionLabel(l.Option1, l.Option2, l.Option3),
 			UnitPriceCents: l.PriceCents,
 			Quantity:       l.Quantity,
@@ -109,7 +132,10 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		switch {
 		case !l.Purchasable:
 			problems = append(problems, l.Title+" is no longer for sale.")
-		case l.StockQty < l.Quantity:
+		// A download has no stock to be short of. Without this exemption every
+		// digital checkout would be refused as unavailable before it reached the
+		// gateway.
+		case !catalog.Kind(l.Kind).Digital() && l.StockQty < l.Quantity:
 			problems = append(problems, fmt.Sprintf("%s only has %d left.", l.Title, l.StockQty))
 		}
 	}
@@ -146,6 +172,7 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 			VariantID:      i.VariantID,
 			Title:          i.Title,
 			VariantLabel:   i.VariantLabel,
+			Kind:           i.Kind,
 			UnitPriceCents: i.UnitPriceCents,
 			Quantity:       i.Quantity,
 		})
@@ -232,8 +259,10 @@ func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
 	items := make([]Item, 0, len(rows))
 	for _, r := range rows {
 		items = append(items, Item{
+			ID:             r.ID,
 			VariantID:      r.VariantID,
 			Title:          r.Title,
+			Kind:           r.Kind,
 			VariantLabel:   r.VariantLabel,
 			UnitPriceCents: r.UnitPriceCents,
 			Quantity:       r.Quantity,
@@ -297,6 +326,16 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 
 	var result PaidResult
 	for _, l := range lines {
+		// A download cannot run out, so there is nothing to take. Without this
+		// skip every digital sale would find stock_qty at 0, count as oversold,
+		// flag the order and email the owner a warning about a file.
+		//
+		// The kind is read from the order_items snapshot rather than from the
+		// product, so a product flipped after the sale cannot change how this line
+		// behaved.
+		if catalog.Kind(l.Kind).Digital() {
+			continue
+		}
 		affected, err := q.DecrementVariantStock(ctx, gen.DecrementVariantStockParams{
 			StockQty: l.Quantity,
 			ID:       l.VariantID,
@@ -307,6 +346,15 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 		if affected == 0 {
 			result.Oversold = append(result.Oversold, l.Title)
 		}
+	}
+
+	// Entitlements are minted here, inside the same transaction that recorded the
+	// payment, for the same reason the oversold flag is: an order must never be
+	// paid-without-entitlements. A buyer whose money was taken and whose download
+	// row failed to write has no way to reach what they bought, and nothing in the
+	// admin to say so.
+	if result.Grants, err = mintEntitlements(ctx, q, id); err != nil {
+		return PaidResult{}, err
 	}
 
 	// Flagged in the same transaction that recorded the payment, so an order can
