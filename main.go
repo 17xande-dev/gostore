@@ -251,17 +251,26 @@ func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 	})
 }
 
-// newMailer builds the mail sender, or a Discard that logs what it drops.
+// newMailer builds the mail sender.
 //
-// Mail being unconfigured is a warning and not a boot failure: the shop's job is to
-// take an order and record it, and that does not depend on a mail server. A store
-// that refused to start because SMTP was missing would trade a working shop for a
-// missing receipt.
+// Mail is required, and that reverses what this comment used to say. The old
+// position — a shop's job is to take an order and record it, which does not depend
+// on a mail server — was right about a shop selling parcels and is wrong about one
+// that can sell downloads: a download's link lives in the confirmation email and
+// nowhere else, because only its hash is stored. An unconfigured relay there does
+// not drop a receipt, it takes money for something the buyer can never reach.
+// config.Load is where the refusal happens.
 func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
+	// config.Load refuses to boot without SMTP, so this is unreachable through
+	// main. It is kept as an error rather than deleted because newMailer is the
+	// only thing standing between an unconfigured relay and a silently dropped
+	// receipt, and a second reader of this function should not have to go and
+	// check that somebody else already refused.
+	//
+	// email.Discard still exists for tests and for an adopter assembling their own
+	// main with different rules. It is no longer reachable from this one.
 	if !cfg.SMTP.Configured() {
-		log.Warn("no SMTP configured: order confirmations will be logged and dropped, not sent",
-			"fix", "set SMTP_HOST and EMAIL_FROM")
-		return email.Discard{Log: log}, nil
+		return nil, fmt.Errorf("config: SMTP_HOST and EMAIL_FROM are required")
 	}
 
 	policy, err := email.ParseTLSPolicy(cfg.SMTP.TLS)
@@ -358,9 +367,10 @@ func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	}
 
 	if !cfg.Blob.Configured() {
-		log.Warn("no image storage configured: products cannot have images",
-			"enable", "set IMAGE_DIR for a local directory, or the BLOB_* variables for object storage")
-		return blob.Unconfigured{}, nil
+		// Unreachable through main for the same reason as the mail branch above:
+		// config.Load requires one image backend or the other. blob.Unconfigured
+		// remains for tests and for an adopter's own main.
+		return nil, fmt.Errorf("config: IMAGE_DIR or the BLOB_* variables are required")
 	}
 
 	storage, err := blob.NewS3(blob.S3Config{

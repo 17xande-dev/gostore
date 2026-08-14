@@ -201,6 +201,11 @@ func TestConfig_ShowErrorDetailFollowsBaseURL(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=")
 	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
 	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
+	// Images and mail are required, and this test is about neither — it just has
+	// to get past Load.
+	t.Setenv("IMAGE_DIR", t.TempDir())
+	t.Setenv("SMTP_HOST", "localhost")
+	t.Setenv("EMAIL_FROM", "orders@example.com")
 
 	for baseURL, wantDetail := range map[string]bool{
 		"http://localhost:8080": true,

@@ -587,6 +587,23 @@ func Load() (Config, error) {
 			"config: SMTP_HOST and EMAIL_FROM must be set together; got host %q and from %q",
 			c.SMTP.Host, c.SMTP.From)
 	}
+	// Mail is REQUIRED, and this reverses an earlier decision that it was optional.
+	// The reason it changed is a fact that did not exist when it was made: a digital
+	// download reaches its buyer as a link in the confirmation email, and only the
+	// token's hash is stored — so a shop with no mail server does not merely drop a
+	// receipt, it takes money for a file the buyer can then never reach, with
+	// nothing recoverable afterwards.
+	//
+	// The old argument — "a shop's job is to take an order and record it, and that
+	// does not depend on a mail server" — was right about a shop selling parcels
+	// and is wrong about one that can sell downloads. Since any deployment *might*
+	// sell one, the requirement is unconditional rather than tied to whether a
+	// digital product happens to exist today.
+	if !c.SMTP.Configured() {
+		return Config{}, fmt.Errorf(
+			"config: SMTP_HOST and EMAIL_FROM are required — a store must be able to send " +
+				"a receipt, and a digital download's link exists nowhere else")
+	}
 	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
 		return Config{}, fmt.Errorf(
 			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
@@ -597,6 +614,19 @@ func Load() (Config, error) {
 	if c.Blob.Configured() && c.ImageDir != "" {
 		return Config{}, fmt.Errorf(
 			"config: BLOB_ENDPOINT and IMAGE_DIR are both set; product images come from one or the other")
+	}
+	// And at least one, which also reverses an earlier decision. A catalog whose
+	// products cannot have pictures is not a shop anybody would buy from, and the
+	// admin's upload form has to either exist or explain itself on every product
+	// page — a half-feature carried by every deployment that forgot a variable.
+	//
+	// The bar is deliberately low: IMAGE_DIR is one path and needs nothing running.
+	// Refusing to boot over a setting that cheap costs an adopter a line of config
+	// and saves them a storefront that looks broken.
+	if !c.ImagesEnabled() {
+		return Config{}, fmt.Errorf(
+			"config: product images are required — set IMAGE_DIR for a local directory, " +
+				"or the BLOB_* variables for object storage")
 	}
 
 	// Object storage is all-or-nothing: a partial configuration would fail at the

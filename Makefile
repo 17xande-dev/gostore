@@ -27,7 +27,21 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 	DOWNLOAD_BUCKET="$(DOWNLOAD_BUCKET)" \
 	DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \
 	DOWNLOAD_SECRET_ACCESS_KEY="$(DOWNLOAD_SECRET_ACCESS_KEY)" \
-	DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)"
+	DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)" \
+	IMAGE_DIR="$(IMAGE_DIR)" \
+	SMTP_HOST="$(SMTP_HOST)" \
+	SMTP_PORT="$(SMTP_PORT)" \
+	SMTP_TLS="$(SMTP_TLS)" \
+	EMAIL_FROM="$(EMAIL_FROM)"
+
+# Images and mail are required, so `make run` has to supply both. A directory
+# under .local keeps uploaded photographs out of the working tree; mailpit is the
+# compose relay, which `make run` starts alongside postgres.
+IMAGE_DIR ?= .local/images
+SMTP_HOST ?= localhost
+SMTP_PORT ?= 1025
+SMTP_TLS ?= none
+EMAIL_FROM ?= orders@gostore.example
 
 # `make run` serves purchased files from the compose MinIO, which is the one place
 # the signed-URL path can be exercised locally: the server and the browser both
@@ -75,7 +89,7 @@ logs:
 # there and refresh, no restart. THEME_RELOAD=false for the read-once behaviour a
 # deployment has.
 run:
-	$(COMPOSE) up -d postgres
+	$(COMPOSE) up -d postgres mailpit minio
 	@$(DEV_ENV) TEMPLATE_DIR=theme/templates STATIC_DIR=theme/static \
 		THEME_RELOAD="$(THEME_RELOAD)" go run .
 

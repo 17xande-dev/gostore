@@ -88,15 +88,15 @@ list with defaults.
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
 | `LOG_FORMAT` | no | `json` | `gcp` renames `level`/`msg` to `severity`/`message` for Cloud Logging. See [Logging](#logging) |
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
-| `SMTP_HOST` | no¹ | — | Mail relay. With no mail configured, receipts are logged and dropped |
-| `EMAIL_FROM` | no¹ | — | Sender address |
+| `SMTP_HOST` | **yes**¹ | — | Mail relay |
+| `EMAIL_FROM` | **yes**¹ | — | Sender address |
 | `SMTP_PORT` | no | `587` | `465` with `SMTP_TLS=tls`, `1025` for mailpit |
 | `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
 | `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
 | `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
-| `IMAGE_DIR` | no³ | — | Store images in this directory, served by this server |
-| `BLOB_ENDPOINT` | no³ | — | Object storage host[:port], no scheme |
+| `IMAGE_DIR` | **yes**³ | — | Store images in this directory, served by this server |
+| `BLOB_ENDPOINT` | **yes**³ | — | Object storage host[:port], no scheme |
 | `BLOB_BUCKET` | no² | — | Bucket name |
 | `BLOB_ACCESS_KEY_ID` / `BLOB_SECRET_ACCESS_KEY` | no² | — | Credentials |
 | `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
@@ -115,16 +115,20 @@ list with defaults.
 | `RATE_LIMIT_DOWNLOAD_PER_MINUTE` | no | `60` | Download links per IP; each click mints a signed URL |
 | `CART_TTL_DAYS` | no | `60` | How long an untouched cart survives |
 
-¹ `SMTP_HOST` and `EMAIL_FROM` are individually optional but must be set **together** — a
-half-configured relay is a boot failure, because the alternative is a receipt that silently
-never arrives.
+¹ **Mail is required**, and both must be set. This reverses an earlier position that a store
+with no mail server should still boot and drop receipts loudly. What changed is a fact rather
+than an opinion: a digital download's link lives in the confirmation email and **only its hash
+is stored**, so an unconfigured relay does not lose a receipt — it takes money for a file the
+buyer can then never reach, unrecoverably. The old argument was right about a shop selling
+parcels and wrong about one that *can* sell downloads, and any deployment might.
 
 ² The `BLOB_*` set is all-or-nothing for the same reason: `BLOB_ENDPOINT` with any of the
 others missing refuses to boot rather than failing at the first upload.
 
-³ `IMAGE_DIR` and `BLOB_ENDPOINT` are the two image backends and are mutually exclusive —
-both set refuses to boot, because which one wins would otherwise be a guess. With neither,
-products cannot have images and the admin says so.
+³ **One image backend is required**, and the two are mutually exclusive — both set refuses to
+boot because which one wins would otherwise be a guess, and neither set refuses because a
+catalog whose products cannot have pictures is not a shop anybody buys from. The bar is
+deliberately low: `IMAGE_DIR` is one path and needs nothing running.
 
 ⁴ The `DOWNLOAD_*` set is the **private** store for purchased files, and is separate from the
 image one in every respect. `DOWNLOAD_DIR` and `DOWNLOAD_ENDPOINT` are mutually exclusive;
@@ -965,9 +969,12 @@ callback.
 They are two separate sends rather than one message with two recipients: a receipt and a work
 order say different things, and one of them failing should not suppress the other.
 
-With no SMTP configured the server starts, warns loudly, and logs every message it drops.
-That is deliberate — the shop's job is to take an order and record it, and that does not
-depend on a mail server.
+**Mail is required and the server will not start without it.** That reverses what this
+section used to say. The old reasoning — the shop's job is to take an order and record it,
+which does not depend on a mail server — held while every product was a parcel. It stopped
+holding when a product could be a download: that link is emailed and nowhere else, because
+only its hash is stored. `email.Discard` still exists for tests and for an adopter assembling
+their own `main`, but the shipped binary no longer reaches it.
 
 ### Email templates
 

@@ -16,6 +16,11 @@ func setRequired(t *testing.T) {
 	// PayFast's own published sandbox credentials — see .env.example.
 	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
 	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
+	// Images and mail are required too. IMAGE_DIR is the cheapest of the two image
+	// backends and needs nothing running, which is why it is the one used here.
+	t.Setenv("IMAGE_DIR", t.TempDir())
+	t.Setenv("SMTP_HOST", "localhost")
+	t.Setenv("EMAIL_FROM", "orders@example.com")
 }
 
 func TestLoad_RequiresSecrets(t *testing.T) {
@@ -24,6 +29,7 @@ func TestLoad_RequiresSecrets(t *testing.T) {
 	for _, key := range []string{
 		"DATABASE_URL", "ADMIN_PASSWORD_HASH", "SESSION_SECRET",
 		"PAYFAST_MERCHANT_ID", "PAYFAST_MERCHANT_KEY",
+		"SMTP_HOST", "EMAIL_FROM",
 	} {
 		setRequired(t)
 		t.Setenv(key, "")
@@ -337,6 +343,9 @@ func TestLoad_Blob(t *testing.T) {
 	blobEnv := func(t *testing.T) {
 		t.Helper()
 		setRequired(t)
+		// The two image backends are mutually exclusive and setRequired picks the
+		// directory, so a test about object storage has to put that down first.
+		t.Setenv("IMAGE_DIR", "")
 		t.Setenv("BLOB_ENDPOINT", "localhost:9000")
 		t.Setenv("BLOB_BUCKET", "gostore-images")
 		t.Setenv("BLOB_ACCESS_KEY_ID", "key")
@@ -656,6 +665,7 @@ func TestLoad_RefusesTheImageBucketForDownloads(t *testing.T) {
 	// design, so pointing downloads at it would make every purchased file
 	// anonymously fetchable — and nothing downstream would notice.
 	setRequired(t)
+	t.Setenv("IMAGE_DIR", "")
 	t.Setenv("BLOB_ENDPOINT", "storage.googleapis.com")
 	t.Setenv("BLOB_BUCKET", "gostore-assets")
 	t.Setenv("BLOB_ACCESS_KEY_ID", "key")

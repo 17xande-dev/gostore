@@ -13,3 +13,30 @@ store_name      = "Your Store Name"
 # With false, PAYFAST_MERCHANT_ID must be your own. The server refuses to start
 # if it is still PayFast's published sandbox id.
 payfast_sandbox = true
+
+# Mail. Required, both of them: the server refuses to boot without a relay, and
+# a digital download's link exists only in the confirmation email — only its hash
+# is stored, so a message that never goes out cannot be recovered from.
+#
+# SMTP_PASSWORD is not here. It goes into Secret Manager out of band, like the
+# other credentials; see secrets.tf. Until this release that secret was mounted
+# and read by nothing, because SMTP_HOST was never set.
+smtp_host     = "smtp.example.com"
+smtp_port     = 587
+smtp_username = "gostore@example.com"
+email_from    = "orders@example.com"
+
+# A copy of each paid order to whoever packs it. Optional — with it empty, the
+# customer's receipt is the only mail sent and orders are found in /admin/orders.
+# order_notify_email = "shop@example.com"
+
+# Product images are served straight from the bucket Terraform creates, at its
+# own public hostname by default. Point this at a CDN or a custom domain in front
+# of that bucket when you have one; the store appends the object key to it.
+# blob_public_base_url = "https://images.example.com"
+
+# Purchased files for digital products are NOT configured by this Terraform, and
+# stay optional. Selling downloads needs a second, PRIVATE bucket — never the
+# image one, which is world-readable — plus DOWNLOAD_ENDPOINT, DOWNLOAD_BUCKET
+# and an HMAC key pair. DOWNLOAD_DIR does not work on Cloud Run, whose filesystem
+# does not survive an instance.

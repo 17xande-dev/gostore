@@ -6,3 +6,6 @@ infra/terraform/*.tfstate
 infra/terraform/*.tfstate.*
 infra/terraform/terraform.tfvars
 infra/terraform/*.tfplan
+
+# `make run` writes uploaded images here; see IMAGE_DIR in the Makefile.
+.local/
