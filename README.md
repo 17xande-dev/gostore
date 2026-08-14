@@ -71,7 +71,7 @@ list with defaults.
 | `PAYFAST_MERCHANT_ID` | **yes** | — | From the PayFast dashboard |
 | `PAYFAST_MERCHANT_KEY` | **yes** | — | From the PayFast dashboard |
 | `PAYFAST_PASSPHRASE` | no | — | The account's salt passphrase; must match the dashboard exactly |
-| `PAYFAST_SANDBOX` | no | `true` | `false` takes real money |
+| `PAYFAST_SANDBOX` | no | `true` | `false` takes real money. Set it explicitly when deploying — see [Going live](#going-live) |
 | `PAYFAST_NOTIFY_URL` | no | derived | Override when PayFast cannot reach `BASE_URL` (a tunnel) |
 | `PAYFAST_ALLOWED_CIDRS` | no | published ranges | Override the source ranges; `any` disables the check |
 | `TRUST_PROXY_IP` | no | `false` | Believe `X-Forwarded-For`; only with a proxy that replaces it |
@@ -710,6 +710,25 @@ code and no migration — the order's `gateway_*` columns are deliberately gatew
 Then, in order: place an order, pay it on the sandbox, and check that the order is `paid` and
 stock has moved. Replaying the captured notification body with `curl` must not move stock a
 second time.
+
+### Going live
+
+**`PAYFAST_SANDBOX` defaults to `true` on purpose**, so that nobody's first afternoon with
+this project charges a real card. The cost of that default is the mirror mistake: a
+deployment that never sets it takes no money and looks like it works. Set it explicitly
+wherever you deploy — [`infra/terraform`](infra/terraform) requires it as a variable with no
+default for exactly this reason.
+
+Switching it off is two changes, not one. The merchant credentials must be your own: the
+server **refuses to start** with `PAYFAST_SANDBOX=false` and PayFast's published sandbox
+merchant id, because that combination signs every payment with a key printed in PayFast's
+documentation.
+
+One more, if you deploy behind any proxy or managed platform: **`TRUST_PROXY_IP` must be
+`true`**, or the source-IP check below compares PayFast's ranges against your load
+balancer's address and rejects every genuine notification — money taken, nothing recorded.
+It must stay `false` when nothing in front of the server sets `X-Forwarded-For`, since a
+client could then claim any address it liked.
 
 ### How a notification is authenticated
 

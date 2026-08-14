@@ -149,6 +149,12 @@ type Config struct {
 	LogFormat string
 }
 
+// payFastSandboxMerchantID is the merchant id PayFast publishes in its own
+// documentation for testing, and therefore the one every copy of this project's
+// .env.example and compose.yaml carries. It is a constant here so that "still on
+// the demo credentials" is something the config can recognise.
+const payFastSandboxMerchantID = "10000100"
+
 // PayFast is what the PayFast gateway needs from the environment. The merchant
 // id and key are required: a store that cannot take a payment is not a store, and
 // discovering that at the first checkout is worse than discovering it at boot.
@@ -314,6 +320,12 @@ func Load() (Config, error) {
 			Passphrase:  os.Getenv("PAYFAST_PASSPHRASE"),
 			// Sandbox defaults to true: the wrong default here takes real money
 			// from a real card during somebody's first afternoon with the project.
+			//
+			// The cost of that default is the mirror failure — a production
+			// deployment that never sets it takes no money and looks fine — so
+			// anything that deploys this is expected to set it explicitly, and
+			// infra/terraform requires it. See the check further down for the
+			// half-done version of turning it off.
 			Sandbox:   boolEnv("PAYFAST_SANDBOX", true),
 			NotifyURL: strings.TrimSpace(os.Getenv("PAYFAST_NOTIFY_URL")),
 		},
@@ -387,6 +399,22 @@ func Load() (Config, error) {
 	}
 	if err := checkLogFormat(c.LogFormat); err != nil {
 		return Config{}, err
+	}
+
+	// Taking real money with the demo credentials is a contradiction, and it is
+	// the mistake that follows naturally from the other one: somebody discovers
+	// their store has been quietly running against the sandbox, sets
+	// PAYFAST_SANDBOX=false, and does not realise the merchant id came from
+	// .env.example too. Every payment would then be signed with a key published
+	// in PayFast's own documentation.
+	//
+	// Refused at boot, where it costs one message, rather than at the first
+	// checkout, where it costs a customer.
+	if !c.PayFast.Sandbox && c.PayFast.MerchantID == payFastSandboxMerchantID {
+		return Config{}, fmt.Errorf(
+			"config: PAYFAST_SANDBOX is false but PAYFAST_MERCHANT_ID is still %s, "+
+				"which is PayFast's published sandbox merchant id — set your own "+
+				"credentials, or leave PAYFAST_SANDBOX=true", payFastSandboxMerchantID)
 	}
 
 	// Origins are compared literally against the browser's Origin header, so a

@@ -3,3 +3,13 @@ region          = "africa-south1"
 container_image = "africa-south1-docker.pkg.dev/gostore-prod-479/gostore/gostore:v1"
 base_url        = "https://gostore.example.com"
 store_name      = "Your Store Name"
+
+# Whether this shop is really open. Required, with no default in either
+# direction: true runs against PayFast's sandbox and takes no money, false takes
+# real payments. The server defaults it to true so a laptop cannot charge a card,
+# and that default is exactly why this file has to be explicit — a production
+# deployment inheriting it takes no money and looks like it works.
+#
+# With false, PAYFAST_MERCHANT_ID must be your own. The server refuses to start
+# if it is still PayFast's published sandbox id.
+payfast_sandbox = true

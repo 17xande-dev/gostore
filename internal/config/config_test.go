@@ -208,6 +208,10 @@ func TestLoad_PayFast(t *testing.T) {
 	}
 
 	t.Setenv("PAYFAST_SANDBOX", "false")
+	// Real credentials alongside it: turning the sandbox off while still using
+	// PayFast's published demo merchant id is refused. See
+	// TestLoad_RefusesRealPaymentsWithDemoCredentials.
+	t.Setenv("PAYFAST_MERCHANT_ID", "20000200")
 	t.Setenv("PAYFAST_ALLOWED_CIDRS", " 10.0.0.0/8 , 192.168.0.0/16 ")
 	c, err = Load()
 	if err != nil {
@@ -440,5 +444,41 @@ func TestLoadTool_RejectsBadLogLevel(t *testing.T) {
 
 	if _, err := LoadTool(); err == nil {
 		t.Error("LOG_LEVEL=verbose was accepted")
+	}
+}
+
+func TestLoad_RefusesRealPaymentsWithDemoCredentials(t *testing.T) {
+	// The mistake this catches is the second half of a two-step one: a store is
+	// found to have been quietly running against the sandbox, somebody sets
+	// PAYFAST_SANDBOX=false, and does not notice that the merchant id came from
+	// .env.example too. Every payment would then be signed with a key printed in
+	// PayFast's own documentation.
+	setRequired(t) // leaves PAYFAST_MERCHANT_ID at the published sandbox id
+	t.Setenv("PAYFAST_SANDBOX", "false")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("real payments were accepted with the demo merchant id")
+	}
+	// The message has to name the variable and the value, because the person
+	// reading it has just been told their deployment will not start.
+	for _, want := range []string{"PAYFAST_SANDBOX", "PAYFAST_MERCHANT_ID", "10000100"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %s: %v", want, err)
+		}
+	}
+
+	// The same credentials are fine while the sandbox is on — that is the whole
+	// point of shipping them.
+	t.Setenv("PAYFAST_SANDBOX", "true")
+	if _, err := Load(); err != nil {
+		t.Errorf("the demo credentials were refused in sandbox mode: %v", err)
+	}
+
+	// And real credentials with the sandbox off are the ordinary production case.
+	t.Setenv("PAYFAST_SANDBOX", "false")
+	t.Setenv("PAYFAST_MERCHANT_ID", "20000200")
+	if _, err := Load(); err != nil {
+		t.Errorf("real credentials with the sandbox off were refused: %v", err)
 	}
 }
