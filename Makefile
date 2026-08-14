@@ -43,11 +43,11 @@ SMTP_PORT ?= 1025
 SMTP_TLS ?= none
 EMAIL_FROM ?= orders@gostore.example
 
-# `make run` serves purchased files from the compose MinIO, which is the one place
-# the signed-URL path can be exercised locally: the server and the browser both
-# reach it at localhost:9000, so a URL signed for one works for the other. The
-# compose *server* cannot, because it reaches MinIO at minio:9000 — hence the
-# directory default there.
+# Purchased files live in the compose MinIO for both `make run` and `make seed`,
+# which run on the host and so reach it at the same address a browser does. The
+# compose *server* reaches it at minio:9000 and signs for localhost:9000 —
+# see DOWNLOAD_PUBLIC_ENDPOINT in compose.yaml — so all three agree on where a
+# seeded file actually is.
 DOWNLOAD_ENDPOINT ?= localhost:9000
 DOWNLOAD_BUCKET ?= gostore-downloads
 DOWNLOAD_ACCESS_KEY_ID ?= gostore
@@ -102,7 +102,14 @@ migrate:
 # Depends on migrate, so seeding a database nobody has migrated yet reports a
 # missing migration rather than a missing table.
 seed: migrate
-	DATABASE_URL="$(TEST_DATABASE_URL)" go run ./cmd/seed -file "$(SEED_FILE)"
+	@$(COMPOSE) up -d minio minio-init
+	@DATABASE_URL="$(TEST_DATABASE_URL)" \
+		DOWNLOAD_ENDPOINT="$(DOWNLOAD_ENDPOINT)" \
+		DOWNLOAD_BUCKET="$(DOWNLOAD_BUCKET)" \
+		DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \
+		DOWNLOAD_SECRET_ACCESS_KEY="$(DOWNLOAD_SECRET_ACCESS_KEY)" \
+		DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)" \
+		go run ./cmd/seed -file "$(SEED_FILE)"
 
 ## migrate-status: show which migrations have been applied
 migrate-status:

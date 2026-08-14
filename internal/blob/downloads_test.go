@@ -193,6 +193,9 @@ func TestDownloadExtension(t *testing.T) {
 		contentType, filename, want string
 	}{
 		{"audio/mpeg", "whatever", ".mp3"},
+		// The spelling net/http actually emits for a RIFF/WAVE file, which is what
+		// testdata/downloads ships.
+		{"audio/wave", "whatever", ".wav"},
 		{"video/mp4", "whatever", ".mp4"},
 		{"application/pdf; charset=binary", "notes", ".pdf"},
 		// DetectContentType answers octet-stream for flac and several mp4

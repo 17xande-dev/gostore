@@ -106,6 +106,7 @@ list with defaults.
 | `DOWNLOAD_ENDPOINT` | no⁴ | — | Private bucket host[:port], no scheme |
 | `DOWNLOAD_BUCKET` | no⁴ | — | Bucket name; must not be `BLOB_BUCKET` |
 | `DOWNLOAD_ACCESS_KEY_ID` / `DOWNLOAD_SECRET_ACCESS_KEY` | no⁴ | — | Credentials |
+| `DOWNLOAD_PUBLIC_ENDPOINT` | no | — | The address a *browser* reaches the bucket at, when it differs from `DOWNLOAD_ENDPOINT`. Development stacks only |
 | `DOWNLOAD_REGION` | no | `auto` | As `BLOB_REGION` |
 | `DOWNLOAD_USE_TLS` | no | `true` | As `BLOB_USE_TLS` |
 | `DOWNLOAD_MAX_BYTES` | no | `2GiB` | Cap on one uploaded file; accepts `500MB`, `2G`, or plain bytes |
@@ -526,6 +527,12 @@ The link never points at the bucket. Authorising and recording happen before any
 which is what makes revocation take effect on the next click and makes the counts trustworthy.
 The signed URL is minted per click, so one forwarded to a friend is already expired.
 
+A presigned URL's signature covers the `Host` header, so it must be signed for the address the
+*browser* will use rather than the one the server connects through. Those are the same
+everywhere except a container stack, which is what `DOWNLOAD_PUBLIC_ENDPOINT` is for — compose
+sets it, because the server reaches MinIO at `minio:9000` and a browser reaches it at
+`localhost:9000`.
+
 #### Revoking
 
 `/admin/orders/{id}` lists an order's downloads with a **Revoke** button and how many times
@@ -595,9 +602,53 @@ files and the kind becomes changeable.
 
 `option1_name` through `option3_name` name the product's variant options; `option1` through
 `option3` are each variant's values for them. Omit them all for a product with only one
-version of itself. `kind` may be `"digital"`, but a seed file cannot attach files to one —
-there is no way for a fixture to upload bytes — so a seeded download has nothing to
-download until somebody uploads through the admin.
+version of itself.
+
+#### Seeding a digital product
+
+`kind: "digital"` plus a `files` list, which is the one thing a fixture can say that the
+domain type deliberately cannot — an object key is storage's to choose, and a size and a
+content type are facts about bytes:
+
+```json
+{
+  "slug": "a-quiet-hour",
+  "kind": "digital",
+  "option1_name": "Format",
+  "variants": [
+    { "sku": "QH-AUDIO",            "option1": "Audio",              "price_cents": 8000 },
+    { "sku": "QH-AUDIO-TRANSCRIPT", "option1": "Audio + transcript", "price_cents": 12000 }
+  ],
+  "files": [
+    { "path": "downloads/sample-recording.wav",  "title": "A Quiet Hour — recording",
+      "variants": ["QH-AUDIO", "QH-AUDIO-TRANSCRIPT"] },
+    { "path": "downloads/sample-transcript.pdf", "title": "Transcript",
+      "variants": ["QH-AUDIO-TRANSCRIPT"] }
+  ]
+}
+```
+
+`path` is **relative to the seed file's own directory**, and anything absolute or climbing
+out of it is refused — a seed file is data, and data that can name any path on the machine
+and have it uploaded to a bucket is a way to exfiltrate a private key by editing JSON.
+`variants` are SKUs, the same natural key the variants themselves match on. `title` defaults
+to the filename. The content type is **sniffed**, not taken from the extension.
+
+Seeding files needs somewhere private to put them — `DOWNLOAD_DIR` or the `DOWNLOAD_*`
+bucket. Nothing else the server requires is needed to seed. A fixture with files and no
+storage configured is refused rather than half-loaded, along with files on a physical
+product, a SKU that is not one of that product's variants, and a file that is not there —
+all before a single row is written.
+
+**Files match on the name they were seeded from**, so a second run retitles and re-links
+rather than uploading a second copy. That is not only tidiness: replacing the row would mint
+a new file id, and a buyer holding an entitlement would find that what they paid for had
+quietly become something else.
+
+The shipped fixture demonstrates the part that matters — the recording is granted by both
+variants and the transcript by only one, which is what a per-variant file list is *for*. Both
+sample files in `testdata/downloads/` are real and playable/readable, not renamed
+placeholders.
 
 `slug` may be omitted and is then derived from the title. Seeding is rerunnable: products
 match on `slug` and variants on `sku`, so a second run updates titles and prices rather

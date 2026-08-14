@@ -337,12 +337,13 @@ func newDownloadStorage(cfg config.Config, log *slog.Logger) (blob.Downloads, er
 			"endpoint", cfg.Downloads.Endpoint)
 	}
 	store, err := blob.NewS3Downloads(blob.S3Config{
-		Endpoint:  cfg.Downloads.Endpoint,
-		Bucket:    cfg.Downloads.Bucket,
-		AccessKey: cfg.Downloads.AccessKey,
-		SecretKey: cfg.Downloads.SecretKey,
-		Region:    cfg.Downloads.Region,
-		UseTLS:    cfg.Downloads.UseTLS,
+		Endpoint:       cfg.Downloads.Endpoint,
+		Bucket:         cfg.Downloads.Bucket,
+		AccessKey:      cfg.Downloads.AccessKey,
+		SecretKey:      cfg.Downloads.SecretKey,
+		Region:         cfg.Downloads.Region,
+		UseTLS:         cfg.Downloads.UseTLS,
+		PublicEndpoint: cfg.Downloads.PublicEndpoint,
 	})
 	if err != nil {
 		return nil, err

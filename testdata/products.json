@@ -112,5 +112,47 @@
         "active": false
       }
     ]
+  },
+  {
+    "categories": [
+      "recordings"
+    ],
+    "slug": "a-quiet-hour",
+    "title": "A Quiet Hour",
+    "description": "A demo digital product: a recording delivered as a download rather than a parcel. The two formats grant different files — both include the audio, only one includes the transcript — which is what a variant's file list is for. Everything here is fictional sample data.",
+    "active": true,
+    "kind": "digital",
+    "option1_name": "Format",
+    "variants": [
+      {
+        "sku": "QH-AUDIO",
+        "option1": "Audio",
+        "price_cents": 8000,
+        "active": true
+      },
+      {
+        "sku": "QH-AUDIO-TRANSCRIPT",
+        "option1": "Audio + transcript",
+        "price_cents": 12000,
+        "active": true
+      }
+    ],
+    "files": [
+      {
+        "path": "downloads/sample-recording.wav",
+        "title": "A Quiet Hour — recording",
+        "variants": [
+          "QH-AUDIO",
+          "QH-AUDIO-TRANSCRIPT"
+        ]
+      },
+      {
+        "path": "downloads/sample-transcript.pdf",
+        "title": "Transcript",
+        "variants": [
+          "QH-AUDIO-TRANSCRIPT"
+        ]
+      }
+    ]
   }
 ]

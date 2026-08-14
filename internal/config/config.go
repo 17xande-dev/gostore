@@ -287,6 +287,17 @@ type Downloads struct {
 
 	Region string
 	UseTLS bool
+
+	// PublicEndpoint is the address a *browser* reaches this bucket at, when that
+	// differs from Endpoint. Empty means they are the same, which is the case in
+	// every real deployment; it exists for a development stack where the server
+	// and the browser are on different sides of a container network.
+	//
+	// A presigned URL's signature covers the Host header, so a URL signed for one
+	// address cannot be rewritten to another — it has to be signed for the
+	// browser's address from the start. Same idea as Blob.PublicBaseURL, one layer
+	// down.
+	PublicEndpoint string
 }
 
 // Configured reports whether download storage is set up.
@@ -389,12 +400,13 @@ func Load() (Config, error) {
 		DownloadDir:      strings.TrimSpace(os.Getenv("DOWNLOAD_DIR")),
 		DownloadMaxBytes: bytesEnv("DOWNLOAD_MAX_BYTES", blob.DefaultMaxDownloadBytes),
 		Downloads: Downloads{
-			Endpoint:  strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
-			Bucket:    strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
-			AccessKey: os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
-			SecretKey: os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
-			Region:    env("DOWNLOAD_REGION", "auto"),
-			UseTLS:    boolEnv("DOWNLOAD_USE_TLS", true),
+			Endpoint:       strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
+			Bucket:         strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
+			AccessKey:      os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
+			SecretKey:      os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
+			Region:         env("DOWNLOAD_REGION", "auto"),
+			UseTLS:         boolEnv("DOWNLOAD_USE_TLS", true),
+			PublicEndpoint: strings.TrimSpace(os.Getenv("DOWNLOAD_PUBLIC_ENDPOINT")),
 		},
 		SMTP: SMTP{
 			Host:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
@@ -757,9 +769,34 @@ func LoadTool() (Config, error) {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		LogLevel:    env("LOG_LEVEL", "info"),
 		LogFormat:   env("LOG_FORMAT", "json"),
+
+		// Download storage, because a seed fixture can attach files to a digital
+		// product and has to put the bytes somewhere. Everything else the server
+		// requires stays out: needing an admin password hash and a merchant key to
+		// load a JSON file is an obstacle with nothing behind it.
+		//
+		// Still optional here, and unset is not an error — a fixture with no files
+		// needs none of it. cmd/seed refuses only when a fixture asks for something
+		// this cannot deliver.
+		DownloadDir:      strings.TrimSpace(os.Getenv("DOWNLOAD_DIR")),
+		DownloadMaxBytes: bytesEnv("DOWNLOAD_MAX_BYTES", blob.DefaultMaxDownloadBytes),
+		Downloads: Downloads{
+			Endpoint:       strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
+			Bucket:         strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
+			AccessKey:      os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
+			SecretKey:      os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
+			Region:         env("DOWNLOAD_REGION", "auto"),
+			UseTLS:         boolEnv("DOWNLOAD_USE_TLS", true),
+			PublicEndpoint: strings.TrimSpace(os.Getenv("DOWNLOAD_PUBLIC_ENDPOINT")),
+		},
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: required env vars not set: DATABASE_URL")
+	}
+	// The same all-or-nothing and mutual-exclusion rules the server applies, so a
+	// half-configured backend fails here rather than at the first file.
+	if err := c.checkDownloads(); err != nil {
+		return Config{}, err
 	}
 	if err := checkLogLevel(c.LogLevel); err != nil {
 		return Config{}, err

@@ -122,25 +122,25 @@ services:
       BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-gostore123}
       BLOB_USE_TLS: ${BLOB_USE_TLS:-false}
       BLOB_PUBLIC_BASE_URL: ${BLOB_PUBLIC_BASE_URL:-http://localhost:9000/gostore-images}
-      # Private storage for the files a digital product is made of. It is NEVER the
-      # image bucket: that one is anonymously readable above, so a purchased file in
-      # it would be one URL guess away from everybody — and public access on GCS and
-      # R2 is a whole-bucket toggle rather than something a prefix can carry. The
-      # config refuses the overlap at boot.
+      # Private storage for the files a digital product is made of. NEVER the image
+      # bucket: that one is anonymously readable above, so a purchased file in it
+      # would be one URL guess away from everybody — and public access on GCS and R2
+      # is a whole-bucket toggle rather than something a prefix can carry. The config
+      # refuses the overlap at boot.
       #
-      # A directory here rather than the MinIO bucket, and the reason is specific to
-      # compose. A presigned URL is signed against the host the *browser* will
-      # eventually fetch from, and in this stack those are two different names: the
-      # server reaches MinIO at minio:9000, a browser reaches it at localhost:9000.
-      # Signing with either one breaks the other half. Real deployments have a single
-      # address and do not have this problem.
-      #
-      # So the default exercises the streaming path, which is the honest local
-      # default anyway: one binary, one volume, no object storage. To exercise the
-      # signed-URL path instead, run the server on the host with `make run`, where
-      # localhost:9000 is correct for both — minio-init has already created the
-      # private bucket for exactly that.
-      DOWNLOAD_DIR: ${DOWNLOAD_DIR:-/downloads}
+      # DOWNLOAD_PUBLIC_ENDPOINT is the interesting line. This server reaches MinIO
+      # at minio:9000 and a browser reaches it at localhost:9000, and a presigned
+      # URL's signature covers the Host header — so a URL signed for the first
+      # address cannot be rewritten to the second, it has to be signed for the
+      # browser's address from the start. Without it the download redirect would
+      # point at a hostname only this container can resolve. Real deployments have
+      # one address and leave it unset.
+      DOWNLOAD_ENDPOINT: ${DOWNLOAD_ENDPOINT:-minio:9000}
+      DOWNLOAD_PUBLIC_ENDPOINT: ${DOWNLOAD_PUBLIC_ENDPOINT:-localhost:9000}
+      DOWNLOAD_BUCKET: ${DOWNLOAD_BUCKET:-gostore-downloads}
+      DOWNLOAD_ACCESS_KEY_ID: ${DOWNLOAD_ACCESS_KEY_ID:-gostore}
+      DOWNLOAD_SECRET_ACCESS_KEY: ${DOWNLOAD_SECRET_ACCESS_KEY:-gostore123}
+      DOWNLOAD_USE_TLS: ${DOWNLOAD_USE_TLS:-false}
       # Theming. The paths are the container's and so are deliberately not
       # interpolated, for the same reason DATABASE_URL is not: a local .env
       # pointing TEMPLATE_DIR at a host-relative ./theme/templates for `make run`
@@ -157,9 +157,6 @@ services:
     volumes:
       # Read-only: the store renders a theme, it never writes one.
       - ./theme:/theme:ro
-      # Purchased files. A named volume rather than a bind mount, so they are not
-      # sitting in the working tree waiting to be committed by accident.
-      - downloads:/downloads
     ports:
       - "8080:8080"
     depends_on:
@@ -173,6 +170,3 @@ services:
 volumes:
   pgdata:
   miniodata:
-  # Purchased files, deliberately not the volume images live in: everything under
-  # the image directory is served publicly at /images/, and these bytes must not be.
-  downloads:

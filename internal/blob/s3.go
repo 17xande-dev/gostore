@@ -50,6 +50,19 @@ type S3Config struct {
 	// PublicBaseURL is the origin, plus any path prefix, that objects are served
 	// from. An object's URL is this joined to its key.
 	PublicBaseURL string
+
+	// PublicEndpoint is the host[:port] a *browser* reaches this bucket at, when
+	// that differs from Endpoint. Used only for signing download URLs, and empty
+	// means the two are the same — which they are in every real deployment.
+	//
+	// It exists for the same reason PublicBaseURL does, one layer down. A
+	// presigned URL's signature covers the Host header, so a URL signed for the
+	// address the server connects through cannot be rewritten to the address the
+	// browser uses; it has to be *signed* for that one from the start. In compose
+	// the server reaches MinIO at minio:9000 and a browser reaches it at
+	// localhost:9000, and without this the redirect would point at a hostname only
+	// the container can resolve.
+	PublicEndpoint string
 }
 
 // NewS3 validates the configuration and returns Storage.

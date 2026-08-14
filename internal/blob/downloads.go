@@ -115,6 +115,13 @@ func (NoDownloads) Open(context.Context, string) (io.ReadCloser, int64, error) {
 type S3Downloads struct {
 	client *minio.Client
 	bucket string
+
+	// signer mints presigned URLs, and is a second client only when the browser
+	// reaches this bucket at a different address than the server does — see
+	// S3Config.PublicEndpoint. It makes no network calls: presigning is local
+	// arithmetic over the credentials, so a client pointed at an address this
+	// process cannot reach is still perfectly able to sign for it.
+	signer *minio.Client
 }
 
 // NewS3Downloads validates the configuration and returns Downloads.
@@ -145,7 +152,19 @@ func NewS3Downloads(cfg S3Config) (*S3Downloads, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &S3Downloads{client: client, bucket: cfg.Bucket}, nil
+
+	signer := client
+	if pub := strings.TrimSpace(cfg.PublicEndpoint); pub != "" && pub != cfg.Endpoint {
+		if strings.Contains(pub, "://") {
+			return nil, fmt.Errorf("blob: download public endpoint %q must be host[:port] with no scheme", pub)
+		}
+		signing := cfg
+		signing.Endpoint = pub
+		if signer, err = newMinioClient(signing); err != nil {
+			return nil, err
+		}
+	}
+	return &S3Downloads{client: client, bucket: cfg.Bucket, signer: signer}, nil
 }
 
 // uploadPartSize is how much of an upload the client holds in memory at once.
@@ -188,7 +207,7 @@ func (s *S3Downloads) PresignGet(ctx context.Context, key, filename string, ttl 
 	params := url.Values{}
 	params.Set("response-content-disposition", contentDisposition(filename))
 
-	link, err := s.client.PresignedGetObject(ctx, s.bucket, key, ttl, params)
+	link, err := s.signer.PresignedGetObject(ctx, s.bucket, key, ttl, params)
 	if err != nil {
 		return "", false, fmt.Errorf("blob: presign download %s: %w", key, err)
 	}

@@ -160,7 +160,11 @@ func DownloadExtension(contentType, filename string) string {
 		return ".m4a"
 	case "audio/ogg":
 		return ".ogg"
-	case "audio/wav", "audio/x-wav":
+	// "audio/wave" is the spelling net/http emits for a RIFF/WAVE file; the other
+	// two are what other tools send. Without the first, the one audio format the
+	// seed fixture ships would fall through to the filename fallback and only work
+	// by accident.
+	case "audio/wave", "audio/wav", "audio/x-wav":
 		return ".wav"
 	case "audio/flac", "audio/x-flac":
 		return ".flac"
