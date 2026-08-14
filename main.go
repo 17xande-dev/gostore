@@ -366,6 +366,9 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 		// under it. See Blob.PublicOrigin.
 		policy.ImgSources = []string{cfg.Blob.PublicOrigin()}
 	}
+	// A hosted font service, if one is configured. Empty by default: the theme uses
+	// the system font stack, which needs no origin allowed at all.
+	policy.FontSources = cfg.FontOrigins
 	// RequestID first, because Chain reads outermost-first: everything inside it —
 	// including the rate limiter and the security headers, both of which can answer
 	// a request on their own — then runs with an id already in the context to log

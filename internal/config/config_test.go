@@ -188,6 +188,79 @@ func TestLoad_EmbedOrigins(t *testing.T) {
 	}
 }
 
+func TestLoad_FontOrigins(t *testing.T) {
+	setRequired(t)
+
+	// Unset is the default and the closed position: the bundled theme uses the
+	// system font stack, so no origin needs allowing and no <link> is rendered.
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.FontOrigins) != 0 || c.FontCSSURL != "" {
+		t.Errorf("fonts are configured by default: %v, %q", c.FontOrigins, c.FontCSSURL)
+	}
+
+	// The Typekit shape: two hosts, because the kit's stylesheet and the font files
+	// it points at are served from different ones.
+	t.Setenv("FONT_ORIGINS", " https://use.typekit.net , https://p.typekit.net ")
+	t.Setenv("FONT_CSS_URL", "https://use.typekit.net/abc1def.css")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"https://use.typekit.net", "https://p.typekit.net"}
+	if len(c.FontOrigins) != len(want) {
+		t.Fatalf("FontOrigins = %v, want %v", c.FontOrigins, want)
+	}
+	for i := range want {
+		if c.FontOrigins[i] != want[i] {
+			t.Errorf("FontOrigins[%d] = %q, want %q", i, c.FontOrigins[i], want[i])
+		}
+	}
+	if c.FontCSSURL != "https://use.typekit.net/abc1def.css" {
+		t.Errorf("FontCSSURL = %q", c.FontCSSURL)
+	}
+
+	// A stylesheet the CSP would block is refused at boot. In a browser the only
+	// symptom is a console warning and a page in the fallback font, which is a
+	// genuinely slow thing to work out.
+	setRequired(t)
+	t.Setenv("FONT_ORIGINS", "https://p.typekit.net")
+	t.Setenv("FONT_CSS_URL", "https://use.typekit.net/abc1def.css")
+	if _, err := Load(); err == nil {
+		t.Error("FONT_CSS_URL on an origin FONT_ORIGINS does not list was accepted")
+	}
+
+	// A wildcard font source would let any origin serve a stylesheet to every page
+	// including the checkout. The embed list may say "*"; this one may not.
+	setRequired(t)
+	t.Setenv("FONT_CSS_URL", "")
+	t.Setenv("FONT_ORIGINS", "*")
+	if _, err := Load(); err == nil {
+		t.Error(`FONT_ORIGINS="*" was accepted`)
+	}
+
+	// Same literal-comparison rule as the embed origins: a CSP source carrying a
+	// path matches that path exactly, so a font list entry with one is a mistake.
+	for _, bad := range []string{"use.typekit.net", "https://use.typekit.net/", "https://use.typekit.net/abc1def.css"} {
+		setRequired(t)
+		t.Setenv("FONT_CSS_URL", "")
+		t.Setenv("FONT_ORIGINS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("FONT_ORIGINS %q was accepted", bad)
+		}
+	}
+
+	// And a relative stylesheet URL has no origin to check against the policy.
+	setRequired(t)
+	t.Setenv("FONT_ORIGINS", "https://use.typekit.net")
+	t.Setenv("FONT_CSS_URL", "/fonts/kit.css")
+	if _, err := Load(); err == nil {
+		t.Error("a relative FONT_CSS_URL was accepted")
+	}
+}
+
 func TestLoad_PayFast(t *testing.T) {
 	setRequired(t)
 

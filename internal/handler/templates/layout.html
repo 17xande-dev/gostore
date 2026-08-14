@@ -46,6 +46,25 @@
   scripts and styles alike and no third-party server sits on the payment path.
 */}}
 <link rel="stylesheet" href="{{asset "styles.css"}}">
+{{/*
+  A hosted font service's stylesheet, when FONT_CSS_URL names one — an Adobe Fonts
+  kit is the usual case. It comes before nothing and after styles.css deliberately:
+  the kit only declares @font-face rules, so order against the theme does not
+  matter, and putting it second keeps the store's own stylesheet the one that loads
+  first if the service is slow.
+
+  FONT_ORIGINS must list this URL's origin, and the origin serving the font files —
+  for a Typekit kit those are use.typekit.net and p.typekit.net, two hosts because
+  the kit CSS and the .woff2 files it points at live on different ones. The server
+  refuses to boot if FONT_ORIGINS omits the stylesheet's own origin, but it cannot
+  know the second one, so a kit that loads and still renders in the fallback font
+  means p.typekit.net is missing from the list.
+
+  Only the <link> form of an embed is supported. A font service's JavaScript loader
+  would need script-src widened and a nonce for the inline snippet it hands you;
+  see internal/middleware/securityheaders.go for why that answer is no.
+*/}}
+{{with .FontCSSURL}}<link rel="stylesheet" href="{{.}}">{{end}}
 <script src="{{asset "htmx.min.js"}}" defer></script>
 </head>
 <body>

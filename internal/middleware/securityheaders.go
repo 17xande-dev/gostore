@@ -25,6 +25,24 @@ type Policy struct {
 	// is what a store serving its images from a local directory needs.
 	ImgSources []string
 
+	// FontSources are the origins a web font may come from besides this one — a
+	// hosted font service, when one is configured. Empty means 'self' only, which
+	// is what the default theme's system font stack needs.
+	//
+	// These land in style-src as well as font-src, and the reason is not obvious:
+	// a hosted font service is two fetches, not one. The store links a stylesheet
+	// from the service, that stylesheet's @font-face rules name the font files, and
+	// the browser fetches those. Allowing only font-src blocks the stylesheet, so
+	// nothing ever asks for a font and the directive that was widened is never
+	// reached — a failure with no error beyond a console warning.
+	//
+	// It is one field rather than two because a service's font host being permitted
+	// to serve a stylesheet is a smaller over-grant than a second knob that has to
+	// be kept in step with this one. What stays closed is the part that matters:
+	// script-src is untouched, so a font origin cannot run JavaScript on any page
+	// of this store.
+	FontSources []string
+
 	// HSTS adds Strict-Transport-Security. Only ever true on an https deployment:
 	// sending it over plain HTTP is ignored by browsers, and sending it from a
 	// development server on localhost would pin a rule that makes the next plain
@@ -35,18 +53,17 @@ type Policy struct {
 // SecurityHeaders sets the response headers every page wants.
 //
 // The Content-Security-Policy is strict because the templates earn it: no inline
-// script, no external origins, htmx served from the binary. Adopters who add a
-// CDN font or an analytics tag will need to widen it, which is the correct
-// direction of travel — start closed and open deliberately.
+// script, and htmx served from the binary rather than a CDN. The only external
+// origins are the ones a deployment names — the bucket, the gateway, a font
+// service — each in the single directive it needs. Adopters who add an analytics
+// tag will need to widen it further, which is the correct direction of travel:
+// start closed and open deliberately, one directive at a time.
 func SecurityHeaders(p Policy) Middleware {
 	frame := "'none'"
 	if len(p.FrameAncestors) > 0 {
 		frame = strings.Join(p.FrameAncestors, " ")
 	}
-	formAction := "'self'"
-	if len(p.FormActions) > 0 {
-		formAction += " " + strings.Join(p.FormActions, " ")
-	}
+	formAction := selfPlus(p.FormActions)
 
 	// img-src is 'self' plus the bucket and nothing else. A product image is always
 	// bytes this store holds — an object in the bucket, or a file served from this
@@ -56,7 +73,8 @@ func SecurityHeaders(p Policy) Middleware {
 	//
 	// Every directive is now closed to this origin plus, for images, the bucket.
 	//
-	// style-src used to carry 'unsafe-inline', because restyling through TEMPLATE_DIR
+	// style-src is 'self' plus whatever FontSources names, and nothing else. It used
+	// to carry 'unsafe-inline', because restyling through TEMPLATE_DIR
 	// had no other legal way to apply CSS — there was no stylesheet and no mechanism
 	// for an adopter to add one. Both exist now: the theme is a bundled styles.css and
 	// STATIC_DIR replaces it. No served template contains a style attribute, so the
@@ -100,15 +118,21 @@ func SecurityHeaders(p Policy) Middleware {
 	// (element.style.x, sheet.insertRule) is not covered by CSP at all, and hx-on /
 	// js: filters need 'unsafe-eval' rather than 'unsafe-inline' — which is why the
 	// store's htmx-driven code lives in .js files under STATIC_DIR instead.
-	imgSrc := "'self'"
-	if len(p.ImgSources) > 0 {
-		imgSrc += " " + strings.Join(p.ImgSources, " ")
-	}
+	imgSrc := selfPlus(p.ImgSources)
+
+	// font-src is stated rather than left to default-src, even when it is only
+	// 'self'. Fonts inherited that fallback silently, so widening for a hosted
+	// service would have meant a directive appearing where there had been none —
+	// and a policy where the interesting decisions are invisible is one nobody
+	// audits. See Policy.FontSources for why the same origins reach style-src.
+	fontSrc := selfPlus(p.FontSources)
+	styleSrc := selfPlus(p.FontSources)
 
 	csp := strings.Join([]string{
 		"default-src 'self'",
 		"img-src " + imgSrc,
-		"style-src 'self'",
+		"font-src " + fontSrc,
+		"style-src " + styleSrc,
 		"script-src 'self'",
 		"form-action " + formAction,
 		"base-uri 'none'",
@@ -135,6 +159,18 @@ func SecurityHeaders(p Policy) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// selfPlus builds a CSP source list: this origin, then whatever else is allowed.
+//
+// 'self' is never dropped. Every directive built this way covers something the
+// store also serves itself — its own stylesheet, its own images — so an operator
+// naming an external origin is adding to the list, never replacing it.
+func selfPlus(extra []string) string {
+	if len(extra) == 0 {
+		return "'self'"
+	}
+	return "'self' " + strings.Join(extra, " ")
 }
 
 // CORS allows the listed origins to fetch a handler cross-origin.

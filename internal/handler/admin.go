@@ -220,6 +220,12 @@ type page struct {
 	// to work from somewhere else — the embedded catalog fragment renders inside
 	// another origin's page, where a relative href would point at that origin.
 	BaseURL string
+
+	// FontCSSURL is a hosted font service's stylesheet, when one is configured, for
+	// the default layout to link. Empty renders no link, which is the default: the
+	// bundled theme uses the system font stack. Its origin is in the CSP's style-src
+	// by the time it reaches here — config refuses to boot otherwise.
+	FontCSSURL string
 }
 
 func (h *Handler) newPage(r *http.Request, title string) page {
@@ -229,6 +235,8 @@ func (h *Handler) newPage(r *http.Request, title string) page {
 		Currency:  h.cfg.Currency,
 		CSRFToken: nosurf.Token(r),
 		BaseURL:   h.cfg.BaseURL,
+
+		FontCSSURL: h.cfg.FontCSSURL,
 	}
 }
 

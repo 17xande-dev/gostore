@@ -39,6 +39,45 @@ func TestParseTemplates_EmbeddedDefaultsRender(t *testing.T) {
 	}
 }
 
+func TestParseTemplates_FontStylesheetLinkedOnlyWhenConfigured(t *testing.T) {
+	tmpl, err := ParseTemplates("", blob.NewFake())
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+
+	// The default is no web font at all, so the head must carry no third-party
+	// stylesheet. A store that never configured one should have nothing in its
+	// markup pointing off this origin.
+	w := httptest.NewRecorder()
+	if err := tmpl.Render(w, http.StatusOK, "index", indexPageData{page: page{StoreName: "Test Store"}}); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(w.Body.String(), "typekit") {
+		t.Error("a font stylesheet is linked with FONT_CSS_URL unset")
+	}
+
+	// And with one configured, it is linked — the <link> form only. This is the
+	// half that pairs with the CSP: widening style-src achieves nothing if no page
+	// actually asks for the kit.
+	w = httptest.NewRecorder()
+	data := indexPageData{page: page{
+		StoreName:  "Test Store",
+		FontCSSURL: "https://use.typekit.net/abc1def.css",
+	}}
+	if err := tmpl.Render(w, http.StatusOK, "index", data); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `<link rel="stylesheet" href="https://use.typekit.net/abc1def.css">`) {
+		t.Errorf("the font stylesheet is not linked: %s", body)
+	}
+	// Never as a script: a font service's JS loader would need script-src widened
+	// and a nonce for the inline snippet, which this project does not offer.
+	if strings.Contains(body, `<script src="https://use.typekit.net`) {
+		t.Error("the font kit is loaded as a script")
+	}
+}
+
 func TestParseTemplates_OverrideDirWins(t *testing.T) {
 	dir := t.TempDir()
 	override := `{{define "admin_products"}}OVERRIDDEN{{end}}`

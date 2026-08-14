@@ -27,6 +27,9 @@ func TestSecurityHeaders(t *testing.T) {
 		// template needs a style attribute and this directive is closed. It carried
 		// 'unsafe-inline' until there was a stylesheet to put those rules in.
 		"style-src 'self'",
+		// Stated rather than inherited from default-src, so that widening it for a
+		// hosted font service changes a directive that was already there.
+		"font-src 'self'",
 	} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP is missing %q: %s", want, csp)
@@ -102,6 +105,45 @@ func TestSecurityHeaders_ImagesComeFromHereOrTheBucketOnly(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self';") {
 		t.Errorf("img-src with no bucket = %s, want exactly 'self'", csp)
+	}
+}
+
+func TestSecurityHeaders_FontSourcesOpenStyleAndFontOnly(t *testing.T) {
+	// A hosted font service is two fetches: the stylesheet declaring the fonts, and
+	// the font files it names. Both directives have to name the origins or the
+	// widening silently achieves nothing.
+	h := SecurityHeaders(Policy{
+		FontSources: []string{"https://use.typekit.net", "https://p.typekit.net"},
+	})(http.HandlerFunc(ok))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/products", nil))
+
+	csp := w.Header().Get("Content-Security-Policy")
+	for _, want := range []string{
+		"font-src 'self' https://use.typekit.net https://p.typekit.net;",
+		"style-src 'self' https://use.typekit.net https://p.typekit.net;",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP is missing %q: %s", want, csp)
+		}
+	}
+
+	// The property that makes this a narrow widening: a font service still cannot
+	// run JavaScript on any page of this store, the checkout included. If this ever
+	// fails, the font knob has grown into a general one.
+	if !strings.Contains(csp, "script-src 'self';") {
+		t.Errorf("font sources reached script-src: %s", csp)
+	}
+	// Nor may they be framed, posted to, or serve an image.
+	for _, closed := range []string{"img-src 'self';", "form-action 'self';", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, closed) {
+			t.Errorf("font sources widened more than style-src and font-src, want %q: %s", closed, csp)
+		}
+	}
+	// And still no concession that cannot be scoped to an origin.
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("the CSP has regained an unsafe- directive: %s", csp)
 	}
 }
 

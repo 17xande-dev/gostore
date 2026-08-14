@@ -80,6 +80,8 @@ list with defaults.
 | `STORE_NAME` | no | `gostore` | Displayed store name |
 | `CURRENCY` | no | `ZAR` | Currency code (PayFast requires `ZAR`) |
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
+| `FONT_ORIGINS` | no | — | Origins a web font may be loaded from. Widens the CSP's `font-src` **and** `style-src`. See [Web fonts](#web-fonts) |
+| `FONT_CSS_URL` | no | — | A hosted font service's stylesheet, linked from the default layout. Its origin must be in `FONT_ORIGINS` |
 | `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
 | `STATIC_DIR` | no | — | Directory of assets that override the bundled ones (logo, placeholder, CSS) |
 | `THEME_RELOAD` | no | `false` | Re-read those two directories on every request, so a theme edit needs a refresh and not a restart. Development only |
@@ -254,9 +256,10 @@ Two details that are defence rather than decoration:
 ### Response headers
 
 ```
-Content-Security-Policy: default-src 'self'; img-src 'self' <bucket> https: data:;
-  style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self' <gateway>;
-  base-uri 'none'; object-src 'none'; frame-ancestors <embed origins or 'none'>
+Content-Security-Policy: default-src 'self'; img-src 'self' <bucket>;
+  font-src 'self' <font origins>; style-src 'self' <font origins>; script-src 'self';
+  form-action 'self' <gateway>; base-uri 'none'; object-src 'none';
+  frame-ancestors <embed origins or 'none'>
 Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
 Referrer-Policy: strict-origin-when-cross-origin
 X-Content-Type-Options: nosniff
@@ -264,9 +267,14 @@ Strict-Transport-Security: max-age=63072000; includeSubDomains   (https deployme
 ```
 
 `img-src` is `'self'` plus the bucket and nothing else, because a product image is always
-bytes this store holds. Every other directive is closed to this origin, with no
-`'unsafe-inline'` anywhere — which is worth knowing before writing a theme:
+bytes this store holds. The angle-bracketed placeholders are the only external origins any
+directive gets, each one named by a deployment: the bucket, the payment gateway, the embedders,
+and a font service. There is no `'unsafe-inline'` anywhere — which is worth knowing before
+writing a theme:
 
+- **`font-src` and `style-src`** — both `'self'` unless `FONT_ORIGINS` is set, which is the
+  only knob that opens two directives at once. A hosted font is two fetches: the stylesheet
+  declaring the fonts, then the files it names. See [Web fonts](#web-fonts).
 - **`style-src 'self'`** — it used to carry `'unsafe-inline'`, because restyling through
   `TEMPLATE_DIR` had no other legal way to apply CSS: there was no stylesheet and no way for
   an adopter to add one. Both exist now — a bundled `styles.css` and `STATIC_DIR` to replace
@@ -900,11 +908,54 @@ nothing means you are also replacing the rest of the stylesheet — so either co
 default and edit its `:root`, or write your own from scratch. There is no cascade between
 the bundled file and yours: same name, one wins.
 
-**No web fonts in the default**, and adding one is not just a CSS edit: `style-src` is
-`'self'` and fonts fall to `default-src 'self'`, so a font from another origin is blocked by
-the CSP — silently, in the browser's console. Self-host the
-`.woff2` in `STATIC_DIR` — that is one of the reasons new names are served — and reference
-it from your stylesheet with a `/static/...` URL.
+#### Web fonts
+
+**No web font in the default theme.** The system font stack is what every operating system
+already has, it loads instantly, and it puts no third-party request on the page. Two ways to
+change that.
+
+**Self-host.** Drop the `.woff2` into `STATIC_DIR` — that is one of the reasons new names are
+served — and reference it from your stylesheet with a `/static/...` URL. Nothing else changes:
+the file is served from this origin, so the CSP already allows it and no config is involved.
+Fonts under an open licence, which is most of Google's, can be used this way; `.woff2` alone
+is enough for every browser this project supports.
+
+**Use a hosted service.** Adobe Fonts requires this — its licence has no self-host tier — and
+it needs two variables:
+
+```sh
+FONT_ORIGINS=https://use.typekit.net,https://p.typekit.net
+FONT_CSS_URL=https://use.typekit.net/abc1def.css
+```
+
+`FONT_CSS_URL` is the stylesheet the default layout links from its `<head>`. `FONT_ORIGINS`
+widens the CSP, and it widens **two** directives, because a hosted font is two fetches: the
+browser fetches the stylesheet declaring the fonts (`style-src`) and then the font files that
+stylesheet names (`font-src`). Typekit splits those across two hosts, which is why both are
+listed — a kit that loads and *still* renders in the fallback font almost always means
+`p.typekit.net` is missing. Google Fonts is the same shape, with
+`fonts.googleapis.com,fonts.gstatic.com`.
+
+Set both or neither. `FONT_ORIGINS` alone allows a font nothing asks for; `FONT_CSS_URL` alone
+is a boot failure, because the CSP would block the stylesheet and the only symptom in a browser
+is a console warning.
+
+Widening the CSP and linking the kit makes the family *available* — it does not apply it. Set
+`--font` in a `styles.css` under `STATIC_DIR` to use it.
+
+Three things worth knowing before choosing the hosted route:
+
+- **Only the `<link>` embed is supported.** Adobe's Web Project panel offers a JavaScript
+  loader by default; pick the CSS embed instead. The loader needs `script-src` widened,
+  `connect-src` opened for its config fetch, and a nonce for both the inline `<script>` it
+  gives you and the inline `<style>` it injects. See
+  [Response headers](#response-headers) for why that answer is no.
+- **`script-src` stays `'self'` either way.** A font origin cannot run JavaScript on any page
+  of this store, the checkout included. That is what makes this a narrow widening.
+- **It puts a third-party request on every page, including the checkout**, and the font CDN
+  sees your visitors' IP addresses. That is a real consideration under the GDPR — a German
+  court has ruled against a site for exactly this with Google Fonts — and a reason to prefer
+  self-hosting where the licence allows it.
 
 #### Overriding templates
 

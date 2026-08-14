@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +135,33 @@ type Config struct {
 	// elsewhere. Empty means no CORS headers at all, which is the right default
 	// for a store that is only ever browsed on its own domain.
 	EmbedOrigins []string
+
+	// FontOrigins are the origins a web font may be loaded from besides this one.
+	// Empty — the default — means the CSP stays closed and the theme uses the
+	// system font stack.
+	//
+	// This opens *two* CSP directives, which is worth knowing before setting it: a
+	// hosted font service serves a stylesheet that declares the fonts and then the
+	// font files that stylesheet points at, so the origins land in both style-src
+	// and font-src. Allowing the fonts without the stylesheet declaring them
+	// half-works, which is a slow thing to diagnose. It does not open script-src:
+	// a font service still cannot run JavaScript on the checkout page, which is
+	// the property that makes this a narrow widening rather than a general one.
+	FontOrigins []string
+
+	// FontCSSURL is a stylesheet the default layout links from its <head>, for the
+	// hosted-font case where the service gives you a CSS URL — an Adobe Fonts kit,
+	// typically. Empty means no such link is rendered at all.
+	//
+	// Its origin must appear in FontOrigins, checked at boot: a link the CSP then
+	// blocks fails silently apart from a console warning, and the page renders in
+	// the fallback font with nothing to suggest why.
+	//
+	// Deliberately a CSS URL and not a script: a font service's JavaScript loader
+	// needs script-src widened, connect-src opened for its config fetch, and a
+	// nonce for the inline snippet and the inline <style> it injects. That is a far
+	// larger concession than this one, and this project does not offer it.
+	FontCSSURL string
 
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
@@ -417,21 +445,36 @@ func Load() (Config, error) {
 				"credentials, or leave PAYFAST_SANDBOX=true", payFastSandboxMerchantID)
 	}
 
-	// Origins are compared literally against the browser's Origin header, so a
-	// trailing slash or a path in one of these would never match anything and is
-	// better reported now than debugged later.
-	for _, origin := range strings.Split(os.Getenv("EMBED_ORIGINS"), ",") {
-		origin = strings.TrimSpace(origin)
-		if origin == "" {
-			continue
+	// "*" is allowed here and nowhere else: the fragments these origins may fetch
+	// are cookie-free and read-only, so a permissive list cannot become a way to
+	// act as somebody.
+	c.EmbedOrigins, err = parseOrigins("EMBED_ORIGINS", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// Whereas a wildcard font source would let any origin serve a stylesheet to
+	// every page of the store, the checkout included — the opposite of what this
+	// directive is for. So: list them.
+	c.FontOrigins, err = parseOrigins("FONT_ORIGINS", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	if c.FontCSSURL = strings.TrimSpace(os.Getenv("FONT_CSS_URL")); c.FontCSSURL != "" {
+		u, err := url.Parse(c.FontCSSURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return Config{}, fmt.Errorf("config: FONT_CSS_URL %q must be an absolute URL", c.FontCSSURL)
 		}
-		if origin != "*" {
-			u, err := url.Parse(origin)
-			if err != nil || u.Scheme == "" || u.Host == "" || u.Path != "" {
-				return Config{}, fmt.Errorf("config: EMBED_ORIGINS entry %q must be scheme://host[:port] with no path", origin)
-			}
+		// The stylesheet's own origin has to be allowed to serve it. Refused at boot
+		// rather than in the browser, where the only symptom is a console warning and
+		// a page rendered in the fallback font.
+		origin := u.Scheme + "://" + u.Host
+		if !slices.Contains(c.FontOrigins, origin) {
+			return Config{}, fmt.Errorf(
+				"config: FONT_CSS_URL is on %s, which FONT_ORIGINS does not list — "+
+					"the CSP would block the stylesheet; add %s to FONT_ORIGINS", origin, origin)
 		}
-		c.EmbedOrigins = append(c.EmbedOrigins, origin)
 	}
 
 	// The limits are configurable because the right number depends on a shop's
@@ -570,6 +613,36 @@ func decodeSecret(name, value string) ([]byte, error) {
 			"(generate one with `openssl rand -base64 32`)", name, len(decoded), auth.MinSecretLen)
 	}
 	return decoded, nil
+}
+
+// parseOrigins reads a comma-separated origin list from the environment.
+//
+// Both lists it serves — embed origins and font origins — are compared literally
+// by the browser, against the Origin header in one case and as a CSP source
+// expression in the other. Neither tolerates a trailing slash or a path, so both
+// are refused here where the message can say why, rather than in a browser where
+// the symptom is a request that simply does not happen.
+func parseOrigins(key string, allowWildcard bool) ([]string, error) {
+	var out []string
+	for _, origin := range strings.Split(os.Getenv(key), ",") {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			continue
+		}
+		if origin == "*" {
+			if !allowWildcard {
+				return nil, fmt.Errorf("config: %s does not accept \"*\" — list the origins", key)
+			}
+			out = append(out, origin)
+			continue
+		}
+		u, err := url.Parse(origin)
+		if err != nil || u.Scheme == "" || u.Host == "" || u.Path != "" {
+			return nil, fmt.Errorf("config: %s entry %q must be scheme://host[:port] with no path", key, origin)
+		}
+		out = append(out, origin)
+	}
+	return out, nil
 }
 
 // LoadTool loads what a database-only operation needs, which is just

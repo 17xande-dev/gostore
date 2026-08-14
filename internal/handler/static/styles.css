@@ -10,10 +10,17 @@
  * selectors — which is also why there are no colour literals anywhere else in this
  * file.
  *
- * No web fonts. The CSP is script-src/style-src 'self' with no external origins, and
- * a font from a third party would mean widening it and putting a request to somebody
- * else's server on the page. The system stack is what every operating system already
- * has, and it loads instantly.
+ * No web font in the default. The system stack is what every operating system already
+ * has, it loads instantly, and it puts no request to somebody else's server on the
+ * page — including the checkout.
+ *
+ * Two ways to change that, neither of which is only a CSS edit. Self-host: drop the
+ * .woff2 into STATIC_DIR and point --font at it with a /static/... URL, which the CSP
+ * already allows because the file is served from this origin. Or use a hosted service:
+ * set FONT_ORIGINS and FONT_CSS_URL, which widen font-src and style-src and link the
+ * service's stylesheet from the layout. Either way --font below is what actually
+ * applies the family; making it available and using it are separate steps. See the
+ * README's "Web fonts".
  */
 
 :root {
