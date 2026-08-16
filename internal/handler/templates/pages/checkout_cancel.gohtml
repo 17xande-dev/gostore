@@ -1,0 +1,9 @@
+{{/* The gateway's cancel_url: nothing was paid, and the cart is untouched. */}}
+{{define "content"}}
+
+<h1>Payment cancelled</h1>
+<p>Nothing has been charged{{if .HaveOrder}}, and order {{.Order.Reference}} has not been paid{{end}}.
+Your cart is still as you left it.</p>
+<p><a href="/cart">Back to your cart</a> · <a href="/products">Continue shopping</a></p>
+
+{{end}}

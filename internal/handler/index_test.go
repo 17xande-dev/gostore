@@ -153,8 +153,12 @@ func TestIndex_CardsComeFromTheSharedGrid(t *testing.T) {
 	// who restyles a card gets it in both places. Overriding product_grid and
 	// seeing both pages change is what proves that, and it is the property that
 	// duplicating the markup would have quietly broken.
+	//
+	// It is a partial precisely because two pages need it: partials/ is parsed into
+	// every set, and a definition in either page's file would now reach that page
+	// alone.
 	dir := t.TempDir()
-	writeOverride(t, dir, "products.gohtml", `{{define "product_grid"}}SHARED-GRID{{end}}`)
+	writeOverride(t, dir, "partials/product_grid.gohtml", `{{define "product_grid"}}SHARED-GRID{{end}}`)
 
 	srv, store := newStorefront(t, testConfig(), dir)
 	stock(t, store)
@@ -169,14 +173,14 @@ func TestIndex_CardsComeFromTheSharedGrid(t *testing.T) {
 func TestIndex_IsOverridable(t *testing.T) {
 	// The whole customisation story: one file in TEMPLATE_DIR replaces the page.
 	dir := t.TempDir()
-	writeOverride(t, dir, "index.gohtml", `{{define "index"}}MY OWN FRONT PAGE{{end}}`)
+	writeOverride(t, dir, "pages/index.gohtml", `{{define "content"}}MY OWN FRONT PAGE{{end}}`)
 
 	srv, store := newStorefront(t, testConfig(), dir)
 	stock(t, store)
 
 	_, body := get(t, srv, "/")
-	if got := strings.TrimSpace(body); got != "MY OWN FRONT PAGE" {
-		t.Errorf("the override did not take: %q", excerpt(got))
+	if !strings.Contains(body, "MY OWN FRONT PAGE") {
+		t.Errorf("the override did not take: %q", excerpt(body))
 	}
 }
 
@@ -220,10 +224,17 @@ func TestStoreNewestActive_OrdersAndLimits(t *testing.T) {
 	}
 }
 
-// writeOverride drops a template override into a TEMPLATE_DIR for a test.
-func writeOverride(t *testing.T, dir, name, content string) {
+// writeOverride drops a template override into a TEMPLATE_DIR for a test, in the
+// subdirectory the embedded tree puts it in — an override is found by path now, not
+// by the name it happens to define. It returns the file, for a test that edits it.
+func writeOverride(t *testing.T, dir, name, content string) string {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+	file := filepath.Join(dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatalf("mkdir for override %s: %v", name, err)
+	}
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
 		t.Fatalf("write override %s: %v", name, err)
 	}
+	return file
 }

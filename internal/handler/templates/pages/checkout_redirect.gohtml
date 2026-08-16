@@ -1,0 +1,25 @@
+{{/*
+  The hand-over to the gateway. This is a real cross-origin form submission, not a
+  redirect, because the gateway wants the fields posted to it — which is why the
+  CSP has to name the gateway's origin in form-action, and why the vendored
+  submit-on-load script exists: with script-src 'self' and no inline script, an
+  onload attribute would simply be blocked.
+
+  The button is not a fallback nobody sees. Without JavaScript it is the whole
+  mechanism, and it is deliberately labelled so that pressing it is obviously the
+  right thing to do.
+*/}}
+{{define "content"}}
+
+<h1>Sending you to pay</h1>
+<p>Order <strong>{{.Order.Reference}}</strong> — {{.Currency}} {{money .Order.TotalCents}}</p>
+<p>You are being handed over to {{.Gateway}} to pay. If nothing happens, press the button.</p>
+
+<form id="gateway-redirect" method="post" action="{{.Action}}">
+  {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+  {{end}}
+  <button type="submit">Continue to {{.Gateway}}</button>
+</form>
+<script src="{{asset "redirect.js"}}" defer></script>
+
+{{end}}

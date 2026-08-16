@@ -1,22 +1,27 @@
 {{/*
   The default templates are meant to be readable, correct, and replaced. Point
-  TEMPLATE_DIR at a directory with a file of the same name to override any of them,
-  and STATIC_DIR at one holding your own styles.css or logo.svg — neither needs a
-  rebuild.
+  TEMPLATE_DIR at a directory holding a file of the same name *in the same
+  subdirectory* to override any of them, and STATIC_DIR at one holding your own
+  styles.css or logo.svg — neither needs a rebuild.
 
   Class names are the contract between these templates and styles.css. Overriding one
   and not the other works as long as the names hold, which is why they describe what
   a thing *is* — .product-card, .site-header — rather than how it looks.
 */}}
 
-{{define "head"}}<!doctype html>
+{{/*
+  Everything from the doctype to </head>, shared by both layouts. It lives in a
+  partial rather than being written twice because the two settings below are
+  load-bearing and a second copy is a second place to get them wrong.
+*/}}
+{{define "document_head"}}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} — {{.StoreName}}</title>
 {{/*
-  Two settings, both load-bearing. Keep them if you override "head".
+  Two settings, both load-bearing. Keep them if you override "document_head".
 
   includeIndicatorStyles:false — htmx injects a <style> block for the indicator
   classes as soon as it loads, and style-src 'self' blocks it. Silently, apart from
@@ -67,70 +72,4 @@
 {{with .FontCSSURL}}<link rel="stylesheet" href="{{.}}">{{end}}
 <script src="{{asset "htmx.min.js"}}" defer></script>
 </head>
-<body>
-<header class="site-header">
-  <div class="inner">
-    {{/*
-      The mark is a bundled asset. Drop your own logo.svg into STATIC_DIR to replace
-      it — the URL carries a hash of the file, so the new one appears immediately
-      rather than after a cache expires.
-    */}}
-    <a class="brand" href="/">
-      <img src="{{asset "logo.svg"}}" alt="" width="28" height="28">
-      {{.StoreName}}
-    </a>
-    <nav>
-      <a href="/products">Shop</a>
-      <a href="/cart">Cart</a>
-    </nav>
-  </div>
-</header>
-<main>
-<div class="inner">
 {{end}}
-
-{{define "foot"}}
-</div>
-</main>
-<footer class="site-footer">
-  <div class="inner columns">
-    <div>
-      <strong>{{.StoreName}}</strong>
-      <p class="muted"><small>Powered by gostore.</small></p>
-    </div>
-    <nav>
-      <a href="/products">All products</a>
-      <a href="/cart">Your cart</a>
-    </nav>
-  </div>
-</footer>
-</body>
-</html>
-{{end}}
-
-{{/*
-  adminnav is included by the pages behind RequireAdmin, not by "head", so the
-  login page does not offer to sign out of a session it does not have.
-*/}}
-{{define "adminnav"}}
-<nav>
-  <a href="/admin/products">Products</a> ·
-  <a href="/admin/categories">Categories</a> ·
-  <a href="/admin/orders">Orders</a> ·
-  <a href="/products">Storefront</a>
-</nav>
-<form method="post" action="/admin/logout">
-  {{template "csrf" .CSRFToken}}
-  <button type="submit">Sign out</button>
-</form>
-{{end}}
-
-{{/*
-  csrf renders the hidden field nosurf checks. Every form that changes anything
-  needs it; a form without one gets a 403, which is the intended failure but an
-  annoying one to debug, so it is a named template rather than copied markup.
-*/}}
-{{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
-
-{{/* err renders the message for one field, if the form recorded one. */}}
-{{define "err"}}{{with .}}<p><small><strong>{{.}}</strong></small></p>{{end}}{{end}}

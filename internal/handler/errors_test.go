@@ -64,7 +64,7 @@ func TestNotFound_ByteEndpointsStayPlain(t *testing.T) {
 
 func TestNotFound_IsOverridable(t *testing.T) {
 	dir := t.TempDir()
-	writeOverride(t, dir, "not_found.gohtml", `{{define "not_found"}}MY OWN 404{{end}}`)
+	writeOverride(t, dir, "pages/not_found.gohtml", `{{define "content"}}MY OWN 404{{end}}`)
 
 	srv, _ := newStorefront(t, testConfig(), dir)
 
@@ -72,8 +72,8 @@ func TestNotFound_IsOverridable(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Errorf("an overridden 404 answered %d", res.StatusCode)
 	}
-	if got := strings.TrimSpace(body); got != "MY OWN 404" {
-		t.Errorf("the override did not take: %q", excerpt(got))
+	if !strings.Contains(body, "MY OWN 404") {
+		t.Errorf("the override did not take: %q", excerpt(body))
 	}
 }
 
@@ -83,7 +83,7 @@ func TestNotFound_BrokenTemplateStillAnswers404(t *testing.T) {
 	// why notFound renders directly rather than through h.render, which logs the
 	// failure and leaves the status alone.
 	dir := t.TempDir()
-	writeOverride(t, dir, "not_found.gohtml", `{{define "not_found"}}{{.NoSuchField}}{{end}}`)
+	writeOverride(t, dir, "pages/not_found.gohtml", `{{define "content"}}{{.NoSuchField}}{{end}}`)
 
 	srv, _ := newStorefront(t, testConfig(), dir)
 

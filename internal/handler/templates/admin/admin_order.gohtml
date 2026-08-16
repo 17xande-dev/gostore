@@ -1,6 +1,4 @@
-{{define "admin_order"}}
-{{template "head" .}}
-{{template "adminnav" .}}
+{{define "content"}}
 
 <p><a href="/admin/orders">← All orders</a></p>
 <h1>Order {{.Order.Reference}}</h1>
@@ -134,5 +132,4 @@ complete. Revoking is reversible.</small></p>
 <pre class="raw">{{.}}</pre>
 {{end}}
 
-{{template "foot" .}}
 {{end}}

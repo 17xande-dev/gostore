@@ -8,8 +8,7 @@
   check would refuse it. An embedded catalog links to this page instead, which is
   the same split the whole design rests on: reads anywhere, writes first-party.
 */}}
-{{define "product"}}
-{{template "head" .}}
+{{define "content"}}
 
 <a class="back" href="/products" hx-boost="true">← All products</a>
 {{/*
@@ -26,7 +25,6 @@
   </div>
 </div>
 
-{{template "foot" .}}
 {{end}}
 
 {{define "add_to_cart"}}
