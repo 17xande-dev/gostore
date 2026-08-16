@@ -1,0 +1,59 @@
+{{/*
+  The gateway's return_url. It proves nothing: a shopper can reach this page
+  without paying, simply by typing it. So it says the payment is being confirmed,
+  and never that it succeeded — only the authenticated callback decides that.
+*/}}
+{{define "content"}}
+
+<h1>Thank you</h1>
+{{if .HaveOrder}}
+  <p>Your order reference is <strong>{{.Order.Reference}}</strong>. Quote it in any email about this order.</p>
+  {{if .Order.Paid}}
+    <p>Payment confirmed.{{if .Order.Customer.Address}} We will be in touch about delivery.{{end}}</p>
+    {{/*
+      Downloads without waiting for the email. These links are authorised by the
+      cart cookie rather than by the emailed token, which cannot be shown here:
+      it exists only while the confirmation is rendered, and only its hash is
+      stored. The email is still the durable copy, and the page says so.
+    */}}
+    {{if .Grants}}
+      <h2>Your downloads</h2>
+      {{range $grant := .Grants}}
+        {{if $grant.Entitlement.Revoked}}
+          <p>{{$grant.Entitlement.ProductTitle}} — this download has been withdrawn.</p>
+        {{else}}
+          <ul>
+          {{range $grant.Files}}
+            <li><a href="/cart/checkout/downloads/{{$grant.Entitlement.ID}}/{{.ID}}">{{.Title}}</a>
+                <small>{{.HumanSize}}</small></li>
+          {{end}}
+          </ul>
+        {{end}}
+      {{end}}
+      <p><small>We have also emailed you a permanent link. Keep that email — this
+      page is tied to this browser and will not be here tomorrow.</small></p>
+    {{end}}
+  {{else}}
+    <p>We are waiting for the payment to be confirmed. This usually takes a few
+    seconds, and you will get an email once it is done — you do not need to pay again.</p>
+  {{end}}
+  <table>
+    <tbody>
+    {{range .Order.Items}}
+      <tr>
+        <td>{{.Title}}{{with .Label}} <small>{{.}}</small>{{end}}</td>
+        <td>{{.Quantity}}</td>
+        <td>{{$.Currency}} {{money .LineTotalCents}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+    <tfoot><tr><th colspan="2">Total</th><th>{{.Currency}} {{money .Order.TotalCents}}</th></tr></tfoot>
+  </table>
+{{else}}
+  <p>If you have just paid, your payment is being confirmed and you will get an
+  email shortly.</p>
+{{end}}
+
+<p><a href="/products">Continue shopping</a></p>
+
+{{end}}

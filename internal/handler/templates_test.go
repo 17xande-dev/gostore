@@ -5,10 +5,41 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// Every page, rendered with the data its handler passes.
+//
+// This test carries more weight than it used to. One template set per page means a
+// page can only call a partial, its own layout, or something it defines itself — and
+// Go resolves template names at execute time, so a call to anything out of scope is
+// a 500 on that page rather than a parse error at boot. Rendering all of them is
+// what puts that failure back in CI.
+func testPages() map[string]any {
+	p := page{Title: "A page", StoreName: "Test Store"}
+	return map[string]any{
+		"index":              indexPageData{page: p},
+		"products":           productsPageData{page: p},
+		"product":            productPageData{page: p},
+		"cart":               cartPageData{page: p},
+		"checkout":           checkoutPageData{page: p},
+		"checkout_redirect":  redirectPageData{page: p},
+		"checkout_success":   successPageData{page: p},
+		"checkout_cancel":    successPageData{page: p, Cancelled: true},
+		"downloads":          downloadsPage{page: p},
+		"not_found":          errorPageData{page: p, Status: 404},
+		"error_client":       errorPageData{page: p, Status: 403, Heading: "No"},
+		"error_server":       errorPageData{page: p, Status: 500, Heading: "Sorry"},
+		"admin_login":        loginPage{page: p},
+		"admin_products":     productsPage{page: p},
+		"admin_product_form": productFormPage{page: p, IsNew: true},
+		"admin_categories":   categoriesPage{page: p},
+		"admin_orders":       ordersPage{page: p},
+		"admin_order":        orderPage{page: p},
+		"admin_downloads":    downloadStatsPage{page: p},
+	}
+}
 
 func TestParseTemplates_EmbeddedDefaultsRender(t *testing.T) {
 	tmpl, err := ParseTemplates("", blob.NewFake())
@@ -16,15 +47,7 @@ func TestParseTemplates_EmbeddedDefaultsRender(t *testing.T) {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 
-	// Every page the handlers name must exist and execute, or the failure only
-	// shows up as a 500 on a live request.
-	pages := map[string]any{
-		"index":              indexPageData{page: page{Title: "Home", StoreName: "Test Store"}},
-		"admin_products":     productsPage{page: page{Title: "Products", StoreName: "Test Store"}},
-		"admin_product_form": productFormPage{page: page{Title: "New product", StoreName: "Test Store"}, IsNew: true},
-		"admin_login":        loginPage{page: page{Title: "Sign in", StoreName: "Test Store"}},
-	}
-	for name, data := range pages {
+	for name, data := range testPages() {
 		w := httptest.NewRecorder()
 		if err := tmpl.Render(w, http.StatusOK, name, data); err != nil {
 			t.Errorf("render %s: %v", name, err)
@@ -78,12 +101,48 @@ func TestParseTemplates_FontStylesheetLinkedOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+// The property the whole per-page-set design exists for, and the reason the layout
+// carries blocks rather than the pages carrying a head/foot sandwich: a definition
+// in one page file reaches that page and no other.
+//
+// Without it — one flat set, as this was — defining "nav_extra" anywhere put the
+// catalog's search form in the nav of the cart, the checkout and every error page,
+// and the only way to keep it off them was a flag on the page data and a branch in
+// the layout for every such case.
+func TestParseTemplates_ABlockIsFilledForOnePageOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeOverride(t, dir, "pages/products.gohtml",
+		`{{define "content"}}THE CATALOG{{end}}`+
+			`{{define "nav_extra"}}<a id="filters">Filters</a>{{end}}`)
+
+	tmpl, err := ParseTemplates(dir, blob.NewFake())
+	if err != nil {
+		t.Fatalf("ParseTemplates: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	if err := tmpl.Render(w, http.StatusOK, "products", productsPageData{}); err != nil {
+		t.Fatalf("render products: %v", err)
+	}
+	if !strings.Contains(w.Body.String(), `id="filters"`) {
+		t.Error("the catalog did not fill the nav_extra block it defines")
+	}
+
+	// Every other page shares that layout and must still render its empty default.
+	w = httptest.NewRecorder()
+	if err := tmpl.Render(w, http.StatusOK, "index", indexPageData{}); err != nil {
+		t.Fatalf("render index: %v", err)
+	}
+	if strings.Contains(w.Body.String(), `id="filters"`) {
+		t.Error("the catalog's nav_extra leaked onto the front page")
+	}
+}
+
 func TestParseTemplates_OverrideDirWins(t *testing.T) {
 	dir := t.TempDir()
-	override := `{{define "admin_products"}}OVERRIDDEN{{end}}`
-	if err := os.WriteFile(filepath.Join(dir, "admin_products.html"), []byte(override), 0o600); err != nil {
-		t.Fatalf("write override: %v", err)
-	}
+	// The override mirrors the embedded tree: same subdirectory, same file name,
+	// and it defines the same names that file defines — "content" for a page.
+	writeOverride(t, dir, "admin/admin_products.gohtml", `{{define "content"}}OVERRIDDEN{{end}}`)
 
 	tmpl, err := ParseTemplates(dir, blob.NewFake())
 	if err != nil {
@@ -94,8 +153,8 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 	if err := tmpl.Render(w, http.StatusOK, "admin_products", productsPage{}); err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if got := strings.TrimSpace(w.Body.String()); got != "OVERRIDDEN" {
-		t.Errorf("body = %q, want the override", got)
+	if body := w.Body.String(); !strings.Contains(body, "OVERRIDDEN") {
+		t.Errorf("body = %q, want the override", body)
 	}
 
 	// Templates the override directory says nothing about must still come from
@@ -113,10 +172,7 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 // the next refresh, without a restart.
 func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
-		t.Fatalf("write override: %v", err)
-	}
+	file := writeOverride(t, dir, "admin/admin_products.gohtml", `{{define "content"}}FIRST{{end}}`)
 
 	tmpl, err := ParseTemplates(dir, blob.NewFake())
 	if err != nil {
@@ -124,14 +180,14 @@ func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
 	}
 	tmpl.SetReload(true)
 
-	if got := render(t, tmpl, "admin_products"); got != "FIRST" {
+	if got := render(t, tmpl, "admin_products"); !strings.Contains(got, "FIRST") {
 		t.Fatalf("body = %q, want FIRST", got)
 	}
 
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}SECOND{{end}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{{define "content"}}SECOND{{end}}`), 0o600); err != nil {
 		t.Fatalf("rewrite override: %v", err)
 	}
-	if got := render(t, tmpl, "admin_products"); got != "SECOND" {
+	if got := render(t, tmpl, "admin_products"); !strings.Contains(got, "SECOND") {
 		t.Errorf("body = %q, want SECOND: the edit needed a restart to appear", got)
 	}
 }
@@ -140,19 +196,16 @@ func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
 // wants, and what makes a broken override a boot failure rather than a 500.
 func TestParseTemplates_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
-		t.Fatalf("write override: %v", err)
-	}
+	file := writeOverride(t, dir, "admin/admin_products.gohtml", `{{define "content"}}FIRST{{end}}`)
 
 	tmpl, err := ParseTemplates(dir, blob.NewFake())
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}SECOND{{end}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{{define "content"}}SECOND{{end}}`), 0o600); err != nil {
 		t.Fatalf("rewrite override: %v", err)
 	}
-	if got := render(t, tmpl, "admin_products"); got != "FIRST" {
+	if got := render(t, tmpl, "admin_products"); !strings.Contains(got, "FIRST") {
 		t.Errorf("body = %q, want the set read at startup", got)
 	}
 }
@@ -162,21 +215,18 @@ func TestParseTemplates_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
 // whole recovery.
 func TestSetReload_ABrokenEditIsAnErrorAndRecoversOnTheNextSave(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}GOOD{{end}}`), 0o600); err != nil {
-		t.Fatalf("write override: %v", err)
-	}
+	file := writeOverride(t, dir, "admin/admin_products.gohtml", `{{define "content"}}GOOD{{end}}`)
 
 	tmpl, err := ParseTemplates(dir, blob.NewFake())
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	tmpl.SetReload(true)
-	if got := render(t, tmpl, "admin_products"); got != "GOOD" {
+	if got := render(t, tmpl, "admin_products"); !strings.Contains(got, "GOOD") {
 		t.Fatalf("body = %q, want GOOD", got)
 	}
 
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}{{if}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{{define "content"}}{{if}}`), 0o600); err != nil {
 		t.Fatalf("write broken override: %v", err)
 	}
 	w := httptest.NewRecorder()
@@ -188,10 +238,10 @@ func TestSetReload_ABrokenEditIsAnErrorAndRecoversOnTheNextSave(t *testing.T) {
 	}
 
 	// Fixing the file is all it takes; nothing has to be restarted to recover.
-	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIXED{{end}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{{define "content"}}FIXED{{end}}`), 0o600); err != nil {
 		t.Fatalf("write fixed override: %v", err)
 	}
-	if got := render(t, tmpl, "admin_products"); got != "FIXED" {
+	if got := render(t, tmpl, "admin_products"); !strings.Contains(got, "FIXED") {
 		t.Errorf("body = %q, want FIXED", got)
 	}
 }
@@ -202,7 +252,7 @@ func render(t *testing.T, tmpl *Templates, name string) string {
 	if err := tmpl.Render(w, http.StatusOK, name, productsPage{}); err != nil {
 		t.Fatalf("render %s: %v", name, err)
 	}
-	return strings.TrimSpace(w.Body.String())
+	return w.Body.String()
 }
 
 func TestRender_UnknownTemplateWritesNothing(t *testing.T) {

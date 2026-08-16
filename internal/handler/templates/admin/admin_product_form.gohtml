@@ -1,6 +1,4 @@
-{{define "admin_product_form"}}
-{{template "head" .}}
-{{template "adminnav" .}}
+{{define "content"}}
 
 <h1>{{if .IsNew}}New product{{else}}Edit product{{end}}</h1>
 
@@ -180,7 +178,6 @@
   {{template "err" index .Errors "delete"}}
 {{end}}
 
-{{template "foot" .}}
 {{end}}
 
 {{/*

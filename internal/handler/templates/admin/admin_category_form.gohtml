@@ -1,6 +1,4 @@
-{{define "admin_category_form"}}
-{{template "head" .}}
-{{template "adminnav" .}}
+{{define "content"}}
 
 <h1>{{if .IsNew}}New category{{else}}Edit category{{end}}</h1>
 
@@ -39,5 +37,4 @@
 </form>
 {{end}}
 
-{{template "foot" .}}
 {{end}}

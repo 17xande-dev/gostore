@@ -1,0 +1,61 @@
+{{/*
+  The storefront chrome. Every file under templates/pages/ is rendered inside this
+  one: the handler executes "layout" from that page's own template set, and the
+  page supplies "content".
+
+  Two blocks are the whole extension mechanism. A block is a default definition and
+  the place it renders, written together — so this file says what a page may fill
+  in, and a page that fills in nothing still renders correctly. Because each page
+  gets its own set, a definition in pages/products.gohtml reaches this layout on the
+  catalog and nowhere else.
+
+    content    the page itself. Every page defines it.
+    nav_extra  an addition to the site nav, for a page that has one — the catalog's
+               search and category form is the case this exists for. Empty by
+               default, which is what every other page wants.
+
+  The cost of the block form is that a page which defines neither renders an empty
+  shell rather than failing, so ParseTemplates asserts at startup that every page
+  defines "content". A page that forgets is a boot failure, not a blank page.
+*/}}
+{{define "layout"}}
+{{template "document_head" .}}
+<body>
+<header class="site-header">
+  <div class="inner">
+    {{/*
+      The mark is a bundled asset. Drop your own logo.svg into STATIC_DIR to replace
+      it — the URL carries a hash of the file, so the new one appears immediately
+      rather than after a cache expires.
+    */}}
+    <a class="brand" href="/">
+      <img src="{{asset "logo.svg"}}" alt="" width="28" height="28">
+      {{.StoreName}}
+    </a>
+    <nav>
+      <a href="/products">Shop</a>
+      <a href="/cart">Cart</a>
+      {{block "nav_extra" .}}{{end}}
+    </nav>
+  </div>
+</header>
+<main>
+<div class="inner">
+{{block "content" .}}{{end}}
+</div>
+</main>
+<footer class="site-footer">
+  <div class="inner columns">
+    <div>
+      <strong>{{.StoreName}}</strong>
+      <p class="muted"><small>Powered by gostore.</small></p>
+    </div>
+    <nav>
+      <a href="/products">All products</a>
+      <a href="/cart">Your cart</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
+{{end}}

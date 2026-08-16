@@ -1,0 +1,78 @@
+{{/*
+  Checkout: the shipping form, and the fragment htmx swaps when it comes back with
+  its errors. The hand-over to the gateway and the two pages a shopper returns to
+  are pages of their own — checkout_redirect, checkout_success, checkout_cancel.
+*/}}
+{{define "content"}}
+
+<p><a href="/cart">← Back to your cart</a></p>
+<h1>Checkout</h1>
+<div id="checkout">
+{{template "checkout_form" .}}
+</div>
+
+{{end}}
+
+{{define "checkout_form"}}
+{{with .Error}}<p><strong>{{.}}</strong></p>{{end}}
+
+<table>
+  <thead><tr><th>Item</th><th>Quantity</th><th>Line total</th></tr></thead>
+  <tbody>
+  {{range .Cart.Items}}
+    <tr>
+      <td>{{.ProductTitle}}{{with .Label}} <small>{{.}}</small>{{end}}</td>
+      <td>{{.Quantity}}</td>
+      <td>{{$.Currency}} {{money .LineTotalCents}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="2">Total</th><th>{{.Currency}} {{money .Cart.TotalCents}}</th></tr>
+  </tfoot>
+</table>
+
+<form method="post" action="/cart/checkout">
+  {{template "csrf" .CSRFToken}}
+
+  <p>
+    <label>Name
+      <input type="text" name="name" value="{{.Form.Name}}" required autocomplete="name">
+    </label>
+    {{template "err" .Errors.name}}
+  </p>
+  <p>
+    <label>Email
+      <input type="email" name="email" value="{{.Form.Email}}" required autocomplete="email">
+    </label>
+    {{/* The only field checked strictly: it is how the confirmation reaches anybody. */}}
+    {{template "err" .Errors.email}}
+  </p>
+  <p>
+    <label>Phone <small>(optional)</small>
+      <input type="tel" name="phone" value="{{.Form.Phone}}" autocomplete="tel">
+    </label>
+    {{template "err" .Errors.phone}}
+  </p>
+  {{/*
+    No address for a basket of downloads. Asking a buyer for their street address
+    to receive an mp3 is friction for them and personal data the shop has no use
+    for. A mixed basket still asks: one parcel among the downloads has to go
+    somewhere. validate.Customer makes the same decision server-side, so a
+    hand-crafted submission is not a way around it either way.
+  */}}
+  {{if .Cart.NeedsShipping}}
+  <p>
+    <label>Delivery address<br>
+      <textarea name="address" rows="4" cols="40" required autocomplete="street-address">{{.Form.Address}}</textarea>
+    </label>
+    {{template "err" .Errors.address}}
+  </p>
+  {{else}}
+  <p class="muted">Nothing here needs posting — your download links are emailed
+  as soon as the payment goes through.</p>
+  {{end}}
+
+  <button type="submit">Pay {{.Currency}} {{money .Cart.TotalCents}}</button>
+</form>
+{{end}}

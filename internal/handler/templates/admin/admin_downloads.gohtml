@@ -1,6 +1,4 @@
-{{define "admin_downloads"}}
-{{template "head" .}}
-{{template "adminnav" .}}
+{{define "content"}}
 
 <h1>Downloads — {{.Product.Title}}</h1>
 <p><a href="/admin/products/{{.Product.ID}}/edit">Back to the product</a></p>
@@ -73,5 +71,4 @@ time.</small></p>
   <p>Nothing downloaded yet.</p>
 {{end}}
 
-{{template "foot" .}}
 {{end}}

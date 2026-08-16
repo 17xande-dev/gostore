@@ -7,8 +7,7 @@
   the catalog itself uses, minus the filters. No JavaScript, and no CSRF token
   needed, because a GET changes nothing.
 */}}
-{{define "not_found"}}
-{{template "head" .}}
+{{define "content"}}
 
 <div class="not-found">
   <p class="code" aria-hidden="true">404</p>
@@ -32,5 +31,4 @@
   </p>
 </div>
 
-{{template "foot" .}}
 {{end}}

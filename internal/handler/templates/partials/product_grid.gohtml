@@ -1,0 +1,69 @@
+
+{{/*
+  The card grid, shared by the catalog and the index — so restyling a product card
+  changes both, rather than one of them and not the other in a way nobody notices.
+  Override *this* name to change how a card looks anywhere it appears.
+
+  It takes the whole page rather than a list of products, because the eager/lazy
+  rule below needs the index within the grid and the price needs .Currency. The
+  index passes four products, so every card there is eager, which is what a page
+  of four above the fold wants anyway.
+
+  A grid that reflows on its own: styles.css asks for as many columns as fit above a
+  minimum width, so there are no breakpoints here and none in the CSS either.
+*/}}
+{{define "product_grid"}}
+<ul class="products">
+  {{range $i, $p := .Products}}
+  <li>
+    {{/*
+      The whole card is the link, so the target is the card rather than a few words
+      of title.
+    */}}
+    <a class="product-card" href="/products/{{$p.Slug}}" hx-boost="true">
+      {{/*
+        The fixed-ratio frame is what makes a catalog of differently-sized
+        photographs line up, and what stops a product with no picture yet from being
+        a shorter card than its neighbours. The placeholder carries no alt text: the
+        title directly below already says what the thing is, so announcing "no image"
+        to a screen reader would be noise.
+
+        The first row is deliberately *not* lazy. Lazy-loading an image that is
+        already on screen defers exactly the one that decides how quickly the page
+        looks finished. Four is a guess at a row, and a stated one: the grid asks for
+        as many columns as fit, so the real count is a CSS decision the server cannot
+        know — four over-fetches slightly on a phone and under-fetches on a wide
+        monitor, and the alternative is a breakpoint the CSS deliberately does not
+        have.
+
+        No width/height either, on purpose: .frame reserves the box with aspect-ratio
+        in both layouts, so there is no shift left to fix, and these are object-fit
+        cover images whose real dimensions the store never records.
+      */}}
+      <span class="frame">
+        {{if $p.HasImage}}
+          <img src="{{image $p.ImageKey}}" alt="{{$p.Title}}" decoding="async"
+               {{if ge $i 4}}loading="lazy"{{end}}>
+        {{else}}
+          <img src="{{asset "placeholder.svg"}}" alt="" decoding="async"
+               {{if ge $i 4}}loading="lazy"{{end}}>
+        {{end}}
+      </span>
+      <span class="title">{{$p.Title}}</span>
+      <span class="price">
+        {{if $p.OnePrice}}
+          {{$.Currency}} {{money $p.MinPriceCents}}
+        {{else}}
+          {{$.Currency}} {{money $p.MinPriceCents}} – {{money $p.MaxPriceCents}}
+        {{end}}
+      </span>
+      {{/*
+        Sold out is shown rather than the product being hidden: somebody looking for
+        it should find out it exists and is gone, not conclude the shop never had it.
+      */}}
+      {{if not $p.InStock}}<span class="badge sold-out">Sold out</span>{{end}}
+    </a>
+  </li>
+  {{end}}
+</ul>
+{{end}}

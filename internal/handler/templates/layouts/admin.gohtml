@@ -1,0 +1,47 @@
+{{/*
+  The admin chrome, for every file under templates/admin/. It carries the nav and
+  the sign-out form, which is the reason it exists as a second layout rather than a
+  flag on the first: the sign-in page is served by the public layout, so there is
+  no sign-out link in scope for it to render by mistake. That used to be a
+  convention held up by every admin page remembering to call "adminnav"; it is now
+  structural.
+
+  It offers "content" and nothing else. A block the admin never fills is a block
+  nobody maintains.
+*/}}
+{{define "layout"}}
+{{template "document_head" .}}
+<body class="admin">
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="/admin/products">
+      <img src="{{asset "logo.svg"}}" alt="" width="28" height="28">
+      {{.StoreName}}
+    </a>
+    <nav>
+      <a href="/admin/products">Products</a>
+      <a href="/admin/categories">Categories</a>
+      <a href="/admin/orders">Orders</a>
+      <a href="/products">Storefront</a>
+    </nav>
+    <form method="post" action="/admin/logout">
+      {{template "csrf" .CSRFToken}}
+      <button type="submit">Sign out</button>
+    </form>
+  </div>
+</header>
+<main>
+<div class="inner">
+{{block "content" .}}{{end}}
+</div>
+</main>
+<footer class="site-footer">
+  <div class="inner columns">
+    <div>
+      <p class="muted"><small>Powered by gostore.</small></p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
+{{end}}

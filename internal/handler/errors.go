@@ -24,7 +24,7 @@ import (
 //     must still be a 500. h.render would log and leave the status at 200, which is
 //     the one outcome a crawler must never see.
 //   - **A full page never lands in a fragment.** htmx is configured to swap error
-//     responses (see the htmx-config meta tag in layout.html), so an error page sent
+//     responses (see the htmx-config meta tag in layout.gohtml), so an error page sent
 //     to an htmx request must say "replace the document" or it would be pasted into
 //     whatever small target the request was aimed at.
 //

@@ -4,8 +4,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -277,10 +275,9 @@ func TestStorefront_TemplateOverride(t *testing.T) {
 	// Theming and embedding are validated together, because they are the two
 	// things an adopter does to this layer before anything else.
 	dir := t.TempDir()
-	override := `{{define "products_list"}}<p>OUR OWN CATALOG: {{len .Products}} item(s)</p>{{end}}`
-	if err := os.WriteFile(filepath.Join(dir, "products.html"), []byte(override), 0o600); err != nil {
-		t.Fatalf("write override: %v", err)
-	}
+	writeOverride(t, dir, "pages/products.gohtml",
+		`{{define "content"}}{{template "products_list" .}}{{end}}`+
+			`{{define "products_list"}}<p>OUR OWN CATALOG: {{len .Products}} item(s)</p>{{end}}`)
 
 	srv, store := newStorefront(t, testConfig(), dir)
 	stock(t, store)

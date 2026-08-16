@@ -698,8 +698,8 @@ because a front page that needs curating before it works is a front page that
 ships empty. They share the catalog's card grid (`product_grid`), so restyling a
 card changes both pages rather than one of them.
 
-Replacing the whole thing is one file defining `index` in `TEMPLATE_DIR`. See
-[Theming](#theming).
+Replacing the whole thing is one `pages/index.gohtml` in `TEMPLATE_DIR` defining
+`content`. See [Theming](#theming).
 
 One thing to know before adding to it: `/` is served outside the CSRF layer,
 because it carries no form and therefore sets no cookie — the only HTML page in
@@ -1029,10 +1029,15 @@ their own `main`, but the shipped binary no longer reaches it.
 
 ### Email templates
 
-`email_order_paid.txt`, `email_order_paid.html` and `email_order_notify.txt`, overridable
-from `TEMPLATE_DIR` like any other template. The `.txt` files go through **`text/template`**
-and the rest through `html/template`, which is not a detail: running a receipt through the
-HTML escaper puts `&amp;` in front of a customer.
+`mail/email_order_paid.txt`, `mail/email_order_paid.gohtml` and `mail/email_order_notify.txt`,
+overridable from `TEMPLATE_DIR` like any other template. The `.txt` files go through
+**`text/template`** and the rest through `html/template`, which is not a detail: running a
+receipt through the HTML escaper puts `&amp;` in front of a customer.
+
+They are the one thing under `TEMPLATE_DIR` that no layout wraps: a message is not a page,
+and giving it the store's `<head>` and site nav would be actively wrong. They still see
+`partials/`, so `{{template "csrf" …}}` would resolve in an email — which is meaningless
+and harmless, and cheaper than a second partials set to prevent it.
 
 The HTML part is deliberately primitive — table layout, inline styles, no external CSS and no
 images. Mail clients are twenty years behind browsers, and a receipt that renders everywhere
@@ -1060,8 +1065,8 @@ you do not override keeps coming from the binary.
 
 | | Points at | Overrides |
 |---|---|---|
-| `TEMPLATE_DIR` | a directory of `*.html` and `*.txt` files | templates, by the name they `{{define}}` |
-| `STATIC_DIR` | a directory of assets | bundled files, by filename |
+| `TEMPLATE_DIR` | a directory shaped like [`internal/handler/templates/`](internal/handler/templates) | templates, by the path of the file — `pages/cart.gohtml` replaces `pages/cart.gohtml` |
+| `STATIC_DIR` | a flat directory of assets | bundled files, by filename |
 
 `make up` and `make run` already set both, at [`theme/templates`](theme) and
 [`theme/static`](theme), with **`THEME_RELOAD=true`** — so writing a theme is editing a file
@@ -1074,10 +1079,13 @@ Start from a default rather than from nothing — the defaults are meant to be r
 
 ```sh
 cp internal/handler/static/styles.css theme/static/styles.css     # restyle
-cp internal/handler/templates/products.html theme/templates/      # re-mark-up the catalog
+mkdir -p theme/templates/pages                                    # the path is the contract
+cp internal/handler/templates/pages/products.gohtml theme/templates/pages/
 ```
 
 Then edit and refresh. Deleting your copy puts the default back, also without a restart.
+Keep the subdirectory: an override is found at the same path it has in the defaults, and a
+`products.gohtml` at the top of `TEMPLATE_DIR` is a file nothing looks for.
 
 Most themes never need a template at all. **The CSS is the intended level to work at**:
 every colour, size and spacing value in the default theme is a custom property in one
@@ -1156,29 +1164,74 @@ Three things worth knowing before choosing the hosted route:
 
 #### Overriding templates
 
-Overriding is per *template name*, not per file or per page. A file defining
-`{{define "products_list"}}` replaces the catalog listing everywhere it appears, including
-inside the default full page and in the htmx fragment responses — which is what keeps a
-themed store consistent between a full page load and a swap.
+Overriding is per *path*: a file at `pages/index.gohtml` under `TEMPLATE_DIR` replaces the
+definitions in the embedded `pages/index.gohtml` and leaves everything else alone. Put it
+in the wrong subdirectory and it is simply not found — nothing warns, because a directory
+of files the server has never heard of is a normal thing for a theme directory to contain.
 
-The names, and which file they live in:
+The directory decides two things, so it is worth knowing before copying anything:
 
-| File | Defines | Is |
+| Directory | Holds | Wrapped in |
 |---|---|---|
-| `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
-| | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
-| `index.html` | `index` | The front page. Small on purpose — this is the one most shops replace outright |
-| `not_found.html` | `not_found` | The 404 page, which every mistyped URL and withdrawn product lands on |
-| `error.html` | `error_client`, `error_server`, `error_reference` | The 4xx and 5xx pages, and the reference block they share. See [When something goes wrong](#when-something-goes-wrong) |
-| `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, the results inside it, the search and category form, and the page links |
-| | `product_grid` | The card grid, **shared by the catalog and the index**. Override this to restyle a product card everywhere it appears — overriding `products_list` alone changes the catalog only |
-| `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
-| `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
-| `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
-| `admin_*.html` | `admin_login`, `admin_products`, `admin_product_form`, `admin_categories`, `admin_category_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
-| `email_order_paid.{html,txt}`, `email_order_notify.txt` | same names, minus the extension for the HTML one | See [Email templates](#email-templates) |
+| `layouts/` | `public.gohtml`, `admin.gohtml` — each defining `layout` | — |
+| `partials/` | pieces parsed into **every** page: `document_head`, `csrf`, `err`, `product_grid`, `error_reference` | — |
+| `pages/` | the storefront, and the admin sign-in page | `layouts/public.gohtml` |
+| `admin/` | everything behind the admin login | `layouts/admin.gohtml` |
+| `mail/` | `email_order_paid.gohtml` and the two `.txt` bodies | nothing — a message is not a page |
 
-Three things to know before writing one:
+**Each page is parsed into a set of its own**, which is the thing to understand before
+writing a theme. A definition in `pages/products.gohtml` reaches the catalog and no other
+page, so a page can fill in a block, restyle a partial for itself, or define a fragment,
+without any of it leaking into the cart. The cost is the other side of the same coin: a
+page can only call a partial, its own layout, or something it defines itself — a call to
+anything else renders as a `500` on that page, because Go resolves template names when a
+template runs and not when it is parsed. Anything two pages need belongs in `partials/`.
+
+**A page file defines `content`**, and the layout renders it. Two blocks exist:
+
+| Block | Filled by | Is |
+|---|---|---|
+| `content` | every page, always | The page itself. A page that defines none refuses the boot |
+| `nav_extra` | `pages/products.gohtml`, if you want it | An addition to the site nav. Empty by default: the catalog's filter form is rendered above the grid instead, and two copies of one search form on one page is two search boxes |
+
+Moving the filter form into the header is the two-definition case the blocks exist for. A
+`pages/products.gohtml` in `TEMPLATE_DIR` holding nothing but this does it:
+
+```html
+{{define "content"}}
+<h1>All products</h1>
+<div id="products">{{template "products_list" .}}</div>
+{{end}}
+
+{{define "nav_extra"}}{{template "products_filters" .}}{{end}}
+```
+
+Nothing else in the catalog is touched: `products_filters`, `products_list` and
+`products_pager` keep coming from the default file, since an override replaces the
+definitions it names and no others.
+
+The pages, and the fragments each one owns — a fragment is what an htmx swap renders, so
+overriding one changes both the full page and the swap, which is what keeps the two
+consistent:
+
+| File | Also defines | Is |
+|---|---|---|
+| `pages/index.gohtml` | | The front page. Small on purpose — this is the one most shops replace outright |
+| `pages/products.gohtml` | `products_list`, `products_filters`, `products_pager` | The catalog, the results inside it, the search and category form, and the page links |
+| `pages/product.gohtml` | `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
+| `pages/cart.gohtml` | `cart_items`, `cart_status` | The cart, the lines htmx swaps, and the count a product page shows after an add |
+| `pages/checkout.gohtml` | `checkout_form` | The checkout, and the form htmx swaps back with its errors |
+| `pages/checkout_redirect.gohtml`, `pages/checkout_success.gohtml`, `pages/checkout_cancel.gohtml` | | The hand-over to the gateway, and the two pages a shopper comes back to |
+| `pages/downloads.gohtml` | | The page a buyer reaches from their confirmation email |
+| `pages/not_found.gohtml` | | The 404, which every mistyped URL and withdrawn product lands on |
+| `pages/error_client.gohtml`, `pages/error_server.gohtml` | | The 4xx and 5xx pages. See [When something goes wrong](#when-something-goes-wrong) |
+| `pages/admin_login.gohtml` | | The sign-in page. In `pages/` deliberately: it uses the public layout, so it cannot offer to sign out of a session it does not have |
+| `admin/admin_*.gohtml` | `variant_errors`, `product_image`, `product_files` | The admin. The files keep their `admin_` prefix because a page's file name is the name it is rendered by, and `admin/products.gohtml` would collide with the catalog |
+| `partials/product_grid.gohtml` | | The card grid, **shared by the catalog and the index**. Override this to restyle a product card everywhere it appears — overriding `products_list` alone changes the catalog only |
+| `partials/document.gohtml` | | Everything from the doctype to `</head>`, on every page of both layouts. Two htmx settings in it are load-bearing; keep them |
+| `mail/*` | | See [Email templates](#email-templates) |
+
+Four things to know before writing one:
 
 - **Class names are the contract** between the templates and the stylesheet. They describe
   what a thing is — `.product-card`, `.site-header`, `.price`, `.field` — so that overriding
@@ -1190,9 +1243,13 @@ Three things to know before writing one:
   `.StoreName`, `.Currency` and `.CSRFToken`, plus its own — `.Products`, `.Product`,
   `.Cart`, `.Order`. The functions available are `money` (cents → a displayed amount),
   `asset` (a bundled or overridden file → its hashed URL), `image` (a product's image key →
-  where it is served from) and `linebreaks`. A template naming a field that does not exist
-  fails the render, which with reloading on is a `500` on that page and, without it, a
-  refused boot.
+  where it is served from) and `linebreaks`.
+- **A field or a template name that does not exist is a `500` on that page**, not a refused
+  boot: Go checks both when a template *runs*, not when it is parsed. This is the reason
+  `nav_extra` is filled by the catalog's own file rather than called from the layout —
+  `{{template "products_filters" .}}` in the site nav renders on the catalog and breaks
+  every other page, because none of their data carries `.Search` or `.Facets`. Render each
+  page you have touched before shipping the theme.
 
 #### Reloading, and not reloading
 
@@ -1315,9 +1372,12 @@ Recorded here so they are decided deliberately rather than by default:
 
 Every HTML surface answers a failure with a rendered page rather than a line of plain
 text: an unknown URL, a withdrawn product, a form whose token has expired, a request
-that came too fast, a fault on the server. Three templates cover it — `not_found` for
-404, `error_client` for the rest of the 4xx range, `error_server` for 5xx — and all
-three are overridable by name from `TEMPLATE_DIR`.
+that came too fast, a fault on the server. Three pages cover it — `pages/not_found.gohtml`
+for 404, `pages/error_client.gohtml` for the rest of the 4xx range,
+`pages/error_server.gohtml` for 5xx — and all three are overridable from `TEMPLATE_DIR`.
+They are three files rather than one because they say genuinely different things, and a
+shop should be able to reword one without touching the others; the reference block they
+share is `partials/error_reference.gohtml`.
 
 **In development the page says what broke; in production it does not.** The signal is
 `BASE_URL`: an `https://` origin is production and the page shows only a reference, and
@@ -1346,8 +1406,8 @@ Two deliberate exceptions to all of the above:
 htmx does not swap `4xx`/`5xx` responses by default, which quietly discarded every
 refusal this store sends: the cart answers "Only 2 of that option left" as a `409`
 carrying the fragment the page asked for, and the browser dropped it, so a shopper
-clicked *Add to cart* and watched nothing happen. `layout.html` therefore configures
-`responseHandling` to swap errors too.
+clicked *Add to cart* and watched nothing happen. `partials/document.gohtml` therefore
+configures `responseHandling` to swap errors too, in the one `<head>` both layouts use.
 
 That makes one rule load-bearing, and it is worth knowing before adding a handler: **an
 error response either fills the target it was aimed at, or replaces the document.** A
