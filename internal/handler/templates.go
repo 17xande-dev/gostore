@@ -17,7 +17,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 )
 
-//go:embed templates/*.html templates/*.txt
+//go:embed templates/*.gohtml templates/*.txt
 var templatesFS embed.FS
 
 // Templates is the parsed template set: the embedded defaults, with same-named
@@ -75,7 +75,7 @@ func (t *Templates) SetReload(on bool) { t.reload = on }
 // reload that hits a half-saved override leaves the last good ones in place and
 // fails that request rather than emptying the template set.
 func (t *Templates) parse() error {
-	html, err := template.New("gostore").Funcs(funcs(t.images)).ParseFS(templatesFS, "templates/*.html")
+	html, err := template.New("gostore").Funcs(funcs(t.images)).ParseFS(templatesFS, "templates/*.gohtml")
 	if err != nil {
 		return fmt.Errorf("handler: parse embedded templates: %w", err)
 	}
@@ -85,7 +85,7 @@ func (t *Templates) parse() error {
 	}
 
 	if t.overrideDir != "" {
-		if err := overlay(t.overrideDir, "*.html", func(files []string) (err error) {
+		if err := overlay(t.overrideDir, "*.gohtml", func(files []string) (err error) {
 			html, err = html.ParseFiles(files...)
 			return err
 		}); err != nil {

@@ -92,7 +92,7 @@ func SecurityHeaders(p Policy) Middleware {
 	// an injected one — which is the entire threat it exists to stop. On script-src it
 	// would turn any future escaping slip into a live compromise of the admin session:
 	// customer-typed text reaches an authenticated page (the address in
-	// admin_order.html), html/template is what keeps it inert, and this directive is
+	// admin_order.gohtml), html/template is what keeps it inert, and this directive is
 	// the backstop for the day something returns template.HTML without escaping first.
 	// A nonce keeps that backstop while still letting the store's own inline content
 	// run: fresh random value per response, in the header and on the tag, unguessable

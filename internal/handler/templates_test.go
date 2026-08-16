@@ -81,7 +81,7 @@ func TestParseTemplates_FontStylesheetLinkedOnlyWhenConfigured(t *testing.T) {
 func TestParseTemplates_OverrideDirWins(t *testing.T) {
 	dir := t.TempDir()
 	override := `{{define "admin_products"}}OVERRIDDEN{{end}}`
-	if err := os.WriteFile(filepath.Join(dir, "admin_products.html"), []byte(override), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "admin_products.gohtml"), []byte(override), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestParseTemplates_OverrideDirWins(t *testing.T) {
 // the next refresh, without a restart.
 func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
+	file := filepath.Join(dir, "admin_products.gohtml")
 	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSetReload_PicksUpAnEditWithoutReparsing(t *testing.T) {
 // wants, and what makes a broken override a boot failure rather than a 500.
 func TestParseTemplates_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
+	file := filepath.Join(dir, "admin_products.gohtml")
 	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}FIRST{{end}}`), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestParseTemplates_WithoutReloadAnEditIsNotPickedUp(t *testing.T) {
 // whole recovery.
 func TestSetReload_ABrokenEditIsAnErrorAndRecoversOnTheNextSave(t *testing.T) {
 	dir := t.TempDir()
-	file := filepath.Join(dir, "admin_products.html")
+	file := filepath.Join(dir, "admin_products.gohtml")
 	if err := os.WriteFile(file, []byte(`{{define "admin_products"}}GOOD{{end}}`), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}

@@ -978,7 +978,7 @@ their own `main`, but the shipped binary no longer reaches it.
 
 ### Email templates
 
-`email_order_paid.txt`, `email_order_paid.html` and `email_order_notify.txt`, overridable
+`email_order_paid.txt`, `email_order_paid.gohtml` and `email_order_notify.txt`, overridable
 from `TEMPLATE_DIR` like any other template. The `.txt` files go through **`text/template`**
 and the rest through `html/template`, which is not a detail: running a receipt through the
 HTML escaper puts `&amp;` in front of a customer.
@@ -1009,7 +1009,7 @@ you do not override keeps coming from the binary.
 
 | | Points at | Overrides |
 |---|---|---|
-| `TEMPLATE_DIR` | a directory of `*.html` and `*.txt` files | templates, by the name they `{{define}}` |
+| `TEMPLATE_DIR` | a directory of `*.gohtml` and `*.txt` files | templates, by the name they `{{define}}` |
 | `STATIC_DIR` | a directory of assets | bundled files, by filename |
 
 `make up` and `make run` already set both, at [`theme/templates`](theme) and
@@ -1023,7 +1023,7 @@ Start from a default rather than from nothing — the defaults are meant to be r
 
 ```sh
 cp internal/handler/static/styles.css theme/static/styles.css     # restyle
-cp internal/handler/templates/products.html theme/templates/      # re-mark-up the catalog
+cp internal/handler/templates/products.gohtml theme/templates/      # re-mark-up the catalog
 ```
 
 Then edit and refresh. Deleting your copy puts the default back, also without a restart.
@@ -1114,18 +1114,18 @@ The names, and which file they live in:
 
 | File | Defines | Is |
 |---|---|---|
-| `layout.html` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
+| `layout.gohtml` | `head`, `foot` | The page chrome: `<head>`, header, footer. Override these two and every page follows |
 | | `adminnav`, `csrf`, `err` | The admin nav, the hidden CSRF field, and one field's error message |
-| `index.html` | `index` | The front page. Small on purpose — this is the one most shops replace outright |
-| `not_found.html` | `not_found` | The 404 page, which every mistyped URL and withdrawn product lands on |
-| `error.html` | `error_client`, `error_server`, `error_reference` | The 4xx and 5xx pages, and the reference block they share. See [When something goes wrong](#when-something-goes-wrong) |
-| `products.html` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, the results inside it, the search and category form, and the page links |
+| `index.gohtml` | `index` | The front page. Small on purpose — this is the one most shops replace outright |
+| `not_found.gohtml` | `not_found` | The 404 page, which every mistyped URL and withdrawn product lands on |
+| `error.gohtml` | `error_client`, `error_server`, `error_reference` | The 4xx and 5xx pages, and the reference block they share. See [When something goes wrong](#when-something-goes-wrong) |
+| `products.gohtml` | `products`, `products_list`, `products_filters`, `products_pager` | The catalog page, the results inside it, the search and category form, and the page links |
 | | `product_grid` | The card grid, **shared by the catalog and the index**. Override this to restyle a product card everywhere it appears — overriding `products_list` alone changes the catalog only |
-| `product.html` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
-| `cart.html` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
-| `checkout.html` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
-| `admin_*.html` | `admin_login`, `admin_products`, `admin_product_form`, `admin_categories`, `admin_category_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
-| `email_order_paid.{html,txt}`, `email_order_notify.txt` | same names, minus the extension for the HTML one | See [Email templates](#email-templates) |
+| `product.gohtml` | `product`, `product_detail`, `add_to_cart` | The product page, its body, and the variant/quantity form |
+| `cart.gohtml` | `cart`, `cart_items`, `cart_status` | The cart page, the lines htmx swaps, and the header count |
+| `checkout.gohtml` | `checkout`, `checkout_form`, `checkout_redirect`, `checkout_success`, `checkout_cancel` | The checkout, and the pages a shopper comes back to |
+| `admin_*.gohtml` | `admin_login`, `admin_products`, `admin_product_form`, `admin_categories`, `admin_category_form`, `admin_orders`, `admin_order`, `variant_errors`, `product_image` | The admin |
+| `email_order_paid.{gohtml,txt}`, `email_order_notify.txt` | same names, minus the extension for the HTML one | See [Email templates](#email-templates) |
 
 Three things to know before writing one:
 
@@ -1295,7 +1295,7 @@ Two deliberate exceptions to all of the above:
 htmx does not swap `4xx`/`5xx` responses by default, which quietly discarded every
 refusal this store sends: the cart answers "Only 2 of that option left" as a `409`
 carrying the fragment the page asked for, and the browser dropped it, so a shopper
-clicked *Add to cart* and watched nothing happen. `layout.html` therefore configures
+clicked *Add to cart* and watched nothing happen. `layout.gohtml` therefore configures
 `responseHandling` to swap errors too.
 
 That makes one rule load-bearing, and it is worth knowing before adding a handler: **an

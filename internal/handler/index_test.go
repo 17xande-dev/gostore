@@ -154,7 +154,7 @@ func TestIndex_CardsComeFromTheSharedGrid(t *testing.T) {
 	// seeing both pages change is what proves that, and it is the property that
 	// duplicating the markup would have quietly broken.
 	dir := t.TempDir()
-	writeOverride(t, dir, "products.html", `{{define "product_grid"}}SHARED-GRID{{end}}`)
+	writeOverride(t, dir, "products.gohtml", `{{define "product_grid"}}SHARED-GRID{{end}}`)
 
 	srv, store := newStorefront(t, testConfig(), dir)
 	stock(t, store)
@@ -169,7 +169,7 @@ func TestIndex_CardsComeFromTheSharedGrid(t *testing.T) {
 func TestIndex_IsOverridable(t *testing.T) {
 	// The whole customisation story: one file in TEMPLATE_DIR replaces the page.
 	dir := t.TempDir()
-	writeOverride(t, dir, "index.html", `{{define "index"}}MY OWN FRONT PAGE{{end}}`)
+	writeOverride(t, dir, "index.gohtml", `{{define "index"}}MY OWN FRONT PAGE{{end}}`)
 
 	srv, store := newStorefront(t, testConfig(), dir)
 	stock(t, store)

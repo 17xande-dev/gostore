@@ -278,7 +278,7 @@ func TestStorefront_TemplateOverride(t *testing.T) {
 	// things an adopter does to this layer before anything else.
 	dir := t.TempDir()
 	override := `{{define "products_list"}}<p>OUR OWN CATALOG: {{len .Products}} item(s)</p>{{end}}`
-	if err := os.WriteFile(filepath.Join(dir, "products.html"), []byte(override), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "products.gohtml"), []byte(override), 0o600); err != nil {
 		t.Fatalf("write override: %v", err)
 	}
 

@@ -5,7 +5,7 @@ Your theme. The compose stack mounts this directory into the server and sets
 `THEME_RELOAD=true` — so a file dropped in here takes effect on the next page
 refresh, with no restart and no rebuild.
 
-- `templates/` — `*.html` (and the two `*.txt` email bodies). A file whose name
+- `templates/` — `*.gohtml` (and the two `*.txt` email bodies). A file whose name
   matches an embedded default replaces it; the rest keep falling back. Overriding
   is per *template name*, not per file, so a file defining `{{define
   "products_list"}}` replaces the catalog listing everywhere it appears.
