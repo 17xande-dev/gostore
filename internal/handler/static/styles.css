@@ -776,6 +776,12 @@ button,
     color: var(--ink-soft);
     font-weight: 500;
   }
+
+  /* One fact per row, so a number belongs beside its label rather than pushed to
+     an edge the eye has to travel to. It keeps the tabular figures. */
+  td.num {
+    text-align: start;
+  }
 }
 
 .error {
