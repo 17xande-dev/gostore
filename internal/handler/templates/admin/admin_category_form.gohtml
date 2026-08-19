@@ -1,38 +1,45 @@
 {{define "content"}}
 
-<h1>{{if .IsNew}}New category{{else}}Edit category{{end}}</h1>
+<a class="back" href="/admin/categories">← Categories</a>
+<h1>{{if .IsNew}}New category{{else}}{{.Category.Name}}{{end}}</h1>
 
 <form method="post" action="{{if .IsNew}}/admin/categories{{else}}/admin/categories/{{.Category.ID}}{{end}}">
   {{template "csrf" .CSRFToken}}
-  <p>
-    <label>Name<br>
-      <input name="name" value="{{.Category.Name}}" required>
-    </label>
-    {{template "err" index .Errors "name"}}
-  </p>
-  <p>
-    <label>Slug<br>
-      <input name="slug" value="{{.Category.Slug}}" placeholder="derived from the name when left blank">
-    </label>
-    {{template "err" index .Errors "slug"}}
-    <br><small>This is the address customers see, so changing it breaks links that
-    already exist.</small>
-  </p>
-  <p>
-    <label>Position<br>
-      <input name="position" value="{{.Position}}" size="5" inputmode="numeric">
-    </label>
-    {{template "err" index .Errors "position"}}
-    <br><small>Lower numbers are shown first.</small>
-  </p>
-  <p><button type="submit">Save category</button> <a href="/admin/categories">Back</a></p>
+
+  <fieldset class="panel">
+    <legend>Details</legend>
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Category.Name}}" required>
+      {{template "err" index .Errors "name"}}
+    </div>
+    <div class="field">
+      <label for="slug">Slug</label>
+      <input id="slug" name="slug" value="{{.Category.Slug}}"
+             placeholder="derived from the name when left blank">
+      {{template "err" index .Errors "slug"}}
+      <small class="hint">This is the address customers see, so changing it breaks links
+      that already exist.</small>
+    </div>
+    <div class="field narrow">
+      <label for="position">Position</label>
+      <input id="position" name="position" value="{{.Position}}" inputmode="numeric">
+      {{template "err" index .Errors "position"}}
+      <small class="hint">Lower numbers are shown first.</small>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">Save category</button>
+    <a class="button quiet" href="/admin/categories">Cancel</a>
+  </div>
 </form>
 
 {{if not .IsNew}}
 <h2>Delete</h2>
-<form method="post" action="/admin/categories/{{.Category.ID}}/delete">
+<form class="actions" method="post" action="/admin/categories/{{.Category.ID}}/delete">
   {{template "csrf" .CSRFToken}}
-  <button type="submit">Delete category</button>
+  <button class="quiet" type="submit">Delete category</button>
   <small>Products in this category are not deleted — they simply stop being in it.</small>
 </form>
 {{end}}

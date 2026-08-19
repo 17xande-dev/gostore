@@ -1,6 +1,6 @@
 {{define "content"}}
 
-<p><a href="/admin/orders">← All orders</a></p>
+<a class="back" href="/admin/orders">← All orders</a>
 <h1>Order {{.Order.Reference}}</h1>
 
 {{/*
@@ -10,11 +10,17 @@
   never arrived.
 */}}
 
-<p>
-  {{if .Order.Paid}}<strong>Paid</strong> {{.Order.PaidAt.Format "2006-01-02 15:04"}}
-  {{else}}Status: <strong>{{.Order.Status}}</strong>{{end}}
-  · Placed {{.Order.CreatedAt.Format "2006-01-02 15:04"}}
-  · Confirmation email {{if .Order.Emailed}}sent{{else}}not sent{{end}}
+{{/* The state of the order in badges, because these three facts are what an
+     operator checks first and a sentence makes them read them all. */}}
+<p class="row">
+  {{if .Order.Paid}}
+    <span class="badge done">paid {{.Order.PaidAt.Format "2006-01-02 15:04"}}</span>
+  {{else}}
+    <span class="badge">{{.Order.Status}}</span>
+  {{end}}
+  {{if .Order.Oversold}}<span class="badge problem">oversold</span>{{end}}
+  <span class="badge">placed {{.Order.CreatedAt.Format "2006-01-02 15:04"}}</span>
+  <span class="badge">confirmation email {{if .Order.Emailed}}sent{{else}}not sent{{end}}</span>
 </p>
 
 {{/*
@@ -22,55 +28,64 @@
   decided before the parcel is packed.
 */}}
 {{if .Order.Oversold}}
-<p><strong>OVERSOLD — this order was paid but there was not enough stock left.</strong></p>
-<p>Stock was left as it stands rather than driven negative, so the counts under
-Products are still right for what is physically on the shelf. Somebody has to
-decide whether to fulfil this late or refund it. Nothing here does that for you:
-refunds happen in the {{.Order.Gateway}} dashboard, because this store models a
-forward payment only.</p>
+<div class="notice problem">
+  <p><strong>Oversold — this order was paid but there was not enough stock left.</strong></p>
+  <p>Stock was left as it stands rather than driven negative, so the counts under
+  Products are still right for what is physically on the shelf. Somebody has to
+  decide whether to fulfil this late or refund it. Nothing here does that for you:
+  refunds happen in the {{.Order.Gateway}} dashboard, because this store models a
+  forward payment only.</p>
+</div>
 {{end}}
 
 <h2>Pack</h2>
-<table>
-  <thead>
-    <tr><th>Item</th><th>Options</th><th>Unit</th><th>Qty</th><th>Line total</th></tr>
-  </thead>
-  <tbody>
-  {{range .Order.Items}}
-    <tr>
-      {{/*
-        The title and options are the snapshot taken when the order was placed, not
-        a live read of the catalog — so this says what was bought even if the
-        product has since been renamed, repriced or withdrawn.
-      */}}
-      <td>{{.Title}}</td>
-      <td>{{.Label}}</td>
-      <td>{{$.Currency}} {{money .UnitPriceCents}}</td>
-      <td>{{.Quantity}}</td>
-      <td>{{$.Currency}} {{money .LineTotalCents}}</td>
-    </tr>
-  {{end}}
-  </tbody>
-  <tfoot>
-    <tr>
-      <th colspan="3">Total ({{.Order.Count}} item{{if ne .Order.Count 1}}s{{end}})</th>
-      <th colspan="2">{{.Currency}} {{money .Order.TotalCents}}</th>
-    </tr>
-  </tfoot>
-</table>
+<div class="scroll-x">
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th><th>Options</th><th class="num">Unit</th>
+        <th class="num">Qty</th><th class="num">Line total</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Order.Items}}
+      <tr>
+        {{/*
+          The title and options are the snapshot taken when the order was placed, not
+          a live read of the catalog — so this says what was bought even if the
+          product has since been renamed, repriced or withdrawn.
+        */}}
+        <td>{{.Title}}</td>
+        <td>{{with .Label}}{{.}}{{else}}<span class="muted">—</span>{{end}}</td>
+        <td class="num">{{$.Currency}} {{money .UnitPriceCents}}</td>
+        <td class="num">{{.Quantity}}</td>
+        <td class="num">{{$.Currency}} {{money .LineTotalCents}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th colspan="3">Total ({{.Order.Count}} item{{if ne .Order.Count 1}}s{{end}})</th>
+        <th class="num" colspan="2">{{.Currency}} {{money .Order.TotalCents}}</th>
+      </tr>
+    </tfoot>
+  </table>
+</div>
 
 <h2>Ship to</h2>
-<p>
-  {{.Order.Customer.Name}}<br>
-  {{linebreaks .Order.Customer.Address}}
-</p>
-<p>
-  <a href="mailto:{{.Order.Customer.Email}}">{{.Order.Customer.Email}}</a>
-  {{with .Order.Customer.Phone}}<br>{{.}}{{end}}
-</p>
+<div class="panel">
+  <p>
+    <strong>{{.Order.Customer.Name}}</strong><br>
+    {{linebreaks .Order.Customer.Address}}
+  </p>
+  <p>
+    <a href="mailto:{{.Order.Customer.Email}}">{{.Order.Customer.Email}}</a>
+    {{with .Order.Customer.Phone}}<br>{{.}}{{end}}
+  </p>
+</div>
 
 <h2>Payment</h2>
-<table>
+<table class="facts">
   <tbody>
     <tr><th>Gateway</th><td>{{with .Order.Gateway}}{{.}}{{else}}—{{end}}</td></tr>
     <tr><th>Gateway reference</th><td>{{with .Order.GatewayRef}}{{.}}{{else}}—{{end}}</td></tr>
@@ -91,36 +106,44 @@ forward payment only.</p>
 */}}
 {{if .Entitlements}}
 <h2>Downloads</h2>
-<table>
-  <thead>
-    <tr><th>Product</th><th class="num">Times downloaded</th><th>State</th><th></th></tr>
-  </thead>
-  <tbody>
-  {{range .Entitlements}}
-    <tr>
-      <td>{{.ProductTitle}}{{with .VariantLabel}} <small>{{.}}</small>{{end}}</td>
-      <td class="num">{{.DownloadCount}}</td>
-      <td>{{if .Revoked}}revoked {{.RevokedAt.Format "2006-01-02"}}{{else}}active{{end}}</td>
-      <td>
-        {{if .Revoked}}
-        <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/restore">
-          {{template "csrf" $.CSRFToken}}
-          <button type="submit">Restore</button>
-        </form>
-        {{else}}
-        <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/revoke">
-          {{template "csrf" $.CSRFToken}}
-          <button type="submit">Revoke</button>
-        </form>
-        {{end}}
-      </td>
-    </tr>
-  {{end}}
-  </tbody>
-</table>
-<p><small>Revoking stops this buyer and nobody else. It takes effect on their next
-click; a download link they were handed in the last few minutes may still
-complete. Revoking is reversible.</small></p>
+<div class="scroll-x">
+  <table>
+    <thead>
+      <tr><th>Product</th><th class="num">Times downloaded</th><th>State</th><th></th></tr>
+    </thead>
+    <tbody>
+    {{range .Entitlements}}
+      <tr>
+        <td>{{.ProductTitle}}{{with .VariantLabel}} <small>{{.}}</small>{{end}}</td>
+        <td class="num">{{.DownloadCount}}</td>
+        <td>
+          {{if .Revoked}}
+            <span class="badge problem">revoked {{.RevokedAt.Format "2006-01-02"}}</span>
+          {{else}}
+            <span class="badge done">active</span>
+          {{end}}
+        </td>
+        <td>
+          {{if .Revoked}}
+          <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/restore">
+            {{template "csrf" $.CSRFToken}}
+            <button type="submit">Restore</button>
+          </form>
+          {{else}}
+          <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/revoke">
+            {{template "csrf" $.CSRFToken}}
+            <button class="quiet" type="submit">Revoke</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+<small class="hint">Revoking stops this buyer and nobody else. It takes effect on their
+next click; a download link they were handed in the last few minutes may still
+complete. Revoking is reversible.</small>
 {{end}}
 
 {{/*

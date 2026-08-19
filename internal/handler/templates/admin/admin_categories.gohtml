@@ -1,36 +1,40 @@
 {{define "content"}}
 
-<h1>Categories</h1>
-<p><a href="/admin/categories/new">New category</a></p>
+<div class="page-head">
+  <h1>Categories</h1>
+  <a class="button" href="/admin/categories/new">New category</a>
+</div>
 
 {{/*
   The delete notice. It says how many products were unlinked, because a delete
   that unlinked twelve products and one that unlinked none leave exactly the same
   page behind, and only one of those is what the operator expected.
 */}}
-{{if .Notice}}<p><strong>{{.Notice}}</strong></p>{{end}}
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
 
 {{if not .Categories}}
   <p>No categories yet. Products do not need one — a category is a way to group
   them, not something a product has to have.</p>
 {{else}}
-<table>
-  <thead>
-    <tr><th>Name</th><th>Slug</th><th>Position</th><th></th></tr>
-  </thead>
-  <tbody>
-  {{range .Categories}}
-    <tr>
-      <td>{{.Name}}</td>
-      <td>{{.Slug}}</td>
-      <td>{{.Position}}</td>
-      <td><a href="/admin/categories/{{.ID}}/edit">Edit</a></td>
-    </tr>
-  {{end}}
-  </tbody>
-</table>
-<p><small>Position is the display order — lower numbers first — because sorting by
-name would put "Apparel" ahead of "Books" for ever.</small></p>
+<div class="scroll-x">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Slug</th><th class="num">Position</th><th></th></tr>
+    </thead>
+    <tbody>
+    {{range .Categories}}
+      <tr>
+        <td>{{.Name}}</td>
+        <td><code>{{.Slug}}</code></td>
+        <td class="num">{{.Position}}</td>
+        <td><a href="/admin/categories/{{.ID}}/edit">Edit</a></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+<small class="hint">Position is the display order — lower numbers first — because
+sorting by name would put "Apparel" ahead of "Books" for ever.</small>
 {{end}}
 
 {{end}}

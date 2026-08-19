@@ -478,8 +478,16 @@ pre.raw {
   background: var(--paper-sunk);
   color: var(--ink-soft);
 
-  &.sold-out {
+  &.sold-out,
+  &.problem {
     color: var(--warn);
+    background: color-mix(in oklab, var(--warn) 8%, var(--paper-sunk));
+  }
+
+  /* The state worth noticing on a list of orders: this one took money. */
+  &.done {
+    color: var(--accent);
+    background: color-mix(in oklab, var(--accent) 8%, var(--paper-sunk));
   }
 }
 
@@ -657,8 +665,10 @@ button,
   }
 
   /* For the ones whose content has a known size — a position, a quantity. A
-     five-character box asking for a number reads as a number. */
-  &.narrow {
+     five-character box asking for a number reads as a number. The width goes on
+     the control, not the block, so the hint under it still gets a line to
+     itself. */
+  &.narrow > :where(input, select) {
     max-width: 12rem;
   }
 }
@@ -740,6 +750,34 @@ button,
   margin-block-start: var(--gap-md);
 }
 
+/* The top of a list page: its title and the one action that makes a new thing,
+   which belongs beside the title rather than orphaned on a line under it. */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  align-items: baseline;
+  justify-content: space-between;
+  margin-block-end: var(--gap-md);
+
+  > h1 {
+    margin-block-end: 0;
+  }
+}
+
+/* A table of key and value rather than of columns — the payment facts on an
+   order. The keys are labels, not data, so they get a fixed column and the
+   values line up down the page. */
+.facts {
+  max-width: 44rem;
+
+  th {
+    inline-size: 13rem;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+}
+
 .error {
   color: var(--warn);
   font-size: var(--text-small);
@@ -753,6 +791,12 @@ button,
   background: var(--paper-sunk);
   padding: var(--gap-sm) var(--gap);
   margin-block-end: var(--gap);
+
+  /* A notice that runs to several paragraphs — the oversold explanation on an
+     order — should not carry a paragraph gap inside its own padding. */
+  > :last-child {
+    margin-block-end: 0;
+  }
 
   &.problem {
     border-inline-start-color: var(--warn);
