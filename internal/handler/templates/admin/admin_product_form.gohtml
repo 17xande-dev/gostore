@@ -1,21 +1,41 @@
 {{define "content"}}
 
-<h1>{{if .IsNew}}New product{{else}}Edit product{{end}}</h1>
+<a class="back" href="/admin/products">← Products</a>
+<h1>{{if .IsNew}}New product{{else}}{{.Product.Title}}{{end}}</h1>
 
 <form method="post" action="{{if .IsNew}}/admin/products{{else}}/admin/products/{{.Product.ID}}{{end}}">
   {{template "csrf" .CSRFToken}}
-  <p>
-    <label>Title<br>
-      <input name="title" value="{{.Product.Title}}" required>
-    </label>
-    {{template "err" index .Errors "title"}}
-  </p>
-  <p>
-    <label>Slug<br>
-      <input name="slug" value="{{.Product.Slug}}" placeholder="derived from the title when left blank">
-    </label>
-    {{template "err" index .Errors "slug"}}
-  </p>
+
+  <fieldset class="panel">
+    <legend>Details</legend>
+    <div class="field">
+      <label for="title">Title</label>
+      <input id="title" name="title" value="{{.Product.Title}}" required>
+      {{template "err" index .Errors "title"}}
+    </div>
+    <div class="field">
+      <label for="slug">Slug</label>
+      <input id="slug" name="slug" value="{{.Product.Slug}}"
+             placeholder="derived from the title when left blank">
+      {{template "err" index .Errors "slug"}}
+    </div>
+    <div class="field">
+      <label for="description">Description</label>
+      <textarea id="description" name="description" rows="6">{{.Product.Description}}</textarea>
+      {{template "err" index .Errors "description"}}
+    </div>
+    {{/*
+      No image field here on purpose. An image is bytes this store holds — uploaded
+      below — and never a URL typed in, because a URL to somebody else's server can
+      change or vanish and a product page with a broken picture is worse than one with
+      none.
+    */}}
+    <div class="field">
+      <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
+      <small class="hint">Only active products with an active variant can be bought.</small>
+    </div>
+  </fieldset>
+
   {{/*
     Categories are checkboxes named alike, which is exactly what a form submits as
     a repeated parameter — so belonging to several needs no JavaScript, and the
@@ -23,89 +43,83 @@
     something. A shop that does not sort its products into sections simply ticks
     none.
   */}}
-  <fieldset>
+  <fieldset class="panel">
     <legend>Categories</legend>
     {{if not .Categories}}
-      <p><small>No categories yet. <a href="/admin/categories/new">Add one</a> if you
+      <p class="muted"><small>No categories yet. <a href="/admin/categories/new">Add one</a> if you
       want to group products.</small></p>
     {{else}}
-      {{range .Categories}}
-      <label>
-        <input type="checkbox" name="category" value="{{.ID}}"
-               {{if $.Product.InCategory .ID}}checked{{end}}> {{.Name}}
-      </label>
-      {{end}}
+      <div class="checks">
+        {{range .Categories}}
+        <label>
+          <input type="checkbox" name="category" value="{{.ID}}"
+                 {{if $.Product.InCategory .ID}}checked{{end}}> {{.Name}}
+        </label>
+        {{end}}
+      </div>
     {{end}}
     {{template "err" index .Errors "categories"}}
   </fieldset>
-  <p>
-    <label>Description<br>
-      <textarea name="description" rows="6" cols="60">{{.Product.Description}}</textarea>
-    </label>
-    {{template "err" index .Errors "description"}}
-  </p>
-  {{/*
-    No image field here on purpose. An image is bytes this store holds — uploaded
-    below — and never a URL typed in, because a URL to somebody else's server can
-    change or vanish and a product page with a broken picture is worse than one with
-    none.
-  */}}
+
   {{/*
     Physical or digital. Frozen once the product has been ordered, and while a
     digital product still has files attached — see kindLock. Rendered as text
     rather than a disabled select in that case, because a disabled control the
     server also refuses is two mechanisms where one is load-bearing.
   */}}
-  <p>
+  <fieldset class="panel">
+    <legend>Kind</legend>
     {{if .KindLocked}}
-      <strong>Kind:</strong> {{if .Product.Digital}}Digital download{{else}}Physical product{{end}}
-      <br><small>{{.KindLockReason}}</small>
+      <p>{{if .Product.Digital}}Digital download{{else}}Physical product{{end}}</p>
+      <small class="hint">{{.KindLockReason}}</small>
     {{else}}
-      <label>Kind<br>
-        <select name="kind">
+      <div class="field">
+        <label for="kind" class="visually-hidden">Kind</label>
+        <select id="kind" name="kind">
           <option value="physical" {{if not .Product.Digital}}selected{{end}}>Physical product — shipped</option>
           <option value="digital" {{if .Product.Digital}}selected{{end}}>Digital download — files</option>
         </select>
-      </label>
-      <br><small>A download has no stock and needs no delivery address.</small>
+        <small class="hint">A download has no stock and needs no delivery address.</small>
+      </div>
     {{end}}
     {{template "err" index .Errors "kind"}}
-  </p>
+  </fieldset>
+
   {{/*
     The option NAMES live on the product; the values live on each variant below.
     Naming them here rather than fixing them globally is what lets a t-shirt say
     Size and Colour, a book say Cover, and a recording say Format — without any of
     them inheriting headings that mean nothing for what they are.
   */}}
-  <fieldset>
+  <fieldset class="panel">
     <legend>Variant options</legend>
-    <p><small>Name what tells this product's variants apart. Leave all three blank
-    if there is only one version of it. Fill them in order.</small></p>
-    <p>
-      <label>Option 1
-        <input name="option1_name" value="{{.Product.Option1Name}}" size="12"
+    <small class="hint">Name what tells this product's variants apart. Leave all three
+    blank if there is only one version of it. Fill them in order.</small>
+    <div class="field-row">
+      <div class="field">
+        <label for="option1_name">Option 1</label>
+        <input id="option1_name" name="option1_name" value="{{.Product.Option1Name}}" size="12"
                placeholder="Size, Cover, Format">
-      </label>
-      {{template "err" index .Errors "option1_name"}}
-    </p>
-    <p>
-      <label>Option 2
-        <input name="option2_name" value="{{.Product.Option2Name}}" size="12"
+      </div>
+      <div class="field">
+        <label for="option2_name">Option 2</label>
+        <input id="option2_name" name="option2_name" value="{{.Product.Option2Name}}" size="12"
                placeholder="Colour">
-      </label>
-      {{template "err" index .Errors "option2_name"}}
-    </p>
-    <p>
-      <label>Option 3
-        <input name="option3_name" value="{{.Product.Option3Name}}" size="12">
-      </label>
-      {{template "err" index .Errors "option3_name"}}
-    </p>
+      </div>
+      <div class="field">
+        <label for="option3_name">Option 3</label>
+        <input id="option3_name" name="option3_name" value="{{.Product.Option3Name}}" size="12">
+      </div>
+    </div>
+    {{template "err" index .Errors "option1_name"}}
+    {{template "err" index .Errors "option2_name"}}
+    {{template "err" index .Errors "option3_name"}}
   </fieldset>
-  <p>
-    <label><input type="checkbox" name="active" value="1" {{if .Product.Active}}checked{{end}}> Active</label>
-  </p>
-  <p><button type="submit">Save product</button> <a href="/admin/products">Back</a></p>
+
+  <div class="actions">
+    <button type="submit">Save product</button>
+    <a class="button quiet" href="/admin/products">Cancel</a>
+  </div>
 </form>
 
 {{if not .IsNew}}
@@ -117,62 +131,90 @@
   <p><small>Variants can be added once the product is saved.</small></p>
 {{else}}
   <h2>Variants</h2>
-  <p><small>The variant is what a customer buys. A product with no options still
+  <small class="hint">The variant is what a customer buys. A product with no options still
   needs exactly one variant, with every option left blank.{{if .Product.Digital}}
   Each variant grants the files ticked against it below — so a recording sold as
-  audio and as video is two variants with different files.{{end}}</small></p>
+  audio and as video is two variants with different files.{{end}}</small>
 
-  {{if not .Product.Variants}}<p>No variants yet — this product cannot be bought.</p>{{end}}
+  {{if not .Product.Variants}}
+    <p class="notice problem">No variants yet — this product cannot be bought.</p>
+  {{end}}
 
   {{range .Product.Variants}}
-  <div>
+  <div class="panel">
     <form method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}">
       {{template "csrf" $.CSRFToken}}
-      <label>SKU <input name="sku" value="{{.SKU}}" required></label>
-      {{range $.Product.OptionsFor .}}
-      <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
-      {{end}}
-      <label>Price ({{$.Currency}}) <input name="price" value="{{money .PriceCents}}" size="8" required></label>
-      {{if $.Product.Digital}}
-        {{/* A download cannot run out, so the field would be a number nothing
-             reads. Submitted as 0 so the form still round-trips. */}}
-        <input type="hidden" name="stock_qty" value="0">
-      {{else}}
-        <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
-      {{end}}
-      <label><input type="checkbox" name="active" value="1" {{if .Active}}checked{{end}}> Active</label>
-      <button type="submit">Save</button>
-    </form>
-    <form method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}/delete">
-      {{template "csrf" $.CSRFToken}}
-      <button type="submit">Delete variant</button>
+      <div class="field-row">
+        <div class="field">
+          <label>SKU <input name="sku" value="{{.SKU}}" size="16" required></label>
+        </div>
+        {{range $.Product.OptionsFor .}}
+        <div class="field">
+          <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
+        </div>
+        {{end}}
+        <div class="field">
+          <label>Price ({{$.Currency}}) <input name="price" value="{{money .PriceCents}}" size="8" required></label>
+        </div>
+        {{if $.Product.Digital}}
+          {{/* A download cannot run out, so the field would be a number nothing
+               reads. Submitted as 0 so the form still round-trips. */}}
+          <input type="hidden" name="stock_qty" value="0">
+        {{else}}
+        <div class="field">
+          <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
+        </div>
+        {{end}}
+        <div class="field">
+          <label><input type="checkbox" name="active" value="1" {{if .Active}}checked{{end}}> Active</label>
+        </div>
+        <div class="field"><button type="submit">Save</button></div>
+      </div>
     </form>
     {{if eq $.VariantErrorID .ID}}{{template "variant_errors" $.VariantErrors}}{{end}}
+    <form class="actions" method="post" action="/admin/products/{{$.Product.ID}}/variants/{{.ID}}/delete">
+      {{template "csrf" $.CSRFToken}}
+      <button class="quiet" type="submit">Delete variant</button>
+    </form>
   </div>
   {{end}}
 
-  <h3>Add a variant</h3>
-  <form method="post" action="/admin/products/{{.Product.ID}}/variants">
-    {{template "csrf" .CSRFToken}}
-    <label>SKU <input name="sku" value="{{.VariantForm.SKU}}" required></label>
-    {{range .Product.OptionsWith .VariantForm.Options}}
-    <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
-    {{end}}
-    <label>Price ({{.Currency}}) <input name="price" value="{{.VariantForm.Price}}" size="8" required></label>
-    {{if .Product.Digital}}
-      <input type="hidden" name="stock_qty" value="0">
-    {{else}}
-      <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
-    {{end}}
-    <label><input type="checkbox" name="active" value="1" {{if .VariantForm.Active}}checked{{end}}> Active</label>
-    <button type="submit">Add variant</button>
-  </form>
-  {{if not .VariantErrorID}}{{template "variant_errors" .VariantErrors}}{{end}}
+  <fieldset class="panel">
+    <legend>Add a variant</legend>
+    <form method="post" action="/admin/products/{{.Product.ID}}/variants">
+      {{template "csrf" .CSRFToken}}
+      <div class="field-row">
+        <div class="field">
+          <label>SKU <input name="sku" value="{{.VariantForm.SKU}}" size="16" required></label>
+        </div>
+        {{range .Product.OptionsWith .VariantForm.Options}}
+        <div class="field">
+          <label>{{.Name}} <input name="option{{.Slot}}" value="{{.Value}}" size="8"></label>
+        </div>
+        {{end}}
+        <div class="field">
+          <label>Price ({{.Currency}}) <input name="price" value="{{.VariantForm.Price}}" size="8" required></label>
+        </div>
+        {{if .Product.Digital}}
+          <input type="hidden" name="stock_qty" value="0">
+        {{else}}
+        <div class="field">
+          <label>Stock <input name="stock_qty" value="{{.VariantForm.StockQty}}" size="5" required></label>
+        </div>
+        {{end}}
+        <div class="field">
+          <label><input type="checkbox" name="active" value="1" {{if .VariantForm.Active}}checked{{end}}> Active</label>
+        </div>
+        <div class="field"><button type="submit">Add variant</button></div>
+      </div>
+    </form>
+    {{if not .VariantErrorID}}{{template "variant_errors" .VariantErrors}}{{end}}
+  </fieldset>
 
   <h2>Delete</h2>
-  <form method="post" action="/admin/products/{{.Product.ID}}/delete">
+  <form class="actions" method="post" action="/admin/products/{{.Product.ID}}/delete">
     {{template "csrf" .CSRFToken}}
-    <button type="submit">Delete product</button>
+    <button class="quiet" type="submit">Delete product</button>
     <small>Refused once the product has been ordered — deactivate it instead.</small>
   </form>
   {{template "err" index .Errors "delete"}}
@@ -209,40 +251,41 @@
 
 {{template "err" index .Errors "image"}}
 
+<div class="panel">
 {{if .Product.HasImage}}
   <p><img src="{{image .Product.ImageKey}}" alt="{{.Product.Title}}" width="240"></p>
   {{/* The key and where it currently resolves to, since both are worth seeing when
        an image is not appearing. */}}
   <p><small><code>{{.Product.ImageKey}}</code><br>{{image .Product.ImageKey}}</small></p>
 {{else}}
-  <p>No image.</p>
+  <p class="muted">No image.</p>
 {{end}}
 
 {{if .UploadsEnabled}}
   <form method="post" action="/admin/products/{{.Product.ID}}/image" enctype="multipart/form-data">
     {{template "csrf" .CSRFToken}}
-    <p>
-      <label>{{if .Product.HasImage}}Replace{{else}}Upload{{end}} image
-        <input type="file" name="image" accept="{{.AcceptTypes}}" required>
-      </label>
-    </p>
-    <p>
+    <div class="field">
+      <label for="image">{{if .Product.HasImage}}Replace{{else}}Upload{{end}} image</label>
+      <input id="image" type="file" name="image" accept="{{.AcceptTypes}}" required>
+      <small class="hint">Up to {{.MaxUploadMB}} MB. JPEG, PNG, GIF or WebP.</small>
+    </div>
+    <div class="actions">
       <button type="submit">Upload</button>
-      <small>Up to {{.MaxUploadMB}} MB. JPEG, PNG, GIF or WebP.</small>
-    </p>
+    </div>
   </form>
 
   {{if .Product.HasImage}}
-  <form method="post" action="/admin/products/{{.Product.ID}}/image/delete">
+  <form class="actions" method="post" action="/admin/products/{{.Product.ID}}/image/delete">
     {{template "csrf" .CSRFToken}}
-    <button type="submit">Remove image</button>
+    <button class="quiet" type="submit">Remove image</button>
   </form>
   {{end}}
 {{else}}
-  <p><small>No image storage is configured, so products cannot have images. Set
+  <small class="hint">No image storage is configured, so products cannot have images. Set
   <code>IMAGE_DIR</code> to a directory this server can write to, or the
-  <code>BLOB_*</code> variables for object storage.</small></p>
+  <code>BLOB_*</code> variables for object storage.</small>
 {{end}}
+</div>
 {{end}}
 
 {{/*
@@ -252,6 +295,10 @@
   to a variant, so a conference recording's audio and video sets are two variants
   ticking different files — and a bundle variant ticks both without either file
   being uploaded twice.
+
+  One panel per file rather than a table: every row carries a form with its own
+  tick list and buttons, which a table row can only hold by spanning all of its
+  columns — headings that then label nothing.
 */}}
 {{define "product_files"}}
 <h2>Files</h2>
@@ -265,78 +312,86 @@
   that one is public.</p>
 {{else}}
   {{if not .Product.Variants}}
-    <p>Add a variant first. A file is only reachable through the variant that
-    grants it, so files uploaded now could not be bought.</p>
+    <p class="notice problem">Add a variant first. A file is only reachable through the
+    variant that grants it, so files uploaded now could not be bought.</p>
+  {{end}}
+
+  {{range $file := .Files}}
+  <div class="panel">
+    <form method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}">
+      {{template "csrf" $.CSRFToken}}
+      <div class="field-row">
+        <div class="field">
+          <label>Title <input name="title" value="{{$file.Title}}" size="30" required></label>
+        </div>
+        <div class="field">
+          <label>Position <input name="position" value="{{$file.Position}}" size="4" required></label>
+        </div>
+        <div class="field"><button type="submit">Save</button></div>
+      </div>
+      <small class="hint">{{$file.HumanSize}} · <code>{{$file.ContentType}}</code></small>
+      {{if $.Product.Variants}}
+      <div class="field">
+        <label>Included in</label>
+        <div class="checks">
+          {{range $.Product.Variants}}
+          <label>
+            <input type="checkbox" name="variant" value="{{.ID}}"
+                   {{if $file.InVariant .ID}}checked{{end}}>
+            {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
+          </label>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    </form>
+    <form class="actions" method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}/delete">
+      {{template "csrf" $.CSRFToken}}
+      <button class="quiet" type="submit">Delete file</button>
+      <small>Buyers who already have this keep working links, with one file
+      fewer. Check the download count first.</small>
+    </form>
+  </div>
   {{end}}
 
   {{if .Files}}
-  <table>
-    <thead>
-      <tr>
-        <th>Title</th><th class="num">Size</th><th>Included in</th>
-        <th class="num">Position</th><th></th>
-      </tr>
-    </thead>
-    <tbody>
-    {{range $file := .Files}}
-      <tr>
-        <td colspan="5">
-          <form method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}">
-            {{template "csrf" $.CSRFToken}}
-            <label>Title <input name="title" value="{{$file.Title}}" size="30" required></label>
-            <label>Position <input name="position" value="{{$file.Position}}" size="4" required></label>
-            <span>{{$file.HumanSize}} · <code>{{$file.ContentType}}</code></span>
-            {{range $.Product.Variants}}
-            <label>
-              <input type="checkbox" name="variant" value="{{.ID}}"
-                     {{if $file.InVariant .ID}}checked{{end}}>
-              {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
-            </label>
-            {{end}}
-            <button type="submit">Save</button>
-          </form>
-          <form method="post" action="/admin/products/{{$.Product.ID}}/files/{{$file.ID}}/delete">
-            {{template "csrf" $.CSRFToken}}
-            <button type="submit">Delete file</button>
-            <small>Buyers who already have this keep working links, with one file
-            fewer. Check the download count first.</small>
-          </form>
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-  <p><a href="/admin/products/{{.Product.ID}}/downloads">Download statistics</a></p>
+    <p><a href="/admin/products/{{.Product.ID}}/downloads">Download statistics</a></p>
   {{else}}
-    <p>No files yet.</p>
+    <p class="muted">No files yet.</p>
   {{end}}
 
-  <h3>Add a file</h3>
-  <form method="post" action="/admin/products/{{.Product.ID}}/files" enctype="multipart/form-data">
-    {{template "csrf" .CSRFToken}}
-    <p>
-      <label>File <input type="file" name="file" required></label>
-      <br><small>Up to {{.DownloadMaxLabel}}. Audio, video, PDF — anything a buyer
-      should receive. It goes to private storage and is only ever served to
-      somebody who has paid.</small>
-    </p>
-    <p>
-      <label>Title <input name="title" size="30" placeholder="defaults to the filename"></label>
-    </p>
-    {{if .Product.Variants}}
-    <fieldset>
-      <legend>Included in</legend>
-      {{range .Product.Variants}}
-      <label>
-        <input type="checkbox" name="variant" value="{{.ID}}">
-        {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
-      </label>
+  <fieldset class="panel">
+    <legend>Add a file</legend>
+    <form method="post" action="/admin/products/{{.Product.ID}}/files" enctype="multipart/form-data">
+      {{template "csrf" .CSRFToken}}
+      <div class="field">
+        <label for="file">File</label>
+        <input id="file" type="file" name="file" required>
+        <small class="hint">Up to {{.DownloadMaxLabel}}. Audio, video, PDF — anything a buyer
+        should receive. It goes to private storage and is only ever served to
+        somebody who has paid.</small>
+      </div>
+      <div class="field">
+        <label for="file_title">Title</label>
+        <input id="file_title" name="title" placeholder="defaults to the filename">
+      </div>
+      {{if .Product.Variants}}
+      <div class="field">
+        <label>Included in</label>
+        <div class="checks">
+          {{range .Product.Variants}}
+          <label>
+            <input type="checkbox" name="variant" value="{{.ID}}">
+            {{with .Label}}{{.}}{{else}}{{.SKU}}{{end}}
+          </label>
+          {{end}}
+        </div>
+        <small class="hint">A file with no variant ticked is stored but nobody can
+        download it.</small>
+      </div>
       {{end}}
-      <p><small>A file with no variant ticked is stored but nobody can download
-      it.</small></p>
-    </fieldset>
-    {{end}}
-    <p><button type="submit">Upload file</button></p>
-  </form>
+      <div class="actions"><button type="submit">Upload file</button></div>
+    </form>
+  </fieldset>
 {{end}}
 {{end}}

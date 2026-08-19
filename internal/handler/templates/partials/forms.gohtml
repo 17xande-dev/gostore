@@ -6,4 +6,4 @@
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
 
 {{/* err renders the message for one field, if the form recorded one. */}}
-{{define "err"}}{{with .}}<p><small><strong>{{.}}</strong></small></p>{{end}}{{end}}
+{{define "err"}}{{with .}}<p class="error">{{.}}</p>{{end}}{{end}}

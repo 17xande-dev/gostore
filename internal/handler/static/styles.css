@@ -640,8 +640,104 @@ button,
   }
 }
 
+/* One field, one row: the label above its control, the control filling the
+   column. A stack of these lines up on a single left edge without a table and
+   without every page restating a width. */
 .field {
   margin-block-end: var(--gap);
+  max-width: 34rem;
+
+  > label {
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  > :where(input, select, textarea) {
+    width: 100%;
+  }
+
+  /* For the ones whose content has a known size — a position, a quantity. A
+     five-character box asking for a number reads as a number. */
+  &.narrow {
+    max-width: 12rem;
+  }
+}
+
+/* The explanatory line under a field or a heading. Says what the input means
+   when the label alone cannot. */
+.hint {
+  display: block;
+  font-size: var(--text-small);
+  color: var(--ink-soft);
+  margin-block: var(--gap-xs) 0;
+  max-width: var(--measure);
+
+  /* A hint that introduces what follows — a group of tick boxes, another field —
+     needs the gap under it that a trailing one does not. */
+  &:not(:last-child) {
+    margin-block-end: var(--gap-sm);
+  }
+}
+
+/* A named group of fields, or one of the sections below a form. The admin's
+   long pages are several of these rather than one undivided run of inputs, so
+   what belongs together looks like it does. */
+.panel {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-md);
+  margin-block-end: var(--gap-md);
+  min-inline-size: 0;   /* a fieldset will not shrink below its content without this */
+
+  > legend {
+    font-weight: 600;
+    padding-inline: var(--gap-xs);
+  }
+
+  > :where(h2, h3):first-child {
+    margin-block-start: 0;
+  }
+
+  > :last-child {
+    margin-block-end: 0;
+  }
+}
+
+/* Fields that belong on one line: a variant's SKU, options, price and stock.
+   Each control keeps the width its `size` attribute asks for and the row wraps
+   rather than overflowing; aligning on the end edge puts the inputs on a shared
+   baseline whether or not a field has a label above it. */
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm) var(--gap);
+  align-items: end;
+
+  > .field {
+    margin-block-end: 0;
+    max-width: none;
+
+    > :where(input, select) {
+      width: auto;
+    }
+  }
+}
+
+/* A set of tick boxes read as a list rather than a column of blocks:
+   categories on a product, variants on a file. */
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm) var(--gap-md);
+}
+
+/* The buttons at the end of a form, and the quiet link beside them. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  align-items: center;
+  margin-block-start: var(--gap-md);
 }
 
 .error {
