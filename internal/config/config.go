@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -66,11 +67,15 @@ type Config struct {
 	// Either way it is stored only as a hash and is spent by the first claim.
 	SetupToken string
 
-	// PayFast is the payment gateway's configuration. It is a flat struct here
-	// rather than the gateway package's own Config so that config depends on no
-	// gateway: main assembles the two, which is also where a second gateway
-	// would be chosen.
-	PayFast PayFast
+	// PayFast and SnapScan are the payment gateways' configuration. They are flat
+	// structs here rather than the gateway packages' own Configs so that config
+	// depends on no gateway: main assembles them, which is also where a gateway is
+	// chosen.
+	//
+	// Either may be left unset, and at least one must be set — a store that cannot
+	// take a payment is not a store. Both set means the shopper picks at checkout.
+	PayFast  PayFast
+	SnapScan SnapScan
 
 	// SMTP is how transactional mail leaves. It is required, unless Graph is
 	// configured instead — see the refusal in Load, and the reason recorded
@@ -238,6 +243,42 @@ type PayFast struct {
 	AllowAnySourceIP bool
 }
 
+// Configured reports whether PayFast is switched on. The merchant id is the
+// signal, and the key is then required — half a credential is a configuration
+// mistake, not a decision to run without the gateway.
+func (p PayFast) Configured() bool { return p.MerchantID != "" }
+
+// SnapScan is what the SnapScan gateway needs from the environment.
+//
+// SnapScan is South Africa's QR payment app: the shopper opens a URL this store
+// builds, on a phone through the app or on a desktop by scanning the QR code it
+// renders to.
+//
+// Two absences are deliberate. There is no sandbox setting, because SnapScan has
+// no sandbox — configuring this at all means real money, which is the reverse of
+// PAYFAST_SANDBOX's safe default. And there is no notify URL, because SnapScan's
+// support configures the webhook address on the merchant account rather than
+// reading it from each payment; it must point at BASE_URL + the callback route,
+// which on a development machine means a tunnel.
+type SnapScan struct {
+	// SnapCode identifies the merchant. Its presence is what enables the gateway.
+	SnapCode string
+	// APIKey reads payments back from SnapScan's merchant API, which is how a
+	// notification is confirmed.
+	APIKey string
+	// WebhookAuthKey is the shared secret a notification's HMAC is computed with.
+	// Required whenever the gateway is enabled: without it, nothing about a
+	// notification can be checked, and the callback route is the one thing that
+	// can mark an order paid.
+	WebhookAuthKey string
+	// ValidationKey enables the Secure QR Payload signature, which SnapScan
+	// switches on per account on request. Optional — see snapscan.Config.
+	ValidationKey string
+}
+
+// Configured reports whether SnapScan is switched on.
+func (s SnapScan) Configured() bool { return s.SnapCode != "" }
+
 // Blob is object storage for product images, against anything speaking the S3
 // API — Cloudflare R2, Google Cloud Storage in interoperability mode, or MinIO.
 //
@@ -334,6 +375,11 @@ type RateLimits struct {
 	// a throttled notification is retried, but throttling a busy shop's genuine
 	// traffic delays real payments.
 	CallbackPerMinute int
+	// StatusPerMinute guards the checkout's payment-status poll, which a QR
+	// hand-over page asks for every few seconds while the shopper pays on their
+	// phone. It reads one order by the cart cookie and costs a single indexed
+	// query, so the allowance is roughly "twice what an open page asks for".
+	StatusPerMinute int
 	// DownloadPerMinute guards the buyer's download links, which mint a signed URL
 	// per click. Generous on purpose: somebody working through a conference
 	// recording's twenty files is ordinary use, and a limit that fires on it would
@@ -430,6 +476,7 @@ func Load() (Config, error) {
 			LoginPerMinute:    10,
 			CheckoutPerMinute: 20,
 			CallbackPerMinute: 120,
+			StatusPerMinute:   30,
 			DownloadPerMinute: 60,
 		},
 		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
@@ -488,6 +535,12 @@ func Load() (Config, error) {
 			Sandbox:   boolEnv("PAYFAST_SANDBOX", true),
 			NotifyURL: strings.TrimSpace(os.Getenv("PAYFAST_NOTIFY_URL")),
 		},
+		SnapScan: SnapScan{
+			SnapCode:       strings.TrimSpace(os.Getenv("SNAPSCAN_SNAP_CODE")),
+			APIKey:         strings.TrimSpace(os.Getenv("SNAPSCAN_API_KEY")),
+			WebhookAuthKey: strings.TrimSpace(os.Getenv("SNAPSCAN_WEBHOOK_AUTH_KEY")),
+			ValidationKey:  strings.TrimSpace(os.Getenv("SNAPSCAN_VALIDATION_KEY")),
+		},
 	}
 	c.CookieSecure = strings.HasPrefix(c.BaseURL, "https://")
 	// One signal, three uses: Secure cookies, HSTS, and whether an error page may
@@ -498,14 +551,33 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")
 	}
-	if c.PayFast.MerchantID == "" {
-		missing = append(missing, "PAYFAST_MERCHANT_ID")
-	}
-	if c.PayFast.MerchantKey == "" {
+	// Each gateway's credentials are required only when that gateway is switched
+	// on, so a SnapScan-only store needs no PayFast account and the reverse.
+	if c.PayFast.Configured() && c.PayFast.MerchantKey == "" {
 		missing = append(missing, "PAYFAST_MERCHANT_KEY")
+	}
+	if c.SnapScan.Configured() {
+		if c.SnapScan.APIKey == "" {
+			missing = append(missing, "SNAPSCAN_API_KEY")
+		}
+		// Not optional. A notification with nothing to check its signature
+		// against is an unauthenticated request that can mark orders paid, and
+		// the callback route is unauthenticated by definition — a payment
+		// provider cannot be given a session or a CSRF token.
+		if c.SnapScan.WebhookAuthKey == "" {
+			missing = append(missing, "SNAPSCAN_WEBHOOK_AUTH_KEY")
+		}
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
+	}
+
+	// A store with no gateway at all starts, serves a catalog, and fails at the
+	// one moment it matters. Refused here instead.
+	if !c.PayFast.Configured() && !c.SnapScan.Configured() {
+		return Config{}, errors.New("config: no payment gateway is configured: " +
+			"set PAYFAST_MERCHANT_ID (and PAYFAST_MERCHANT_KEY), or SNAPSCAN_SNAP_CODE " +
+			"(and SNAPSCAN_API_KEY, SNAPSCAN_WEBHOOK_AUTH_KEY), or both")
 	}
 
 	// There is no admin credential in the environment any more: accounts live in
@@ -550,7 +622,7 @@ func Load() (Config, error) {
 	//
 	// Refused at boot, where it costs one message, rather than at the first
 	// checkout, where it costs a customer.
-	if !c.PayFast.Sandbox && c.PayFast.MerchantID == payFastSandboxMerchantID {
+	if c.PayFast.Configured() && !c.PayFast.Sandbox && c.PayFast.MerchantID == payFastSandboxMerchantID {
 		return Config{}, fmt.Errorf(
 			"config: PAYFAST_SANDBOX is false but PAYFAST_MERCHANT_ID is still %s, "+
 				"which is PayFast's published sandbox merchant id — set your own "+
@@ -601,6 +673,7 @@ func Load() (Config, error) {
 		{"RATE_LIMIT_LOGIN_PER_MINUTE", &c.RateLimits.LoginPerMinute},
 		{"RATE_LIMIT_CHECKOUT_PER_MINUTE", &c.RateLimits.CheckoutPerMinute},
 		{"RATE_LIMIT_CALLBACK_PER_MINUTE", &c.RateLimits.CallbackPerMinute},
+		{"RATE_LIMIT_STATUS_PER_MINUTE", &c.RateLimits.StatusPerMinute},
 		{"RATE_LIMIT_DOWNLOAD_PER_MINUTE", &c.RateLimits.DownloadPerMinute},
 	} {
 		if v, ok := os.LookupEnv(l.key); ok {

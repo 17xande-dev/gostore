@@ -115,10 +115,29 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 // newStore is newUnclaimedStore with one enabled owner already in it, which is
 // the state every test but the setup-flow ones wants: an admin area with an
 // account to sign in to.
+// registryOf wraps gateways for Deps. A test that wants to exercise the chooser
+// passes two; most pass one, and get a checkout with no chooser at all — which is
+// the production shape for a store that has configured a single provider.
+func registryOf(t *testing.T, gateways ...payment.Gateway) payment.Registry {
+	t.Helper()
+	r, err := payment.NewRegistry(gateways...)
+	if err != nil {
+		t.Fatalf("payment.NewRegistry: %v", err)
+	}
+	return r
+}
+
 func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Helper()
+	return newStoreWith(t, nil, edit...)
+}
 
-	s := newUnclaimedStore(t, edit...)
+// newStoreWith is newStore with more payment gateways than the default one, for
+// the tests about a store that offers a choice.
+func newStoreWith(t *testing.T, extraGateways []payment.Gateway, edit ...func(*config.Config)) *shop {
+	t.Helper()
+
+	s := newUnclaimedStoreWith(t, extraGateways, edit...)
 	s.owner = mustAccount(t, s, testEmail, testPassword, auth.RoleOwner)
 	return s
 }
@@ -127,6 +146,11 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 // a fresh deployment is before anybody claims it. Only the setup-flow tests want
 // this; everything else takes newStore.
 func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
+	t.Helper()
+	return newUnclaimedStoreWith(t, nil, edit...)
+}
+
+func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit ...func(*config.Config)) *shop {
 	t.Helper()
 
 	cfg := testConfig()
@@ -152,18 +176,18 @@ func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
 	h := New(Deps{
-		Config:  cfg,
-		Log:     log,
-		Tmpl:    tmpl,
-		Catalog: store,
-		Carts:   cart.NewStore(pool),
-		Orders:  orderStore,
-		Grants:  grants,
-		Gateway: gateway,
-		Mail:    mail,
-		Images:  images,
-		Files:   files,
-		Users:   users,
+		Config:   cfg,
+		Log:      log,
+		Tmpl:     tmpl,
+		Catalog:  store,
+		Carts:    cart.NewStore(pool),
+		Orders:   orderStore,
+		Grants:   grants,
+		Gateways: registryOf(t, append([]payment.Gateway{gateway}, extraGateways...)...),
+		Mail:     mail,
+		Images:   images,
+		Files:    files,
+		Users:    users,
 	})
 
 	mux := http.NewServeMux()

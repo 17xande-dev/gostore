@@ -61,9 +61,11 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}()
 
-	// The {gateway} segment keeps the route stable if a second gateway is ever
-	// added. Today exactly one name matches.
-	if name := r.PathValue("gateway"); name != h.gateway.Name() {
+	// The {gateway} segment names which provider is claiming to have taken money,
+	// and only a configured one is listened to.
+	name := r.PathValue("gateway")
+	gateway, err := h.gateways.Lookup(name)
+	if err != nil {
 		h.log.Warn("payment callback for an unknown gateway", "gateway", name, "remote", r.RemoteAddr)
 		return
 	}
@@ -75,23 +77,25 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sourceIP := middleware.ClientIP(r, h.cfg.TrustProxyIP)
-	cb, err := h.gateway.ParseCallback(r.Context(), body, sourceIP)
+	cb, err := gateway.ParseCallback(r.Context(), payment.Notification{
+		Body: body, Header: r.Header, SourceIP: sourceIP,
+	})
 	if err != nil {
 		// Which check failed is the whole diagnostic value of this log line: a
 		// signature mismatch is usually a passphrase that disagrees with the
 		// dashboard, an IP rejection is usually a proxy or a changed range, and a
 		// failed confirmation is usually neither.
 		h.log.Warn("rejected payment callback",
-			"gateway", h.gateway.Name(), "source_ip", sourceIP, "error", err, "body_bytes", len(body))
+			"gateway", gateway.Name(), "source_ip", sourceIP, "error", err, "body_bytes", len(body))
 		return
 	}
 
-	h.applyCallback(r, cb)
+	h.applyCallback(r, gateway, cb)
 }
 
 // applyCallback is everything that happens once a notification is proven genuine.
-func (h *Handler) applyCallback(r *http.Request, cb payment.Callback) {
-	log := h.log.With("gateway", h.gateway.Name(), "order", cb.OrderID,
+func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb payment.Callback) {
+	log := h.log.With("gateway", gateway.Name(), "order", cb.OrderID,
 		"gateway_ref", cb.Ref, "gateway_status", cb.Status)
 
 	order, err := h.orders.Get(r.Context(), cb.OrderID)
@@ -108,18 +112,28 @@ func (h *Handler) applyCallback(r *http.Request, cb payment.Callback) {
 		return
 	}
 
+	// A gateway only ever proves things about its own account, so a genuine
+	// notification from one provider must not be allowed to settle an order
+	// placed through another. Without this check, anybody able to pay a snap code
+	// could close out a PayFast order by quoting its reference.
+	if order.Gateway != gateway.Name() {
+		log.Warn("payment callback names an order placed through a different gateway",
+			"order_gateway", order.Gateway)
+		return
+	}
+
 	p := orders.Payment{
-		Gateway: h.gateway.Name(),
+		Gateway: gateway.Name(),
 		Ref:     cb.Ref,
 		Status:  cb.Status,
 		Amount:  cb.Amount,
 		Raw:     string(cb.Raw),
 	}
 
-	if !cb.Paid {
+	if !cb.Paid() {
 		// Cancelled, failed, or still pending at the gateway. Recorded, never acted
 		// on, and never allowed to contradict a payment that already succeeded.
-		status := unpaidStatus(cb.Status)
+		status := unpaidStatus(cb.Outcome)
 		if err := h.orders.RecordUnpaid(r.Context(), order.ID, status, p); err != nil {
 			log.Error("record unpaid order", "error", err)
 			return
@@ -182,14 +196,18 @@ func (h *Handler) applyCallback(r *http.Request, cb payment.Callback) {
 	h.sendOrderEmails(r.Context(), order, result.Oversold, result.Grants)
 }
 
-// unpaidStatus maps a gateway's own vocabulary onto this store's. Anything
-// unrecognised stays pending rather than being called a failure: a status this
-// code has not seen before is not evidence that a payment will not arrive.
-func unpaidStatus(gatewayStatus string) orders.Status {
-	switch gatewayStatus {
-	case "CANCELLED", "cancelled":
+// unpaidStatus maps a normalised outcome onto this store's order status.
+//
+// It reads payment.Outcome rather than the gateway's own words: PayFast says
+// CANCELLED and SnapScan says error, and each provider maps its vocabulary in its
+// own package so that adding a third does not mean editing this handler. An
+// outcome this code cannot place stays pending — not knowing a payment failed is
+// not the same as knowing it did.
+func unpaidStatus(o payment.Outcome) orders.Status {
+	switch o {
+	case payment.OutcomeCancelled:
 		return orders.StatusCancelled
-	case "FAILED", "failed":
+	case payment.OutcomeFailed:
 		return orders.StatusFailed
 	default:
 		return orders.StatusPending

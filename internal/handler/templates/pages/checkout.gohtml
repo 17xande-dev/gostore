@@ -73,6 +73,30 @@
   as soon as the payment goes through.</p>
   {{end}}
 
+  {{/*
+    How to pay. One configured gateway renders a hidden field and no question —
+    nobody should be asked to choose between one thing — and two or more render
+    radios. Either way the form submits a `gateway` field, so the handler has one
+    path and not two, and an unrecognised name is refused rather than defaulted:
+    paying through a provider the shopper did not pick is not an improvement on an
+    error message.
+  */}}
+  {{if gt (len .Gateways) 1}}
+  <fieldset>
+    <legend>How would you like to pay?</legend>
+    {{range .Gateways}}
+    <p>
+      <label>
+        <input type="radio" name="gateway" value="{{.Name}}"{{if eq .Name $.Form.Gateway}} checked{{end}}>
+        {{.Label}}
+      </label>
+    </p>
+    {{end}}
+  </fieldset>
+  {{else}}
+  <input type="hidden" name="gateway" value="{{.Form.Gateway}}">
+  {{end}}
+
   <button type="submit">Pay {{.Currency}} {{money .Cart.TotalCents}}</button>
 </form>
 {{end}}

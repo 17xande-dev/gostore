@@ -27,33 +27,73 @@ type Fake struct {
 	// source IP outside the allowlist, or a failed server-to-server check.
 	Reject bool
 
+	// Kind is the hand-over shape this fake produces. The zero value is a form
+	// post; a test that wants the QR path sets HandoverLink. Both shapes are
+	// worth exercising from the handler, since they render different pages.
+	Kind HandoverKind
+
+	// name and label let a test build two distinct fakes, which is what a
+	// multi-gateway checkout needs.
+	name, label string
+
 	mu       sync.Mutex
 	requests []Request
 }
 
-// NewFake returns a Fake gateway.
-func NewFake() *Fake { return &Fake{} }
+// NewFake returns a Fake gateway that hands over by form post.
+func NewFake() *Fake { return &Fake{name: "fake", label: "Fake gateway"} }
 
-func (f *Fake) Name() string { return "fake" }
+// NewFakeNamed returns a Fake with a given name and label, for tests that need
+// more than one gateway configured at once.
+func NewFakeNamed(name, label string) *Fake { return &Fake{name: name, label: label} }
 
-func (f *Fake) FormActionOrigin() string { return "https://gateway.example" }
+func (f *Fake) Name() string { return f.name }
 
-// BuildRedirectForm records the request and returns a form that would post to
-// nowhere. The recorded requests are what a test asserts the checkout handed
-// over.
-func (f *Fake) BuildRedirectForm(r Request) (string, []Field, error) {
+func (f *Fake) Label() string { return f.label }
+
+// Currency matches the store's default so a test config needs no adjusting.
+func (f *Fake) Currency() string { return "ZAR" }
+
+func (f *Fake) CSP() CSPOrigins {
+	c := CSPOrigins{}
+	switch f.Kind {
+	case HandoverLink:
+		c.ImgSrc = "https://gateway.example"
+	default:
+		c.FormAction = "https://gateway.example"
+	}
+	return c
+}
+
+// Handover records the request and returns a hand-over that leads nowhere. The
+// recorded requests are what a test asserts the checkout handed over.
+func (f *Fake) Handover(r Request) (Handover, error) {
 	f.mu.Lock()
 	f.requests = append(f.requests, r)
 	f.mu.Unlock()
 
-	return f.FormActionOrigin() + "/pay", []Field{
-		{Name: "order_id", Value: r.OrderID},
-		{Name: "amount", Value: strconv.FormatInt(r.AmountCents, 10)},
-		{Name: "signature", Value: "fake-signature"},
+	if f.Kind == HandoverLink {
+		action := "https://gateway.example/qr/fake?id=" + url.QueryEscape(r.OrderID) +
+			"&amount=" + strconv.FormatInt(r.AmountCents, 10)
+		return Handover{
+			Kind:       HandoverLink,
+			Action:     action,
+			QRImageURL: "https://gateway.example/qr/fake.svg?id=" + url.QueryEscape(r.OrderID),
+		}, nil
+	}
+
+	return Handover{
+		Kind:   HandoverPostForm,
+		Action: "https://gateway.example/pay",
+		Fields: []Field{
+			{Name: "order_id", Value: r.OrderID},
+			{Name: "amount", Value: strconv.FormatInt(r.AmountCents, 10)},
+			{Name: "signature", Value: "fake-signature"},
+		},
 	}, nil
 }
 
-// Requests returns every request handed to BuildRedirectForm, in order.
+// Requests returns every request handed to Handover, in order.
 func (f *Fake) Requests() []Request {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -63,13 +103,13 @@ func (f *Fake) Requests() []Request {
 // ParseCallback reads a form-encoded body with the fields FakeCallbackBody
 // writes. It authenticates nothing beyond honouring Reject — proving a callback
 // genuine is the one thing a fake cannot stand in for, which is why the real
-// implementation's validation has its own tests.
-func (f *Fake) ParseCallback(_ context.Context, body []byte, _ string) (Callback, error) {
+// implementations' validation have their own tests.
+func (f *Fake) ParseCallback(_ context.Context, n Notification) (Callback, error) {
 	if f.Reject {
 		return Callback{}, ErrFakeRejected
 	}
 
-	values, err := url.ParseQuery(string(body))
+	values, err := url.ParseQuery(string(n.Body))
 	if err != nil {
 		return Callback{}, fmt.Errorf("payment: fake: parse body: %w", err)
 	}
@@ -81,14 +121,24 @@ func (f *Fake) ParseCallback(_ context.Context, body []byte, _ string) (Callback
 	}
 
 	status := values.Get("status")
+	outcome := OutcomePending
+	switch status {
+	case "paid":
+		outcome = OutcomePaid
+	case "failed":
+		outcome = OutcomeFailed
+	case "cancelled":
+		outcome = OutcomeCancelled
+	}
+
 	return Callback{
 		OrderID:     values.Get("order_id"),
 		Ref:         values.Get("ref"),
 		Status:      status,
-		Paid:        status == "paid",
+		Outcome:     outcome,
 		Amount:      amount,
 		AmountCents: cents,
-		Raw:         body,
+		Raw:         n.Body,
 	}, nil
 }
 

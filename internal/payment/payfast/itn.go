@@ -59,10 +59,13 @@ const StatusComplete = "COMPLETE"
 
 // ParseCallback authenticates one notification and normalises it.
 //
-// body must be the raw request body, unmodified. Every check below depends on the
-// exact bytes: re-serialising a parsed form reorders fields and re-encodes values,
-// which invalidates the signature and the server-to-server check both.
-func (g *Gateway) ParseCallback(ctx context.Context, body []byte, sourceIP string) (payment.Callback, error) {
+// n.Body must be the raw request body, unmodified. Every check below depends on
+// the exact bytes: re-serialising a parsed form reorders fields and re-encodes
+// values, which invalidates the signature and the server-to-server check both.
+// PayFast puts nothing in the headers, so n.Header is unread here — SnapScan is
+// where that part of the Notification earns its place.
+func (g *Gateway) ParseCallback(ctx context.Context, n payment.Notification) (payment.Callback, error) {
+	body, sourceIP := n.Body, n.SourceIP
 	if len(body) == 0 {
 		return payment.Callback{}, fmt.Errorf("%w: empty body", ErrMalformed)
 	}
@@ -109,11 +112,27 @@ func (g *Gateway) ParseCallback(ctx context.Context, body []byte, sourceIP strin
 		OrderID:     field(signed, fieldPaymentID),
 		Ref:         field(signed, fieldGatewayRef),
 		Status:      status,
-		Paid:        status == StatusComplete,
+		Outcome:     outcome(status),
 		Amount:      amount,
 		AmountCents: cents,
 		Raw:         body,
 	}, nil
+}
+
+// outcome maps PayFast's payment_status onto the store's vocabulary. Anything
+// unrecognised stays pending rather than being called a failure: a status this
+// code has not seen before is not evidence that a payment will not arrive.
+func outcome(status string) payment.Outcome {
+	switch status {
+	case StatusComplete:
+		return payment.OutcomePaid
+	case "CANCELLED":
+		return payment.OutcomeCancelled
+	case "FAILED":
+		return payment.OutcomeFailed
+	default:
+		return payment.OutcomePending
+	}
 }
 
 // parseITN splits the body into the fields the signature covers, in the order

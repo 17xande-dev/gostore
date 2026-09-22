@@ -1,25 +1,68 @@
 {{/*
-  The hand-over to the gateway. This is a real cross-origin form submission, not a
-  redirect, because the gateway wants the fields posted to it — which is why the
-  CSP has to name the gateway's origin in form-action, and why the vendored
-  submit-on-load script exists: with script-src 'self' and no inline script, an
-  onload attribute would simply be blocked.
+  The hand-over to the gateway, in the two shapes a gateway comes in.
 
-  The button is not a fallback nobody sees. Without JavaScript it is the whole
-  mechanism, and it is deliberately labelled so that pressing it is obviously the
-  right thing to do.
+  A form post (PayFast) is a real cross-origin submission, not a redirect, because
+  the gateway wants the fields posted to it — which is why the CSP has to name the
+  gateway's origin in form-action, and why the vendored submit-on-load script
+  exists: with script-src 'self' and no inline script, an onload attribute would
+  simply be blocked. The button is not a fallback nobody sees: without JavaScript
+  it is the whole mechanism, and it is deliberately labelled so that pressing it is
+  obviously the right thing to do.
+
+  A link (SnapScan) is not submitted for the shopper at all, and must not be: the
+  page is the instructions, and a page that navigates away before it is read is no
+  instructions. It shows both ways to pay, because one page serves two devices —
+  the QR code for a desktop, where the phone doing the paying is not the thing
+  reading the screen, and the button for a phone, where the same URL opens the
+  SnapScan app directly. Which is emphasised is decided by CSS at a width, not by
+  sniffing a user agent here.
 */}}
 {{define "content"}}
 
+{{if .Handover.IsLink}}
+
+<h1>Pay with {{.GatewayLabel}}</h1>
+<p>Order <strong>{{.Order.Reference}}</strong> — {{.Currency}} {{money .Order.TotalCents}}</p>
+
+<div class="qr-handover">
+  <a class="qr-handover-button" href="{{.Handover.Action}}">Open {{.GatewayLabel}} to pay</a>
+
+  <figure class="qr-handover-code">
+    {{/*
+      No width or height attributes: SnapScan's documentation is explicit that
+      setting them stretches the code and makes it unscannable. The size comes
+      from the stylesheet, and from the snap_code_size the image URL asks for.
+    */}}
+    <img src="{{.Handover.QRImageURL}}" alt="{{.GatewayLabel}} payment code for order {{.Order.Reference}}">
+    <figcaption>Scan this with the {{.GatewayLabel}} app on your phone.</figcaption>
+  </figure>
+</div>
+
+{{/*
+  Nothing here redirects, so the page asks instead: it polls for the order's
+  status and says so when the money arrives. Without JavaScript it shows the
+  waiting message and the confirmation still arrives by email, which is the
+  ordinary failure mode and an acceptable one.
+*/}}
+<div id="payment-status" hx-get="/cart/checkout/status" hx-trigger="load delay:5s" hx-swap="outerHTML">
+  <p class="muted">Your confirmation is emailed as soon as the payment goes through.</p>
+</div>
+
+<p><a href="/cart">← Back to your cart</a></p>
+
+{{else}}
+
 <h1>Sending you to pay</h1>
 <p>Order <strong>{{.Order.Reference}}</strong> — {{.Currency}} {{money .Order.TotalCents}}</p>
-<p>You are being handed over to {{.Gateway}} to pay. If nothing happens, press the button.</p>
+<p>You are being handed over to {{.GatewayLabel}} to pay. If nothing happens, press the button.</p>
 
-<form id="gateway-redirect" method="post" action="{{.Action}}">
-  {{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+<form id="gateway-redirect" method="post" action="{{.Handover.Action}}">
+  {{range .Handover.Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
   {{end}}
-  <button type="submit">Continue to {{.Gateway}}</button>
+  <button type="submit">Continue to {{.GatewayLabel}}</button>
 </form>
 <script src="{{asset "redirect.js"}}" defer></script>
+
+{{end}}
 
 {{end}}

@@ -215,23 +215,31 @@ func New(cfg Config) (*Gateway, error) {
 
 func (g *Gateway) Name() string { return "payfast" }
 
-func (g *Gateway) FormActionOrigin() string { return g.origin }
+func (g *Gateway) Label() string { return "Card, EFT or Instant EFT (PayFast)" }
 
-// BuildRedirectForm returns PayFast's process URL and the fields to post to it.
+func (g *Gateway) Currency() string { return Currency }
+
+// CSP: the hand-over is a real cross-origin form post, so PayFast's origin has to
+// be in form-action or the browser blocks the submit. It loads no images.
+func (g *Gateway) CSP() payment.CSPOrigins {
+	return payment.CSPOrigins{FormAction: g.origin}
+}
+
+// Handover returns PayFast's process URL and the fields to post to it.
 //
 // The field order below is the order they are signed in and the order they must
 // be submitted in. Blank values are dropped entirely rather than submitted empty:
 // PayFast excludes blank fields when it verifies, so submitting one that was not
 // signed — or signing one that is not submitted — is a signature mismatch.
-func (g *Gateway) BuildRedirectForm(r payment.Request) (string, []payment.Field, error) {
+func (g *Gateway) Handover(r payment.Request) (payment.Handover, error) {
 	if r.Currency != Currency {
-		return "", nil, fmt.Errorf("%w, not %s", ErrCurrency, r.Currency)
+		return payment.Handover{}, fmt.Errorf("%w, not %s", ErrCurrency, r.Currency)
 	}
 	if r.AmountCents < MinAmountCents {
-		return "", nil, ErrAmount
+		return payment.Handover{}, ErrAmount
 	}
 	if r.OrderID == "" {
-		return "", nil, errors.New("payfast: request has no order id")
+		return payment.Handover{}, errors.New("payfast: request has no order id")
 	}
 
 	fields := make([]payment.Field, 0, 12)
@@ -256,7 +264,7 @@ func (g *Gateway) BuildRedirectForm(r payment.Request) (string, []payment.Field,
 	add("item_name", truncate(r.ItemName, itemNameMaxLen))
 
 	fields = append(fields, payment.Field{Name: "signature", Value: sign(fields, g.cfg.Passphrase)})
-	return g.processURL, fields, nil
+	return payment.Handover{Kind: payment.HandoverPostForm, Action: g.processURL, Fields: fields}, nil
 }
 
 // sign is the signature, in both directions: MD5 of the parameter string.

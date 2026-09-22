@@ -27,6 +27,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/payment/payfast"
+	"github.com/17xande-dev/gostore/internal/payment/snapscan"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/mailer/msauth"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -106,7 +107,7 @@ func run() error {
 		return err
 	}
 
-	gateway, err := newGateway(cfg, log)
+	gateways, err := newGateways(cfg, log)
 	if err != nil {
 		return err
 	}
@@ -156,18 +157,18 @@ func run() error {
 	carts := cart.NewStore(pool)
 	cat := catalog.NewStore(pool)
 	h := handler.New(handler.Deps{
-		Config:  cfg,
-		Log:     log,
-		Tmpl:    tmpl,
-		Catalog: cat,
-		Carts:   carts,
-		Orders:  orders.NewStore(pool),
-		Grants:  downloads.NewStore(pool, cat),
-		Gateway: gateway,
-		Mail:    mail,
-		Images:  images,
-		Files:   files,
-		Users:   users,
+		Config:   cfg,
+		Log:      log,
+		Tmpl:     tmpl,
+		Catalog:  cat,
+		Carts:    carts,
+		Orders:   orders.NewStore(pool),
+		Grants:   downloads.NewStore(pool, cat),
+		Gateways: gateways,
+		Mail:     mail,
+		Images:   images,
+		Files:    files,
+		Users:    users,
 	})
 
 	// Abandoned carts and expired admin sessions are swept in-process, on this
@@ -177,7 +178,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, gateway, users, pool, log),
+		Handler:           routes(cfg, h, gateways, users, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -297,18 +298,47 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 	return nil
 }
 
-// newGateway builds the payment gateway. PayFast is the only one, so this is a
-// constructor rather than a registry — but it is the one place a second gateway
-// would be chosen, which is why the rest of the server only ever sees the
-// payment.Gateway interface.
-func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
-	// PayFast settles in ZAR and nothing else. Discovering that at the first
-	// checkout, after an order row already exists, is worse than at boot.
-	if cfg.Currency != payfast.Currency {
-		return nil, fmt.Errorf("config: CURRENCY is %q, but PayFast settles in %s only",
-			cfg.Currency, payfast.Currency)
+// newGateways builds every payment gateway this deployment has configured, in
+// the order the checkout will offer them.
+//
+// This is the one place a gateway is chosen. Everything downstream sees only
+// payment.Registry and payment.Gateway, which is what keeps "add a gateway" to a
+// package and a few lines here.
+func newGateways(cfg config.Config, log *slog.Logger) (payment.Registry, error) {
+	var gateways []payment.Gateway
+
+	if cfg.PayFast.Configured() {
+		g, err := newPayFast(cfg, log)
+		if err != nil {
+			return payment.Registry{}, err
+		}
+		gateways = append(gateways, g)
+	}
+	if cfg.SnapScan.Configured() {
+		g, err := newSnapScan(cfg, log)
+		if err != nil {
+			return payment.Registry{}, err
+		}
+		gateways = append(gateways, g)
+	}
+	if len(gateways) == 0 {
+		return payment.Registry{}, errors.New("config: no payment gateway is configured; set PAYFAST_MERCHANT_ID or SNAPSCAN_SNAP_CODE")
 	}
 
+	// A gateway settling in a currency the store does not price in would take the
+	// right number in the wrong money. Discovering that at the first checkout,
+	// after an order row already exists, is worse than at boot.
+	for _, g := range gateways {
+		if g.Currency() != cfg.Currency {
+			return payment.Registry{}, fmt.Errorf("config: CURRENCY is %q, but %s settles in %s only",
+				cfg.Currency, g.Label(), g.Currency())
+		}
+	}
+
+	return payment.NewRegistry(gateways...)
+}
+
+func newPayFast(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 	// The gateway's URLs are derived from BASE_URL, because three URLs that have
 	// to agree with each other and with the deployment are three chances to get
 	// one wrong. NotifyURL is the exception: PayFast's own servers have to reach
@@ -330,6 +360,29 @@ func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 		AllowedCIDRs:     cfg.PayFast.AllowedCIDRs,
 		AllowAnySourceIP: cfg.PayFast.AllowAnySourceIP,
 		Log:              log,
+	})
+}
+
+// newSnapScan builds the SnapScan gateway.
+//
+// Note what is absent: there is no sandbox switch, because SnapScan has no
+// sandbox. Configuring it at all means real payments, which is the opposite of
+// PAYFAST_SANDBOX's safe default and is why snapscan.New says so in the log at
+// startup.
+//
+// SnapScan's notification URL is configured on the merchant account by SnapScan
+// support rather than sent with each payment, so there is no notify URL here.
+// It must point at BASE_URL + /payments/snapscan/callback, which on a laptop
+// means a tunnel.
+func newSnapScan(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
+	return snapscan.New(snapscan.Config{
+		SnapCode:       cfg.SnapScan.SnapCode,
+		APIKey:         cfg.SnapScan.APIKey,
+		WebhookAuthKey: cfg.SnapScan.WebhookAuthKey,
+		ValidationKey:  cfg.SnapScan.ValidationKey,
+		SuccessURL:     cfg.BaseURL + "/cart/checkout/success",
+		FailURL:        cfg.BaseURL + "/cart/checkout/cancel",
+		Log:            log,
 	})
 }
 
@@ -518,7 +571,7 @@ func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	return storage, nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, gateways payment.Registry, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
@@ -558,22 +611,26 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, user
 	mux.Handle("/cart/", firstParty)
 
 	// Security headers wrap everything, including 404s and /healthz. The origins
-	// allowed to fetch the catalog are also the ones allowed to frame it, and the
-	// gateway's origin has to be allowed as a form target or the browser blocks
-	// the hand-over to payment.
+	// allowed to fetch the catalog are also the ones allowed to frame it, and each
+	// gateway declares what its own hand-over needs: a form target for one that
+	// posts, an image origin for one that shows a hosted QR code. A gateway whose
+	// origin is missing here has its hand-over refused by the browser and nowhere
+	// else, which is why this is derived rather than configured.
+	gatewayForms, gatewayImages := gateways.CSP()
 	policy := middleware.Policy{
 		FrameAncestors: cfg.EmbedOrigins,
-		FormActions:    []string{gateway.FormActionOrigin()},
+		FormActions:    gatewayForms,
 		// Only on an https deployment: a browser ignores HSTS over plain HTTP
 		// anyway, and sending it from localhost would pin a rule that makes the
 		// next plain-HTTP project on this port unreachable.
 		HSTS: cfg.CookieSecure,
 	}
+	policy.ImgSources = gatewayImages
 	if cfg.Blob.Configured() {
 		// The origin, not the base URL: a CSP source carrying a path matches that
 		// path exactly, which would permit the bucket root and refuse every image
 		// under it. See Blob.PublicOrigin.
-		policy.ImgSources = []string{cfg.Blob.PublicOrigin()}
+		policy.ImgSources = append(policy.ImgSources, cfg.Blob.PublicOrigin())
 	}
 	// A hosted font service, if one is configured. Empty by default: the theme uses
 	// the system font stack, which needs no origin allowed at all.

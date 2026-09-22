@@ -1,0 +1,42 @@
+{{/*
+  The payment-status poll's answer, and the page it belongs to.
+
+  A QR hand-over has no browser redirect back: the shopper pays in an app, on a
+  phone that is very often not the device showing this page. Without this the page
+  would sit unchanged while the order quietly went paid. The block is what htmx
+  swaps every few seconds; the page around it is what somebody opening the URL
+  directly gets, so the route is never a bare fragment in an address bar.
+
+  It reports and grants nothing: only an authenticated gateway notification can
+  make an order paid, and this only ever reads the result.
+*/}}
+{{define "content"}}
+<h1>Payment status</h1>
+<div id="payment-status">
+{{template "checkout_status_block" .}}
+</div>
+{{end}}
+
+{{define "checkout_status_block"}}
+{{if not .HaveOrder}}
+  <p class="muted">We have nothing to confirm for this basket yet.</p>
+{{else if .Paid}}
+  <p><strong>Payment received</strong> for order {{.Order.Reference}}.
+  <a href="/cart/checkout/success">See your order</a>.</p>
+{{else if .Failed}}
+  <p><strong>That payment did not go through.</strong>
+  <a href="/cart">Your basket is still here</a> if you would like to try again.</p>
+{{else}}
+  {{/*
+    Still pending, so keep asking. The trigger lives on the element the response
+    replaces, so the new copy carries it and the polling continues — and stops by
+    itself as soon as one of the branches above renders instead.
+
+    5 seconds, not 1: a shopper is unlocking a phone and typing a PIN, and the
+    limiter this route sits behind allows 30 a minute.
+  */}}
+  <p hx-get="/cart/checkout/status" hx-trigger="every 5s" hx-swap="outerHTML" class="muted">
+    Waiting for your payment…
+  </p>
+{{end}}
+{{end}}

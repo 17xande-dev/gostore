@@ -908,6 +908,70 @@ img {
   max-width: 100%;
 }
 
+/* --- the QR hand-over ----------------------------------------------------- */
+
+/* One page serves two devices. On a phone the link is the payment — it opens the
+   payment app directly — and the QR code is useless, since a phone cannot scan its
+   own screen. On a desktop the opposite holds: the code is the payment and the
+   link is a curiosity.
+
+   Neither is hidden, because "phone" and "desktop" are guesses and a wrong guess
+   here removes the only way to pay. Both are always present and the order changes,
+   which is also why this is a width query rather than a user-agent test on the
+   server: the page is cacheable and the layout follows the screen it is actually
+   on. */
+.qr-handover {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--gap-lg);
+  margin-block: var(--gap-lg);
+}
+
+.qr-handover-button {
+  order: 1;
+  font-size: 1.125rem;
+  padding: 0.75rem 1.5rem;
+}
+
+.qr-handover-code {
+  order: 2;
+  margin: 0;
+
+  /* The image carries no width or height attributes — SnapScan's documentation is
+     explicit that setting them distorts the code past scanning — so the size is
+     set here, and it is a size a phone camera can actually resolve from across a
+     desk. */
+  > img {
+    display: block;
+    width: 260px;
+    height: auto;
+    /* A QR code has to keep its quiet zone and its contrast to scan at all, so it
+       gets a white plate rather than inheriting a dark theme's background. */
+    background: #fff;
+    padding: var(--gap-sm);
+    border-radius: var(--radius);
+  }
+
+  > figcaption {
+    margin-block-start: var(--gap-sm);
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+  }
+}
+
+/* Wide enough to be a screen somebody is sitting in front of: lead with the code,
+   because the phone that pays is not the thing showing this page. */
+@media (width >= 52rem) {
+  .qr-handover-code {
+    order: 1;
+  }
+
+  .qr-handover-button {
+    order: 2;
+  }
+}
+
 /* --- htmx ---------------------------------------------------------------- */
 
 /* htmx would inject these three rules itself, in a <style> block it writes into

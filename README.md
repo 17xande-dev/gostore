@@ -67,17 +67,21 @@ list with defaults.
 | `DATABASE_URL` | **yes** | — | Postgres connection string |
 | `SETUP_TOKEN` | no | generated | The one-time token that claims the first account. 32+ characters. Generated and logged on first boot if unset |
 | `SESSION_TTL_HOURS` | no | `24` | How long a sign-in lasts |
-| `PAYFAST_MERCHANT_ID` | **yes** | — | From the PayFast dashboard |
-| `PAYFAST_MERCHANT_KEY` | **yes** | — | From the PayFast dashboard |
+| `PAYFAST_MERCHANT_ID` | one gateway² | — | From the PayFast dashboard. Its presence switches PayFast on |
+| `PAYFAST_MERCHANT_KEY` | with PayFast | — | From the PayFast dashboard |
 | `PAYFAST_PASSPHRASE` | no | — | The account's salt passphrase; must match the dashboard exactly |
 | `PAYFAST_SANDBOX` | no | `true` | `false` takes real money. Set it explicitly when deploying — see [Going live](#going-live) |
 | `PAYFAST_NOTIFY_URL` | no | derived | Override when PayFast cannot reach `BASE_URL` (a tunnel) |
 | `PAYFAST_ALLOWED_CIDRS` | no | published ranges | Override the source ranges; `any` disables the check |
+| `SNAPSCAN_SNAP_CODE` | one gateway² | — | From SnapScan merchant support. Its presence switches SnapScan on. **No sandbox: this takes real money** |
+| `SNAPSCAN_API_KEY` | with SnapScan | — | Reads payments back from SnapScan's API, which is how a notification is confirmed |
+| `SNAPSCAN_WEBHOOK_AUTH_KEY` | with SnapScan | — | The shared secret a notification's HMAC is computed with |
+| `SNAPSCAN_VALIDATION_KEY` | no | — | Secure QR Payload key; signs the amount and reference in the payment URL |
 | `TRUST_PROXY_IP` | no | `false` | Believe `X-Forwarded-For`; only with a proxy that replaces it |
 | `PORT` | no | `8080` | Listen port |
 | `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs |
 | `STORE_NAME` | no | `gostore` | Displayed store name |
-| `CURRENCY` | no | `ZAR` | Currency code (PayFast requires `ZAR`) |
+| `CURRENCY` | no | `ZAR` | Currency code. Both gateways settle in `ZAR` only, and the server refuses to start on anything else |
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
 | `FONT_ORIGINS` | no | — | Origins a web font may be loaded from. Widens the CSP's `font-src` **and** `style-src`. See [Web fonts](#web-fonts) |
 | `FONT_CSS_URL` | no | — | A hosted font service's stylesheet, linked from the default layout. Its origin must be in `FONT_ORIGINS` |
@@ -114,8 +118,15 @@ list with defaults.
 | `RATE_LIMIT_LOGIN_PER_MINUTE` | no | `10` | Per client IP; `0` disables |
 | `RATE_LIMIT_CHECKOUT_PER_MINUTE` | no | `20` | Per client IP; `0` disables |
 | `RATE_LIMIT_CALLBACK_PER_MINUTE` | no | `120` | Per client IP; `0` disables |
+| `RATE_LIMIT_STATUS_PER_MINUTE` | no | `30` | The QR hand-over page's payment-status poll, per IP |
 | `RATE_LIMIT_DOWNLOAD_PER_MINUTE` | no | `60` | Download links per IP; each click mints a signed URL |
 | `CART_TTL_DAYS` | no | `60` | How long an untouched cart survives |
+
+² **At least one payment gateway must be configured**, and both may be. Set
+`PAYFAST_MERCHANT_ID` (with its key), or `SNAPSCAN_SNAP_CODE` (with its API and webhook
+keys), or both — with both, the checkout asks the shopper which they would like to use. A
+store with neither refuses to start, because the alternative is a shop that serves a
+catalog perfectly and fails at the one moment that matters.
 
 ¹ **Mail is required**, and both must be set. This reverses an earlier position that a store
 with no mail server should still boot and drop receipts loudly. What changed is a fact rather
@@ -322,7 +333,7 @@ with a `403`, not just absolute links.
 
 ### Rate limits
 
-Per client IP, on three surfaces, with a token bucket from
+Per client IP, on four surfaces, with a token bucket from
 [`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) and the keying and
 eviction written here — the algorithm is the part with the clock edge cases already found
 in it, and a bucket per client with bounded memory is where the decisions are.
@@ -332,6 +343,7 @@ in it, and a bucket per client with bounded memory is where the decisions are.
 | `POST /admin/login` | 10/min | Brute force. argon2id's cost makes each attempt expensive, but cost is not a limit |
 | `POST /cart/checkout` | 20/min | Order-row spam, loose enough that double-clicking never trips it |
 | `POST /payments/{gw}/callback` | 120/min | **The reason the limiter exists**: unauthenticated, and every accepted request makes the store POST to the gateway — an amplifier |
+| `GET /cart/checkout/status` | 30/min | The QR hand-over page's poll. Cheap per request, but an open page asks all afternoon |
 
 The burst is a third of the allowance (minimum 2), so `10/min` means three attempts
 immediately and then one every six seconds. A refusal is `429` with `Retry-After`. Limits
@@ -390,9 +402,9 @@ Two details that are defence rather than decoration:
 ### Response headers
 
 ```
-Content-Security-Policy: default-src 'self'; img-src 'self' <bucket>;
+Content-Security-Policy: default-src 'self'; img-src 'self' <bucket> <qr gateway>;
   font-src 'self' <font origins>; style-src 'self' <font origins>; script-src 'self';
-  form-action 'self' <gateway>; base-uri 'none'; object-src 'none';
+  form-action 'self' <form gateway>; base-uri 'none'; object-src 'none';
   frame-ancestors <embed origins or 'none'>
 Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
 Referrer-Policy: strict-origin-when-cross-origin
@@ -406,10 +418,14 @@ navigation to a signed URL, and no fetch directive governs one — `connect-src`
 come into it if the browser uploaded straight to the bucket, which is exactly the design
 that was declined.
 
-`img-src` is `'self'` plus the bucket and nothing else, because a product image is always
-bytes this store holds. The angle-bracketed placeholders are the only external origins any
-directive gets, each one named by a deployment: the bucket, the payment gateway, the embedders,
-and a font service. There is no `'unsafe-inline'` anywhere — which is worth knowing before
+`img-src` is `'self'`, the bucket, and — when a QR gateway like SnapScan is configured — the
+origin it serves payment codes from. A *product* image is always bytes this store holds; a
+payment code is not an image of anything this store has, and hotlinking it is what keeps the
+QR the gateway's problem rather than a rendering job here.
+
+The angle-bracketed placeholders are the only external origins any directive gets, each one
+named by a deployment: the bucket, the payment gateways, the embedders, and a font service.
+There is no `'unsafe-inline'` anywhere — which is worth knowing before
 writing a theme:
 
 - **`font-src` and `style-src`** — both `'self'` unless `FONT_ORIGINS` is set, which is the
@@ -973,6 +989,7 @@ Consequences worth knowing before changing any of it:
 | `POST /cart/checkout` | Creates a **pending** order and hands over to the gateway |
 | `GET /cart/checkout/success` | The gateway's `return_url` — **informational only** |
 | `GET /cart/checkout/cancel` | The gateway's `cancel_url` |
+| `GET /cart/checkout/status` | The QR hand-over's poll — reports the order's status, grants nothing |
 | `POST /payments/{gateway}/callback` | The only thing that can mark an order paid |
 
 **Checkout lives under `/cart`, not at `/checkout`.** The cart cookie is scoped to `/cart`
@@ -1000,18 +1017,103 @@ The order of events matters more than the routes do:
   it says the payment is being confirmed rather than that it succeeded. It names the order —
   the cart cookie identifies it, and a reference is what a customer needs to quote.
 
-The hand-over to the gateway is a real cross-origin form post, not a redirect, which has two
-consequences worth knowing before touching the CSP: the gateway's origin must be in
-`form-action`, and the submit-on-load script is a **file** (`/static/redirect.js`) because
-`script-src 'self'` forbids the inline script that would otherwise do it. Without JavaScript
-the form's button is the whole mechanism, and it says so.
+**Which gateway** is a field on the checkout form, resolved before the order row is written —
+`orders.gateway` records it, and the callback later refuses to settle the order unless it
+agrees. A store with one gateway renders it as a hidden field and asks nothing; with two it
+renders radios. An unrecognised name is refused rather than defaulted, because sending
+somebody to pay through a provider they did not choose is not an improvement on an error
+message.
+
+The hand-over itself takes one of two shapes, and each has a consequence for the CSP:
+
+- **A form post** (PayFast) is a real cross-origin submission, not a redirect, so the
+  gateway's origin must be in `form-action`, and the submit-on-load script is a **file**
+  (`/static/redirect.js`) because `script-src 'self'` forbids the inline script that would
+  otherwise do it. Without JavaScript the form's button is the whole mechanism, and it says
+  so.
+- **A link and a QR code** (SnapScan) needs nothing in `form-action` — a top-level navigation
+  is not governed by it — but the QR image is served by the gateway, so its origin must be in
+  `img-src`. Both origins are declared by the gateway itself through `Gateway.CSP()` rather
+  than configured, because a missing one is refused by the browser and nowhere else.
 
 ## Payments
 
-PayFast is the only gateway, behind a small `payment.Gateway` interface so adding another is
-code and no migration — the order's `gateway_*` columns are deliberately gateway-neutral.
+Two gateways ship — **PayFast** and **SnapScan** — behind a small `payment.Gateway`
+interface. A store enables either or both, and with both the checkout asks the shopper
+which they would like to use. Adding a third is code and no migration: the order's
+`gateway_*` columns are deliberately gateway-neutral.
 
-### Setting it up
+The two are not the same shape, and the interface says so rather than pretending otherwise:
+
+| | PayFast | SnapScan |
+|---|---|---|
+| Hand-over | A cross-origin **POST** of signed fields | A **link** the shopper opens, shown as a QR code beside it |
+| Needs in the CSP | `form-action` | `img-src` |
+| Notification proved by | Signature + source IP + a server-to-server echo + merchant id | HMAC in the `Authorization` header + an authenticated read of SnapScan's API + snap code |
+| Sandbox | Yes, and it is the default | **None. Any configuration takes real money** |
+| Refunds | The dashboard | The merchant portal |
+
+`Handover` is what carries the difference, and a template switches on it. Everything after
+the hand-over — the callback, the amount check, the replay guard, the stock transaction — is
+identical for both, which is the whole point of the split.
+
+### SnapScan
+
+The shopper opens one URL. On a phone it opens the SnapScan app directly, and if the app is
+not installed SnapScan's own page offers a card or Instant EFT; on a desktop the same URL is
+rendered as a QR code to scan with a phone that is not the device reading the page. The
+hand-over page shows both, always, and reorders them by viewport width — a wrong guess about
+which device somebody is on would remove the only way they can pay, so neither is hidden.
+
+Because nothing redirects the browser back, the page polls `GET /cart/checkout/status` — the
+order's status, read under the cart cookie, granting nothing. Without JavaScript it shows the
+waiting message and the confirmation still arrives by email.
+
+#### Setting it up
+
+1. Ask SnapScan merchant support for your **snap code**, an **API key** and a **webhook
+   authentication key**, and give them the webhook address:
+   `BASE_URL` + `/payments/snapscan/callback`. Unlike PayFast's, it is configured on the
+   account rather than sent with each payment.
+2. Set `SNAPSCAN_SNAP_CODE`, `SNAPSCAN_API_KEY` and `SNAPSCAN_WEBHOOK_AUTH_KEY`. The server
+   refuses to start with the first and not the others: a notification with nothing to check
+   its signature against is an unauthenticated request that can mark orders paid.
+3. Optionally ask them to enable the **Secure QR Payload** feature and set
+   `SNAPSCAN_VALIDATION_KEY`. It signs the amount and the order reference in the payment URL
+   so neither can be edited between this page and the scan. Without it, `strict=true` still
+   fixes a minimum amount and refuses a repeat payment on the same order — both are sent
+   whenever a key is configured, because they do different jobs.
+
+**There is no sandbox.** PayFast's safe default trains the opposite expectation, and there is
+no equivalent here: the first real test is the smallest payment you are willing to make. A
+local one also needs a tunnel, since SnapScan's servers have to reach the callback.
+
+#### How a SnapScan notification is authenticated
+
+Two independent things must be true, and neither is sufficient alone:
+
+1. **The body is signed with the webhook key.** `Authorization: SnapScan signature=<hash>` is
+   an HMAC-SHA256 of the raw body — the whole form-encoded body including the `payload` key,
+   not the JSON inside it — compared in constant time.
+2. **SnapScan's API says the same thing.** The payment is read back from
+   `/merchant/api/v1/payments/{id}` over an authenticated connection, and **the status and
+   amount this store acts on come from that response**, never from the notification body.
+   SnapScan's own documentation calls the webhook "an unauthenticated event stream" and
+   points at the API for certainty; a shared secret is only as good as everywhere it has ever
+   been copied, so one leaked key must not be a free order.
+
+Then the snap code is checked against the configured one — the equivalent of PayFast's
+merchant-id check — and the amount is taken from `requiredAmount` rather than `totalAmount`,
+because a tip on a tipping-enabled account makes the total larger than the figure this store
+asked for and would otherwise read as a mismatch.
+
+The handler then does what only it can, identically for both gateways: find the order, refuse
+a notification for an order placed through a *different* gateway, check the amount against the
+order's own total, and stop a replay from decrementing stock twice.
+
+### PayFast
+
+#### Setting it up
 
 1. Get a merchant id and key from the [PayFast dashboard](https://sandbox.payfast.co.za) —
    the sandbox's have no relationship to a live account's.
@@ -1026,7 +1128,7 @@ Then, in order: place an order, pay it on the sandbox, and check that the order 
 stock has moved. Replaying the captured notification body with `curl` must not move stock a
 second time.
 
-### Going live
+#### Going live
 
 **`PAYFAST_SANDBOX` defaults to `true` on purpose**, so that nobody's first afternoon with
 this project charges a real card. The cost of that default is the mirror mistake: a
@@ -1045,7 +1147,7 @@ balancer's address and rejects every genuine notification — money taken, nothi
 It must stay `false` when nothing in front of the server sets `X-Forwarded-For`, since a
 client could then claim any address it liked.
 
-### How a notification is authenticated
+#### How a PayFast notification is authenticated
 
 The customer's browser returning to `return_url` proves nothing. The **ITN** — PayFast's
 form-encoded POST to `notify_url` — is the only statement about a payment this store trusts,
@@ -1070,7 +1172,7 @@ on the third attempt. Rejections are logged in full, naming the check that faile
 dropped. It is also outside the CSRF group by *not being in it* rather than by an exempt-path
 string that has to keep matching the route.
 
-### The signature, and why it is spelled out in code
+#### The PayFast signature, and why it is spelled out in code
 
 Three details account for nearly every PayFast integration failure, and
 [`internal/payment/payfast`](internal/payment/payfast) says so in its package comment:
@@ -1754,6 +1856,7 @@ unchanged when a migration needs to be inspected or applied by hand.
 11.6. **Sessions and setup** — `admin_sessions`, the `/admin/setup` claim, no credential in the environment ← *done*
 11.7. **Authorization** — a permission named on every route registration, `must_change_password` ← *done*
 11.8. **Account management** — `/admin/users`, own-password change ← *done*
+11.9. **SnapScan** — a second gateway, a registry, a QR hand-over; the `payment.Gateway` interface widened to admit a provider that is not PayFast-shaped ← *done*
 12. Publish
 
 ## Licence

@@ -26,15 +26,19 @@ import (
 // Handler holds everything the HTTP layer needs. It is created once at startup
 // and is safe for concurrent use.
 type Handler struct {
-	cfg     config.Config
-	log     *slog.Logger
-	tmpl    *Templates
-	cat     *catalog.Store
-	cart    *cart.Store
-	orders  *orders.Store
-	grants  *downloads.Store
-	gateway payment.Gateway
-	mail    mailer.Sender
+	cfg    config.Config
+	log    *slog.Logger
+	tmpl   *Templates
+	cat    *catalog.Store
+	cart   *cart.Store
+	orders *orders.Store
+	grants *downloads.Store
+	// gateways is every payment provider this deployment has configured, in the
+	// order the checkout offers them. A registry rather than one gateway because
+	// a store may offer more than one, and because the callback route has to
+	// resolve a name to the provider that can prove a notification genuine.
+	gateways payment.Registry
+	mail     mailer.Sender
 	// blob is the PUBLIC image store and files is the PRIVATE download store.
 	// They are never interchangeable: putting a purchased file through blob would
 	// publish it, and it is worth the two fields being named differently enough
@@ -66,6 +70,7 @@ type limiters struct {
 	login    middleware.Middleware
 	checkout middleware.Middleware
 	callback middleware.Middleware
+	status   middleware.Middleware
 	download middleware.Middleware
 }
 
@@ -103,25 +108,25 @@ func (h *Handler) rateLimited(w http.ResponseWriter, r *http.Request) {
 // putting the public image bucket where the private download store belongs —
 // which would compile, pass most tests, and publish every purchased file.
 type Deps struct {
-	Config  config.Config
-	Log     *slog.Logger
-	Tmpl    *Templates
-	Catalog *catalog.Store
-	Carts   *cart.Store
-	Orders  *orders.Store
-	Grants  *downloads.Store
-	Gateway payment.Gateway
-	Mail    mailer.Sender
-	Images  blob.Storage
-	Files   blob.Downloads
-	Users   *auth.Store
+	Config   config.Config
+	Log      *slog.Logger
+	Tmpl     *Templates
+	Catalog  *catalog.Store
+	Carts    *cart.Store
+	Orders   *orders.Store
+	Grants   *downloads.Store
+	Gateways payment.Registry
+	Mail     mailer.Sender
+	Images   blob.Storage
+	Files    blob.Downloads
+	Users    *auth.Store
 }
 
 func New(d Deps) *Handler {
 	cfg, log := d.Config, d.Log
 	h := &Handler{
 		cfg: cfg, log: log, tmpl: d.Tmpl, cat: d.Catalog, cart: d.Carts,
-		orders: d.Orders, grants: d.Grants, gateway: d.Gateway, mail: d.Mail,
+		orders: d.Orders, grants: d.Grants, gateways: d.Gateways, mail: d.Mail,
 		blob: d.Images, files: d.Files, users: d.Users,
 	}
 	// Both storage backends are optional and both must be non-nil, so that a
@@ -144,6 +149,10 @@ func New(d Deps) *Handler {
 		// be able to produce them without bound. The allowance is generous: a buyer
 		// clicking through a conference recording's twenty files in a minute is
 		// ordinary, and a limit that fires on that would be turned off.
+		// The payment-status poll. Cheap per request, but a page left open asks
+		// for it all afternoon, so it gets a tier of its own rather than eating
+		// the checkout's allowance and locking a shopper out of retrying.
+		status:   perMinute("payment status", cfg.RateLimits.StatusPerMinute, cfg.TrustProxyIP, log, page),
 		download: perMinute("downloads", cfg.RateLimits.DownloadPerMinute, cfg.TrustProxyIP, log, page),
 	}
 	return h

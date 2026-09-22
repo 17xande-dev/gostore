@@ -37,8 +37,8 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 	h := New(Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
-		Grants:  downloads.NewStore(pool, store),
-		Gateway: gateway, Mail: mailer.NewFake(), Images: images,
+		Grants:   downloads.NewStore(pool, store),
+		Gateways: registryOf(t, gateway), Mail: mailer.NewFake(), Images: images,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 
@@ -47,7 +47,7 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 
 	srv := httptest.NewServer(middleware.Chain(mux, middleware.SecurityHeaders(middleware.Policy{
 		FrameAncestors: cfg.EmbedOrigins,
-		FormActions:    []string{gateway.FormActionOrigin()},
+		FormActions:    []string{gateway.CSP().FormAction},
 	})))
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)

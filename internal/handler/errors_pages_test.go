@@ -298,8 +298,8 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 	h := New(Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
-		Grants:  downloads.NewStore(pool, store),
-		Gateway: gateway, Mail: mailer.NewFake(), Images: images,
+		Grants:   downloads.NewStore(pool, store),
+		Gateways: registryOf(t, gateway), Mail: mailer.NewFake(), Images: images,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 

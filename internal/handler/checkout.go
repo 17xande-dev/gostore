@@ -38,20 +38,28 @@ type checkoutPageData struct {
 	page
 	Cart cart.Cart
 	Form checkoutForm
+	// Gateways is every configured payment provider. The form renders a chooser
+	// only when there is more than one — a store with a single gateway should not
+	// be asked to pick it — and a hidden field otherwise, so the submitted name is
+	// the same shape either way.
+	Gateways []payment.Gateway
 	// Errors are per-field messages for the form; Error is one message about the
 	// checkout as a whole, such as the cart having become unbuyable.
 	Errors validate.FormErrors
 	Error  string
 }
 
-// redirectPageData is the hand-over to the gateway: a form of hidden fields that
-// submits itself.
+// redirectPageData is the hand-over to the gateway. What it looks like depends on
+// the gateway: a self-submitting form of hidden fields for PayFast, a link and a
+// QR code for SnapScan. The template switches on Handover.Kind.
 type redirectPageData struct {
 	page
-	Order   orders.Order
-	Action  string
-	Fields  []payment.Field
-	Gateway string
+	Order    orders.Order
+	Handover payment.Handover
+	Gateway  string
+	// GatewayLabel is what to call the gateway on the page, so the hand-over does
+	// not have to say "the payment gateway" to someone who chose SnapScan by name.
+	GatewayLabel string
 }
 
 type successPageData struct {
@@ -81,6 +89,9 @@ type checkoutForm struct {
 	Email   string
 	Phone   string
 	Address string
+	// Gateway is the payment provider's name, as submitted. Kept on the form so a
+	// rejected submission comes back with the shopper's choice still made.
+	Gateway string
 }
 
 func (h *Handler) registerCheckout(mux *http.ServeMux) {
@@ -88,6 +99,10 @@ func (h *Handler) registerCheckout(mux *http.ServeMux) {
 	// Rate limited, because this is the route that writes order rows. Loose enough
 	// that a shopper who double-clicks the pay button never meets it.
 	mux.Handle("POST /cart/checkout", h.limits.checkout(http.HandlerFunc(h.checkoutSubmit)))
+	// The payment-status poll a QR hand-over page asks for while the shopper pays
+	// on their phone. Rate limited: it is cheap, but an open page asks all
+	// afternoon.
+	mux.Handle("GET /cart/checkout/status", h.limits.status(http.HandlerFunc(h.checkoutStatus)))
 	mux.HandleFunc("GET /cart/checkout/success", h.checkoutSuccess)
 	mux.HandleFunc("GET /cart/checkout/cancel", h.checkoutCancel)
 	// Downloads straight after paying, authorised by the cart cookie rather than
@@ -105,7 +120,7 @@ func (h *Handler) checkoutShow(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/cart", http.StatusSeeOther)
 		return
 	}
-	h.renderCheckout(w, r, http.StatusOK, c, checkoutForm{}, nil, "")
+	h.renderCheckout(w, r, http.StatusOK, c, checkoutForm{Gateway: h.gateways.Default().Name()}, nil, "")
 }
 
 func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +141,28 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 		Email:   strings.TrimSpace(r.PostFormValue("email")),
 		Phone:   strings.TrimSpace(r.PostFormValue("phone")),
 		Address: strings.TrimSpace(r.PostFormValue("address")),
+		Gateway: strings.TrimSpace(r.PostFormValue("gateway")),
+	}
+
+	// Which provider the shopper picked, resolved before the order is written:
+	// orders.gateway records it, and it is what the callback later has to agree
+	// with.
+	//
+	// An empty field is only allowed when there is one gateway, where there is no
+	// choice to make and refusing would be pedantry. With two, it is a choice
+	// nobody made, and a *wrong* name is refused either way: sending somebody to
+	// pay through a provider they did not choose is not an improvement on an error
+	// message.
+	if form.Gateway == "" && h.gateways.Len() == 1 {
+		form.Gateway = h.gateways.Default().Name()
+	}
+	gateway, err := h.gateways.Lookup(form.Gateway)
+	if err != nil {
+		h.log.Warn("checkout named an unconfigured gateway", "gateway", form.Gateway)
+		form.Gateway = ""
+		h.renderCheckout(w, r, http.StatusUnprocessableEntity, c, form, nil,
+			"Please choose how you would like to pay.")
+		return
 	}
 	customer := orders.Customer{Name: form.Name, Email: form.Email, Phone: form.Phone, Address: form.Address}
 
@@ -138,7 +175,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	// transaction — never from the figure the submitted page was showing, because
 	// that is the number that will be checked against what the gateway says was
 	// paid.
-	order, err := h.orders.CreateFromCart(r.Context(), token, customer, h.cfg.Currency, h.gateway.Name())
+	order, err := h.orders.CreateFromCart(r.Context(), token, customer, h.cfg.Currency, gateway.Name())
 	if err != nil {
 		var unavailable *orders.UnavailableError
 		switch {
@@ -154,7 +191,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	action, fields, err := h.gateway.BuildRedirectForm(payment.Request{
+	handover, err := gateway.Handover(payment.Request{
 		OrderID:     order.ID,
 		AmountCents: order.TotalCents,
 		Currency:    order.Currency,
@@ -168,22 +205,78 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 		// checkout was attempted, and a pending order nobody paid for is harmless.
 		// What is not harmless is a shopper seeing a blank page, so this reports the
 		// gateway's own complaint — a below-minimum total, most likely.
-		h.log.Error("build gateway redirect", "order", order.ID, "gateway", h.gateway.Name(), "error", err)
+		h.log.Error("build gateway hand-over", "order", order.ID, "gateway", gateway.Name(), "error", err)
 		h.renderCheckout(w, r, http.StatusUnprocessableEntity, h.cartFor(r, token), form, nil,
 			"This order cannot be sent for payment: "+err.Error())
 		return
 	}
 
 	h.log.Info("checkout created a pending order",
-		"order", order.ID, "total_cents", order.TotalCents, "gateway", h.gateway.Name())
+		"order", order.ID, "total_cents", order.TotalCents, "gateway", gateway.Name())
 
+	title := "Redirecting to payment"
+	if handover.Kind == payment.HandoverLink {
+		// Nothing is redirecting: the shopper scans or taps, and stays here
+		// meanwhile.
+		title = "Pay with " + gateway.Label()
+	}
 	h.render(w, r, http.StatusOK, "checkout_redirect", redirectPageData{
-		page:    h.newPage(r, "Redirecting to payment"),
-		Order:   order,
-		Action:  action,
-		Fields:  fields,
-		Gateway: h.gateway.Name(),
+		page:         h.newPage(r, title),
+		Order:        order,
+		Handover:     handover,
+		Gateway:      gateway.Name(),
+		GatewayLabel: gateway.Label(),
 	})
+}
+
+// statusPageData is the poll's answer: the order this cart last placed, and
+// whether the money has arrived.
+type statusPageData struct {
+	page
+	Order     orders.Order
+	HaveOrder bool
+	Paid      bool
+	Failed    bool
+}
+
+// checkoutStatus answers the QR hand-over page's poll.
+//
+// A QR payment has no browser redirect back: the shopper pays in an app on a
+// different device, and this page would otherwise sit unchanged forever while the
+// order quietly went paid. So it asks, every few seconds, whether it has.
+//
+// It grants nothing and proves nothing. The cart cookie identifies which order to
+// report on — the same authority the success page already runs on — and the only
+// thing that can have *made* the order paid is an authenticated gateway
+// notification. This is a read of a status, not a way to reach one.
+func (h *Handler) checkoutStatus(w http.ResponseWriter, r *http.Request) {
+	data := statusPageData{page: h.newPage(r, "Payment status")}
+
+	if token := h.tokenFromCookie(r); token != "" {
+		order, err := h.orders.LatestForCart(r.Context(), token)
+		switch {
+		case err == nil:
+			data.Order = order
+			data.HaveOrder = true
+			data.Paid = order.Paid()
+			data.Failed = order.Status == orders.StatusFailed || order.Status == orders.StatusCancelled
+		case errors.Is(err, orders.ErrNotFound):
+		default:
+			h.log.Error("read order for status poll", "error", err)
+		}
+	}
+
+	// A paid order sends the shopper to the page that can show their downloads and
+	// their receipt, rather than rewriting this one into a worse version of it.
+	// htmx follows this; a browser without it keeps polling and the shopper still
+	// gets the email, which is the ordinary failure mode here and an acceptable
+	// one.
+	if data.Paid && isHTMX(r) {
+		w.Header().Set("HX-Redirect", "/cart/checkout/success")
+	}
+	// htmx swaps the block; a browser asking for this URL directly gets a whole
+	// page, so the route is never a bare fragment in an address bar.
+	h.render(w, r, http.StatusOK, fragmentOr(r, "checkout_status_block", "checkout_status"), data)
 }
 
 // checkoutSuccess is the gateway's return_url. It is informational only — see the
@@ -231,11 +324,15 @@ func (h *Handler) renderOutcome(w http.ResponseWriter, r *http.Request, name str
 }
 
 func (h *Handler) renderCheckout(w http.ResponseWriter, r *http.Request, status int, c cart.Cart, form checkoutForm, errs validate.FormErrors, problem string) {
+	if form.Gateway == "" {
+		form.Gateway = h.gateways.Default().Name()
+	}
 	h.render(w, r, status, fragmentOr(r, "checkout_form", "checkout"), checkoutPageData{
-		page:   h.newPage(r, "Checkout"),
-		Cart:   c,
-		Form:   form,
-		Errors: errs,
-		Error:  problem,
+		page:     h.newPage(r, "Checkout"),
+		Cart:     c,
+		Form:     form,
+		Gateways: h.gateways.All(),
+		Errors:   errs,
+		Error:    problem,
 	})
 }

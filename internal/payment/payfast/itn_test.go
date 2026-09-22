@@ -66,6 +66,12 @@ func validatorSaying(t *testing.T, answer string) (url string, received *string)
 	return srv.URL, &body
 }
 
+// notify wraps a body and a source IP the way the handler does, so a test reads
+// the same shape the server passes in.
+func notify(body []byte, sourceIP string) payment.Notification {
+	return payment.Notification{Body: body, SourceIP: sourceIP}
+}
+
 func TestITN_ValidNotification(t *testing.T) {
 	validate, received := validatorSaying(t, "VALID")
 	g := testGateway(t, func(c *Config) { c.ValidateURL = validate })
@@ -74,7 +80,7 @@ func TestITN_ValidNotification(t *testing.T) {
 	fields := itnFieldsFor(orderID, "299.00")
 	body := encodeITN(fields, g.cfg.Passphrase)
 
-	cb, err := g.ParseCallback(t.Context(), body, validIP)
+	cb, err := g.ParseCallback(t.Context(), notify(body, validIP))
 	if err != nil {
 		t.Fatalf("ParseCallback: %v", err)
 	}
@@ -85,8 +91,8 @@ func TestITN_ValidNotification(t *testing.T) {
 	if cb.Ref != "1089250" {
 		t.Errorf("Ref = %q, want the pf_payment_id", cb.Ref)
 	}
-	if cb.Status != StatusComplete || !cb.Paid {
-		t.Errorf("Status = %q, Paid = %v", cb.Status, cb.Paid)
+	if cb.Status != StatusComplete || !cb.Paid() {
+		t.Errorf("Status = %q, Paid = %v", cb.Status, cb.Paid())
 	}
 	// Both forms of the amount: the string for the audit trail, the cents for
 	// comparing against the order.
@@ -132,7 +138,7 @@ func TestITN_IncludesEmptyValuesInTheSignature(t *testing.T) {
 	}
 	b.WriteString("signature=" + sign(nonEmpty, g.cfg.Passphrase))
 
-	if _, err := g.ParseCallback(t.Context(), []byte(b.String()), validIP); !errors.Is(err, ErrSignature) {
+	if _, err := g.ParseCallback(t.Context(), notify([]byte(b.String()), validIP)); !errors.Is(err, ErrSignature) {
 		t.Errorf("error = %v, want ErrSignature", err)
 	}
 }
@@ -153,7 +159,7 @@ func TestITN_RejectsBadSignature(t *testing.T) {
 		"empty signature":     []byte("m_payment_id=x&merchant_id=10000100&signature="),
 	}
 	for name, body := range cases {
-		_, err := g.ParseCallback(t.Context(), body, validIP)
+		_, err := g.ParseCallback(t.Context(), notify(body, validIP))
 		if err == nil {
 			t.Errorf("%s was accepted", name)
 			continue
@@ -176,14 +182,14 @@ func TestITN_RejectsUnknownIP(t *testing.T) {
 	body := encodeITN(itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "299.00"), g.cfg.Passphrase)
 
 	for _, ip := range []string{"198.51.100.7", "197.97.145.143", "197.97.145.160", "", "not-an-ip"} {
-		if _, err := g.ParseCallback(t.Context(), body, ip); !errors.Is(err, ErrSourceIP) {
+		if _, err := g.ParseCallback(t.Context(), notify(body, ip)); !errors.Is(err, ErrSourceIP) {
 			t.Errorf("source IP %q: error = %v, want ErrSourceIP", ip, err)
 		}
 	}
 
 	// Every published range is accepted, including the single-address one.
 	for _, ip := range []string{"197.97.145.144", "197.97.145.159", "41.74.179.200", "102.216.36.5", "144.126.193.139"} {
-		if _, err := g.ParseCallback(t.Context(), body, ip); err != nil {
+		if _, err := g.ParseCallback(t.Context(), notify(body, ip)); err != nil {
 			t.Errorf("source IP %q was rejected: %v", ip, err)
 		}
 	}
@@ -199,7 +205,7 @@ func TestITN_AllowAnySourceIPSkipsTheCheck(t *testing.T) {
 	})
 	body := encodeITN(itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "299.00"), g.cfg.Passphrase)
 
-	if _, err := g.ParseCallback(t.Context(), body, "203.0.113.9"); err != nil {
+	if _, err := g.ParseCallback(t.Context(), notify(body, "203.0.113.9")); err != nil {
 		t.Errorf("ParseCallback with the check disabled: %v", err)
 	}
 }
@@ -211,7 +217,7 @@ func TestITN_RequiresPayFastToConfirmIt(t *testing.T) {
 		validate, _ := validatorSaying(t, answer)
 		g := testGateway(t, func(c *Config) { c.ValidateURL = validate })
 
-		if _, err := g.ParseCallback(t.Context(), body, validIP); !errors.Is(err, ErrNotValidated) {
+		if _, err := g.ParseCallback(t.Context(), notify(body, validIP)); !errors.Is(err, ErrNotValidated) {
 			t.Errorf("PayFast answering %q: error = %v, want ErrNotValidated", answer, err)
 		}
 	}
@@ -224,7 +230,7 @@ func TestITN_RequiresPayFastToConfirmIt(t *testing.T) {
 	}))
 	defer unreachable.Close()
 	g := testGateway(t, func(c *Config) { c.ValidateURL = unreachable.URL })
-	if _, err := g.ParseCallback(t.Context(), body, validIP); !errors.Is(err, ErrNotValidated) {
+	if _, err := g.ParseCallback(t.Context(), notify(body, validIP)); !errors.Is(err, ErrNotValidated) {
 		t.Errorf("a failing validator: error = %v, want ErrNotValidated", err)
 	}
 }
@@ -242,7 +248,7 @@ func TestITN_RejectsAnotherMerchant(t *testing.T) {
 	// Correctly signed, from a valid IP, confirmed by PayFast — and still not ours.
 	body := encodeITN(fields, g.cfg.Passphrase)
 
-	if _, err := g.ParseCallback(t.Context(), body, validIP); !errors.Is(err, ErrMerchant) {
+	if _, err := g.ParseCallback(t.Context(), notify(body, validIP)); !errors.Is(err, ErrMerchant) {
 		t.Errorf("error = %v, want ErrMerchant", err)
 	}
 }
@@ -259,13 +265,13 @@ func TestITN_UnpaidStatusesAreNotPaid(t *testing.T) {
 			}
 		}
 
-		cb, err := g.ParseCallback(t.Context(), encodeITN(fields, g.cfg.Passphrase), validIP)
+		cb, err := g.ParseCallback(t.Context(), notify(encodeITN(fields, g.cfg.Passphrase), validIP))
 		if err != nil {
 			t.Fatalf("status %q: ParseCallback: %v", status, err)
 		}
 		// Only the exact string COMPLETE means the money is taken. Anything else,
 		// including a near miss, is recorded and not credited.
-		if cb.Paid {
+		if cb.Paid() {
 			t.Errorf("status %q was treated as paid", status)
 		}
 		if cb.Status != status {
@@ -284,7 +290,7 @@ func TestITN_RejectsMalformedBodies(t *testing.T) {
 		"oversized":        []byte(strings.Repeat("a=b&", MaxBodyBytes)),
 	}
 	for name, body := range cases {
-		if _, err := g.ParseCallback(t.Context(), body, validIP); err == nil {
+		if _, err := g.ParseCallback(t.Context(), notify(body, validIP)); err == nil {
 			t.Errorf("%s body was accepted", name)
 		}
 	}
@@ -293,7 +299,7 @@ func TestITN_RejectsMalformedBodies(t *testing.T) {
 	// compared against an order total, so anything unparseable has to be a refusal
 	// rather than a zero.
 	fields := itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "R 299,00")
-	if _, err := g.ParseCallback(t.Context(), encodeITN(fields, g.cfg.Passphrase), validIP); !errors.Is(err, ErrMalformed) {
+	if _, err := g.ParseCallback(t.Context(), notify(encodeITN(fields, g.cfg.Passphrase), validIP)); !errors.Is(err, ErrMalformed) {
 		t.Errorf("an unparseable amount: error = %v, want ErrMalformed", err)
 	}
 }
@@ -307,7 +313,7 @@ func TestITN_IgnoresFieldsAfterTheSignature(t *testing.T) {
 	fields := itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "299.00")
 	body := append(encodeITN(fields, g.cfg.Passphrase), []byte("&amount_gross=1.00&merchant_id=evil")...)
 
-	cb, err := g.ParseCallback(t.Context(), body, validIP)
+	cb, err := g.ParseCallback(t.Context(), notify(body, validIP))
 	if err != nil {
 		t.Fatalf("ParseCallback: %v", err)
 	}

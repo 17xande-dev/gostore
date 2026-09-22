@@ -44,8 +44,8 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 	h := New(Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: cat, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
-		Grants:  downloads.NewStore(pool, cat),
-		Gateway: payment.NewFake(), Mail: mailer.NewFake(), Images: storage,
+		Grants:   downloads.NewStore(pool, cat),
+		Gateways: registryOf(t, payment.NewFake()), Mail: mailer.NewFake(), Images: storage,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 

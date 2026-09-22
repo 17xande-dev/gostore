@@ -135,7 +135,7 @@ func TestCheckout_CreatesPendingOrderAndHandsOverToTheGateway(t *testing.T) {
 	// The response is the auto-submitting hand-over form.
 	for _, want := range []string{
 		`id="gateway-redirect"`,
-		`action="` + s.gateway.FormActionOrigin(),
+		`action="` + s.gateway.CSP().FormAction,
 		`name="order_id" value="` + order.ID + `"`,
 		`name="signature"`,
 		"/static/redirect.js", // the CSP forbids an inline script, so this is a file

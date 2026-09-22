@@ -76,9 +76,10 @@ func TestPayFast_SignatureMatchesKnownVector(t *testing.T) {
 	)
 
 	g := testGateway(t, nil)
-	_, fields, err := g.BuildRedirectForm(testRequest())
+	h, err := g.Handover(testRequest())
+	fields := h.Fields
 	if err != nil {
-		t.Fatalf("BuildRedirectForm: %v", err)
+		t.Fatalf("Handover: %v", err)
 	}
 
 	// Everything except the signature is what was signed.
@@ -140,7 +141,7 @@ func TestPayFast_URLEncodeIsPHPs(t *testing.T) {
 	}
 }
 
-func TestPayFast_BuildRedirectFormOmitsBlankFields(t *testing.T) {
+func TestPayFast_HandoverOmitsBlankFields(t *testing.T) {
 	// PayFast excludes blank fields when it verifies a signature, so a blank field
 	// that is submitted anyway is a mismatch. Rather than sign one set and submit
 	// another, blanks are not submitted at all.
@@ -148,9 +149,10 @@ func TestPayFast_BuildRedirectFormOmitsBlankFields(t *testing.T) {
 
 	req := testRequest()
 	req.NameLast = "" // a shopper with a one-word name
-	_, fields, err := g.BuildRedirectForm(req)
+	h, err := g.Handover(req)
+	fields := h.Fields
 	if err != nil {
-		t.Fatalf("BuildRedirectForm: %v", err)
+		t.Fatalf("Handover: %v", err)
 	}
 
 	for _, f := range fields {
@@ -168,30 +170,32 @@ func TestPayFast_BuildRedirectFormOmitsBlankFields(t *testing.T) {
 	}
 }
 
-func TestPayFast_BuildRedirectFormTargetsTheRightHost(t *testing.T) {
+func TestPayFast_HandoverTargetsTheRightHost(t *testing.T) {
 	sandbox := testGateway(t, nil)
-	action, _, err := sandbox.BuildRedirectForm(testRequest())
+	h, err := sandbox.Handover(testRequest())
+	action := h.Action
 	if err != nil {
-		t.Fatalf("BuildRedirectForm: %v", err)
+		t.Fatalf("Handover: %v", err)
 	}
 	if action != "https://sandbox.payfast.co.za/eng/process" {
 		t.Errorf("sandbox action = %q", action)
 	}
 	// The CSP has to name this origin, or the browser blocks the hand-over.
-	if sandbox.FormActionOrigin() != "https://sandbox.payfast.co.za" {
-		t.Errorf("sandbox FormActionOrigin = %q", sandbox.FormActionOrigin())
+	if sandbox.CSP().FormAction != "https://sandbox.payfast.co.za" {
+		t.Errorf("sandbox CSP form-action = %q", sandbox.CSP().FormAction)
 	}
 
 	live := testGateway(t, func(c *Config) { c.Sandbox = false })
-	action, _, err = live.BuildRedirectForm(testRequest())
+	h, err = live.Handover(testRequest())
+	action = h.Action
 	if err != nil {
-		t.Fatalf("BuildRedirectForm: %v", err)
+		t.Fatalf("Handover: %v", err)
 	}
 	if action != "https://www.payfast.co.za/eng/process" {
 		t.Errorf("live action = %q", action)
 	}
-	if live.FormActionOrigin() != "https://www.payfast.co.za" {
-		t.Errorf("live FormActionOrigin = %q", live.FormActionOrigin())
+	if live.CSP().FormAction != "https://www.payfast.co.za" {
+		t.Errorf("live CSP form-action = %q", live.CSP().FormAction)
 	}
 }
 
@@ -224,7 +228,7 @@ func TestPayFast_RefusesWhatPayFastWouldReject(t *testing.T) {
 	for _, tc := range cases {
 		req := testRequest()
 		tc.edit(&req)
-		if _, _, err := g.BuildRedirectForm(req); !errors.Is(err, tc.want) {
+		if _, err := g.Handover(req); !errors.Is(err, tc.want) {
 			t.Errorf("%s: error = %v, want %v", tc.name, err, tc.want)
 		}
 	}
@@ -235,9 +239,10 @@ func TestPayFast_TruncatesItemName(t *testing.T) {
 
 	req := testRequest()
 	req.ItemName = strings.Repeat("x", itemNameMaxLen+50)
-	_, fields, err := g.BuildRedirectForm(req)
+	h, err := g.Handover(req)
+	fields := h.Fields
 	if err != nil {
-		t.Fatalf("BuildRedirectForm: %v", err)
+		t.Fatalf("Handover: %v", err)
 	}
 
 	for _, f := range fields {

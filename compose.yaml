@@ -103,6 +103,13 @@ services:
       # a tunnel. Off here, never off in production.
       PAYFAST_ALLOWED_CIDRS: ${PAYFAST_ALLOWED_CIDRS:-any}
       PAYFAST_NOTIFY_URL: ${PAYFAST_NOTIFY_URL:-}
+      # SnapScan is off unless a snap code is supplied, and deliberately has no
+      # default: it has no sandbox, so any value here takes real money. See
+      # .env.example.
+      SNAPSCAN_SNAP_CODE: ${SNAPSCAN_SNAP_CODE:-}
+      SNAPSCAN_API_KEY: ${SNAPSCAN_API_KEY:-}
+      SNAPSCAN_WEBHOOK_AUTH_KEY: ${SNAPSCAN_WEBHOOK_AUTH_KEY:-}
+      SNAPSCAN_VALIDATION_KEY: ${SNAPSCAN_VALIDATION_KEY:-}
       # Mail goes to the mailpit service, where every message is caught and
       # readable at http://localhost:8025 rather than delivered to anybody. TLS is
       # off because mailpit offers none; that is correct here and nowhere else.
