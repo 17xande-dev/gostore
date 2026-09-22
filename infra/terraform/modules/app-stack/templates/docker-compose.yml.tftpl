@@ -1,0 +1,90 @@
+# Written by Terraform (app-stack module) on first boot. See README for the
+# deploy workflow this implies: there is no orchestrator watching this file,
+# so a new image tag needs `docker compose pull && docker compose up -d` run
+# by hand (or a re-`apply` that recreates the instance, for everything else).
+name: gostore
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${app_name}
+      POSTGRES_PASSWORD: ${postgres_password}
+      POSTGRES_DB: ${app_name}
+    volumes:
+      - ${postgres_data_mount}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${app_name} -d ${app_name}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+%{ if image_backend == "minio" ~}
+
+  # Self-hosted object storage, on the same grounds as the compose stack in
+  # dev: this environment has no Cloudflare R2 account of its own. Bucket
+  # creation and the public-read policy are minio-init's job, immediately
+  # below — this container refuses bucket-creation rights on purpose, same
+  # reasoning as compose.yaml at the repo root.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${app_name}
+      MINIO_ROOT_PASSWORD: ${minio_root_password}
+    volumes:
+      - ${minio_data_mount}:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${app_name} ${minio_root_password} &&
+      mc mb --ignore-existing local/${blob_bucket} &&
+      mc anonymous set download local/${blob_bucket} &&
+      echo '${blob_bucket} ready (public read)'
+      "
+%{ endif ~}
+
+  server:
+    image: ${container_image}
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+%{ if image_backend == "minio" ~}
+      minio-init:
+        condition: service_completed_successfully
+%{ endif ~}
+
+  # Terminates TLS and is the only container publishing a host port. The app
+  # is reached at server:8080 over the compose network and never exposed
+  # directly — see the "no load balancer" note in the README for why this is
+  # Caddy alone rather than Caddy plus something in front of it.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+
+volumes:
+  caddy_data:
+  caddy_config:

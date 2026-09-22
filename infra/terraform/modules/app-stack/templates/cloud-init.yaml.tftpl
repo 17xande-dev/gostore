@@ -1,0 +1,58 @@
+#cloud-init
+# Rendered by the app-stack module. Runs once, on first boot — see the
+# module README for what changing a variable later does and does not do.
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+
+write_files:
+  - path: /opt/gostore/.env
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${env_b64}
+  - path: /opt/gostore/docker-compose.yml
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${compose_b64}
+  - path: /opt/gostore/Caddyfile
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${caddyfile_b64}
+
+runcmd:
+  # Docker Engine from the official apt repository — deliberately not the
+  # get.docker.com convenience script, which pipes a remote shell script into
+  # root on a box taking real payments.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+  # The persistent data disk. blkid succeeds (and mkfs is skipped) on every
+  # boot after the first, so a later `apply` that only touches the compose
+  # file or .env can never reformat a disk with real orders on it.
+  - 'blkid ${data_device} || mkfs.ext4 -F ${data_device}'
+  - mkdir -p /mnt/gostore-data
+  - |
+    DATA_UUID=$(blkid -s UUID -o value ${data_device})
+    grep -q "$DATA_UUID" /etc/fstab || echo "UUID=$DATA_UUID /mnt/gostore-data ext4 defaults,nofail 0 2" >> /etc/fstab
+  - mount -a
+  - mkdir -p ${postgres_data_mount}
+  # postgres:17-alpine runs as uid/gid 999 from its first instruction — there
+  # is no root step inside the container to chown a bind mount for it — so
+  # the host directory has to already be writable by that uid.
+  - chown -R 999:999 ${postgres_data_mount}
+%{ if image_backend == "minio" ~}
+  - mkdir -p ${minio_data_mount}
+%{ endif ~}
+
+  - cd /opt/gostore && docker compose up -d

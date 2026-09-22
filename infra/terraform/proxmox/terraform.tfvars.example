@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars and fill in.
+
+proxmox_endpoint  = "https://proxmox.example.internal:8006"
+proxmox_api_token = "terraform@pve!gostore=00000000-0000-0000-0000-000000000000"
+proxmox_node      = "pve"
+
+# Static is usually right for staging — a moving IP means re-editing DNS (or
+# hosts files) every time the VM is recreated.
+ip_address = "192.168.1.50/24"
+ip_gateway = "192.168.1.1"
+
+ssh_public_key  = "ssh-ed25519 AAAA... you@yourhost"
+container_image = "ghcr.io/you/gostore:staging"
+base_url        = "https://staging.gostore.example.com"
+domain          = "staging.gostore.example.com"
+acme_email      = "ops@example.com"
+store_name      = "Your Store Name (staging)"
+
+# Mail. Both required: the server refuses to boot without a relay, and a
+# digital download's link exists only in the confirmation email. Pointing
+# staging at a real relay is fine — it's the payment gateway that needs
+# guarding, not outgoing mail.
+smtp_host     = "smtp.example.com"
+smtp_port     = 587
+smtp_username = "gostore@example.com"
+email_from    = "orders@example.com"
+
+# MinIO fronts images at this hostname — see main.tf's vendor-data comment
+# for why staging doesn't use Cloudflare R2. Needs its own DNS record.
+images_domain = "images-staging.gostore.example.com"

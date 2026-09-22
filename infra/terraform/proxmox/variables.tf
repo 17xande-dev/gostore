@@ -1,0 +1,220 @@
+# --- Proxmox connection and node placement ---
+
+variable "proxmox_endpoint" {
+  description = "e.g. https://proxmox.example.internal:8006"
+  type        = string
+}
+
+variable "proxmox_api_token" {
+  description = "\"user@realm!token-id=uuid\", from Datacenter -> Permissions -> API Tokens. Needs enough privilege to create VMs and upload files — see the README."
+  type        = string
+  sensitive   = true
+}
+
+variable "proxmox_insecure" {
+  description = "true skips TLS verification, for a node with a self-signed certificate. Set false once you've installed a real one."
+  type        = bool
+  default     = true
+}
+
+variable "proxmox_node" {
+  description = "The Proxmox node (host) to place the VM on."
+  type        = string
+}
+
+variable "vm_storage" {
+  description = "Datastore ID for the VM's disks, e.g. local-lvm."
+  type        = string
+  default     = "local-lvm"
+}
+
+variable "image_storage" {
+  description = "Datastore ID to download the Ubuntu cloud image into. Must have the \"ISO image\" content type enabled — this is where the qcow2 lands even though it isn't an ISO; see main.tf."
+  type        = string
+  default     = "local"
+}
+
+variable "snippets_storage" {
+  description = "Datastore ID to upload the rendered cloud-init file into. Must have the \"Snippets\" content type enabled in Proxmox's storage config, which local (directory) storage supports and most others don't."
+  type        = string
+  default     = "local"
+}
+
+variable "network_bridge" {
+  type    = string
+  default = "vmbr0"
+}
+
+variable "ip_address" {
+  description = "\"dhcp\", or a static address as CIDR, e.g. 192.168.1.50/24. ip_gateway is required with a static address."
+  type        = string
+  default     = "dhcp"
+}
+
+variable "ip_gateway" {
+  type    = string
+  default = ""
+}
+
+variable "cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "memory_mb" {
+  type    = number
+  default = 4096
+}
+
+variable "boot_disk_gb" {
+  type    = number
+  default = 20
+}
+
+variable "data_disk_gb" {
+  description = "Second disk, for Postgres's and MinIO's data — see main.tf for why it's separate from the boot disk."
+  type        = number
+  default     = 20
+}
+
+variable "ssh_public_key" {
+  description = "Installed for the ubuntu user via Proxmox's own cloud-init user-data, not the app-stack module's — see main.tf."
+  type        = string
+}
+
+# --- app-stack passthrough — same shape as ../vultr/variables.tf ---
+
+variable "app_name" {
+  type    = string
+  default = "gostore"
+}
+
+variable "container_image" {
+  type = string
+}
+
+variable "base_url" {
+  type = string
+}
+
+variable "domain" {
+  description = "Hostname Caddy requests a certificate for. Needs a DNS record (or a hosts-file entry, for a Proxmox that's only reachable on a private network) pointing at this VM before the first boot."
+  type        = string
+}
+
+variable "acme_email" {
+  type = string
+}
+
+variable "store_name" {
+  type = string
+}
+
+variable "currency" {
+  type    = string
+  default = "ZAR"
+}
+
+# Defaults true here, unlike ../vultr: staging has no reason to ever take a
+# real payment, so the safe default is the right one instead of something to
+# force a decision about.
+variable "payfast_sandbox" {
+  type    = bool
+  default = true
+}
+
+variable "payfast_merchant_id" {
+  type      = string
+  default   = "10000100"
+  sensitive = true
+}
+
+variable "payfast_merchant_key" {
+  type      = string
+  default   = "46f0cd694581a"
+  sensitive = true
+}
+
+variable "payfast_passphrase" {
+  type      = string
+  default   = "jt7NOE43FZPn"
+  sensitive = true
+}
+
+variable "snapscan_snap_code" {
+  type    = string
+  default = ""
+}
+
+variable "snapscan_api_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "snapscan_webhook_auth_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "snapscan_validation_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "smtp_host" {
+  type = string
+  validation {
+    condition     = trimspace(var.smtp_host) != ""
+    error_message = "smtp_host must not be empty — a required variable set to \"\" would deploy a store that cannot send receipts."
+  }
+}
+
+variable "smtp_port" {
+  type    = number
+  default = 587
+}
+
+variable "smtp_tls" {
+  type    = string
+  default = "starttls"
+}
+
+variable "smtp_username" {
+  type    = string
+  default = ""
+}
+
+variable "smtp_password" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "email_from" {
+  type = string
+  validation {
+    condition     = trimspace(var.email_from) != ""
+    error_message = "email_from must not be empty — SMTP_HOST and EMAIL_FROM are required together."
+  }
+}
+
+variable "order_notify_email" {
+  type    = string
+  default = ""
+}
+
+# --- Product images: self-hosted MinIO ---
+#
+# Staging has no Cloudflare account of its own, unlike ../vultr — see that
+# module's README. images_domain needs its own DNS record, same as domain.
+variable "images_domain" {
+  type = string
+}
+
+variable "blob_bucket" {
+  type    = string
+  default = "gostore-images"
+}

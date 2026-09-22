@@ -1,0 +1,33 @@
+# Copy to terraform.tfvars and fill in. Also export VULTR_API_KEY — see
+# versions.tf for why it isn't a variable here.
+
+ssh_public_key  = "ssh-ed25519 AAAA... you@yourhost"
+container_image = "ghcr.io/you/gostore:v1"
+base_url        = "https://gostore.example.com"
+domain          = "gostore.example.com"
+acme_email      = "ops@example.com"
+store_name      = "Your Store Name"
+
+# Whether this shop is really open. Required, no default in either
+# direction: true runs against PayFast's sandbox and takes no money, false
+# takes real payments. Going live is two changes, not one — see the module
+# README — PAYFAST_MERCHANT_ID etc. above must be your own before this
+# flips, or the server refuses to start.
+payfast_sandbox = true
+
+# Mail. Both required: the server refuses to boot without a relay, and a
+# digital download's link exists only in the confirmation email.
+smtp_host     = "smtp.example.com"
+smtp_port     = 587
+smtp_username = "gostore@example.com"
+email_from    = "orders@example.com"
+
+# order_notify_email = "shop@example.com"
+
+# Cloudflare R2. Create the bucket and an API token by hand (Account Home ->
+# R2 -> Manage API Tokens) — see variables.tf for why Terraform doesn't own
+# this account.
+blob_endpoint          = "<account-id>.r2.cloudflarestorage.com"
+blob_access_key_id     = "..."
+blob_secret_access_key = "..."
+blob_public_base_url   = "https://images.example.com"
