@@ -25,7 +25,7 @@
 <p>Order <strong>{{.Order.Reference}}</strong> — {{.Currency}} {{money .Order.TotalCents}}</p>
 
 <div class="qr-handover">
-  <a class="qr-handover-button" href="{{.Handover.Action}}">Open {{.GatewayLabel}} to pay</a>
+  <a class="button qr-handover-button" href="{{.Handover.Action}}">Open {{.GatewayLabel}} to pay</a>
 
   <figure class="qr-handover-code">
     {{/*

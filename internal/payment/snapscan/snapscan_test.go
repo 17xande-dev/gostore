@@ -109,10 +109,25 @@ func TestHandover_QRImageMatchesTheLink(t *testing.T) {
 	}
 
 	link, _ := url.Parse(h.Action)
-	for _, k := range []string{"id", "amount", "strict", "s_url", "f_url"} {
+	// The payment itself must be identical, or a shopper scanning and a shopper
+	// tapping pay different things.
+	for _, k := range []string{"id", "amount", "strict", "signature"} {
 		if img.Query().Get(k) != link.Query().Get(k) {
 			t.Errorf("%s differs between the image and the link: %q vs %q",
 				k, img.Query().Get(k), link.Query().Get(k))
+		}
+	}
+
+	// The redirect URLs must NOT be on the image. SnapScan's image endpoint
+	// answers 403 with an HTML body when they are present, and a browser refuses
+	// that as an image — a broken QR code that curl and every handler test call a
+	// 200. Found in a browser, kept honest here.
+	for _, k := range []string{"s_url", "f_url"} {
+		if img.Query().Has(k) {
+			t.Errorf("the QR image URL carries %s, which makes SnapScan answer 403", k)
+		}
+		if !link.Query().Has(k) {
+			t.Errorf("the payment link is missing %s", k)
 		}
 	}
 }

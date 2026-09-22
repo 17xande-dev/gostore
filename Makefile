@@ -12,6 +12,15 @@ PAYFAST_MERCHANT_ID ?= 10000100
 PAYFAST_MERCHANT_KEY ?= 46f0cd694581a
 PAYFAST_PASSPHRASE ?= jt7NOE43FZPn
 PAYFAST_SANDBOX ?= true
+# SnapScan is off unless a snap code is exported, and deliberately has no default:
+# it has no sandbox, so any value here takes real money. Export all three to try
+# the QR hand-over locally — and note that the webhook cannot reach a laptop
+# without a tunnel, since SnapScan's support configures that address on the
+# account rather than reading it from each payment.
+SNAPSCAN_SNAP_CODE ?=
+SNAPSCAN_API_KEY ?=
+SNAPSCAN_WEBHOOK_AUTH_KEY ?=
+SNAPSCAN_VALIDATION_KEY ?=
 # Recipes using DEV_ENV are prefixed with @ so a real PAYFAST_PASSPHRASE or
 # SETUP_TOKEN is not echoed into a terminal or a CI log.
 DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
@@ -20,6 +29,10 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 	PAYFAST_MERCHANT_KEY="$(PAYFAST_MERCHANT_KEY)" \
 	PAYFAST_PASSPHRASE="$(PAYFAST_PASSPHRASE)" \
 	PAYFAST_SANDBOX="$(PAYFAST_SANDBOX)" \
+	SNAPSCAN_SNAP_CODE="$(SNAPSCAN_SNAP_CODE)" \
+	SNAPSCAN_API_KEY="$(SNAPSCAN_API_KEY)" \
+	SNAPSCAN_WEBHOOK_AUTH_KEY="$(SNAPSCAN_WEBHOOK_AUTH_KEY)" \
+	SNAPSCAN_VALIDATION_KEY="$(SNAPSCAN_VALIDATION_KEY)" \
 	DOWNLOAD_ENDPOINT="$(DOWNLOAD_ENDPOINT)" \
 	DOWNLOAD_BUCKET="$(DOWNLOAD_BUCKET)" \
 	DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \

@@ -231,6 +231,7 @@ func (g *Gateway) Handover(r payment.Request) (payment.Handover, error) {
 	// this project, is deliberately absent here.
 	amount := strconv.FormatInt(r.AmountCents, 10)
 
+	// What identifies the payment, and what both the link and the QR image carry.
 	q := url.Values{}
 	q.Set("id", r.OrderID)
 	q.Set("amount", amount)
@@ -238,17 +239,28 @@ func (g *Gateway) Handover(r payment.Request) (payment.Handover, error) {
 	// payment against the same id, and refuses an amount below the one asked
 	// for. Sent whether or not a validation key is configured.
 	q.Set("strict", "true")
-	q.Set("s_url", g.cfg.SuccessURL)
-	q.Set("f_url", g.cfg.FailURL)
 	if g.cfg.ValidationKey != "" {
 		q.Set("signature", Sign(g.cfg.ValidationKey, r.AmountCents, r.OrderID))
 	}
 
-	action := g.base + "/qr/" + g.cfg.SnapCode + "?" + q.Encode()
+	// The link additionally says where to put the shopper's browser afterwards.
+	link := url.Values{}
+	maps.Copy(link, q)
+	link.Set("s_url", g.cfg.SuccessURL)
+	link.Set("f_url", g.cfg.FailURL)
+	action := g.base + "/qr/" + g.cfg.SnapCode + "?" + link.Encode()
 
-	// The image is the same URL with a format suffix on the snap code. The size
-	// parameter is stripped from what the QR itself encodes, so the image and
-	// the link lead to exactly the same payment.
+	// The image is the same payment with a format suffix on the snap code — and
+	// deliberately *without* the redirect URLs.
+	//
+	// ⚠ This is not tidiness. SnapScan's image endpoint answers 403 with an HTML
+	// body when s_url or f_url is present, and a browser then refuses the HTML as
+	// an image (Chrome: ERR_BLOCKED_BY_ORB) and shows a broken code with nothing
+	// in the page but a console entry. curl sees a 403 and the markup looks
+	// perfect, so only a real browser finds this.
+	//
+	// Nothing is lost by dropping them: a scanned code is paid in an app on
+	// another device, where there is no browser to send anywhere.
 	qrQuery := url.Values{}
 	maps.Copy(qrQuery, q)
 	qrQuery.Set("snap_code_size", strconv.Itoa(g.qrSize))

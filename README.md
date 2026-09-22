@@ -1084,6 +1084,13 @@ waiting message and the confirmation still arrives by email.
    fixes a minimum amount and refuses a repeat payment on the same order — both are sent
    whenever a key is configured, because they do different jobs.
 
+**The QR image URL carries no redirect URLs**, and that is load-bearing rather than tidy:
+SnapScan's image endpoint answers `403` with an HTML body when `s_url` or `f_url` is
+present, and a browser then refuses the HTML as an image — Chrome reports
+`ERR_BLOCKED_BY_ORB` in the console and shows nothing. `curl` sees a `403`, the markup is
+perfect and every handler test passes, so only a real browser finds it. Nothing is lost: a
+scanned code is paid in an app on another device, where there is no browser to redirect.
+
 **There is no sandbox.** PayFast's safe default trains the opposite expectation, and there is
 no equivalent here: the first real test is the smallest payment you are willing to make. A
 local one also needs a tunnel, since SnapScan's servers have to reach the callback.
