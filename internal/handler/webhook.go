@@ -76,7 +76,7 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceIP := middleware.ClientIP(r, h.cfg.TrustProxyIP)
+	sourceIP := middleware.ClientIP(r, h.cfg.ClientIPSource)
 	cb, err := gateway.ParseCallback(r.Context(), payment.Notification{
 		Body: body, Header: r.Header, SourceIP: sourceIP,
 	})

@@ -19,9 +19,9 @@ func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 // through. The counter is atomic because the concurrency test drives it from twenty
 // goroutines at once — the limiter is safe for that, and the test's own bookkeeping
 // has to be too.
-func limited(cfg RateLimitConfig, trustProxy bool) (http.Handler, *atomic.Int64) {
+func limited(cfg RateLimitConfig, source ClientIPSource) (http.Handler, *atomic.Int64) {
 	var served atomic.Int64
-	h := RateLimit(cfg, trustProxy, discard())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := RateLimit(cfg, source, discard())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		served.Add(1)
 	}))
 	return h, &served
@@ -35,7 +35,7 @@ func requestFrom(ip string) *http.Request {
 
 func TestRateLimit_AllowsTheBurstThenRefuses(t *testing.T) {
 	// One request a second, five saved up.
-	h, served := limited(RateLimitConfig{Name: "test", Every: time.Second, Burst: 5}, false)
+	h, served := limited(RateLimitConfig{Name: "test", Every: time.Second, Burst: 5}, ClientIPRemote)
 
 	codes := make([]int, 0, 8)
 	for range 8 {
@@ -61,7 +61,7 @@ func TestRateLimit_AllowsTheBurstThenRefuses(t *testing.T) {
 func TestRateLimit_TellsTheClientWhenToReturn(t *testing.T) {
 	// Retry-After matters more than usual here: the payment gateway reads it, and a
 	// throttled notification that is never retried is a lost payment.
-	h, _ := limited(RateLimitConfig{Name: "test", Every: 2 * time.Second, Burst: 1}, false)
+	h, _ := limited(RateLimitConfig{Name: "test", Every: 2 * time.Second, Burst: 1}, ClientIPRemote)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, requestFrom("203.0.113.7"))
@@ -82,7 +82,7 @@ func TestRateLimit_TellsTheClientWhenToReturn(t *testing.T) {
 
 func TestRateLimit_IsPerClient(t *testing.T) {
 	// One shopper hitting a limit must not stop everybody else buying things.
-	h, served := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, false)
+	h, served := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, ClientIPRemote)
 
 	for _, ip := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
 		w := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestRateLimit_IsPerClient(t *testing.T) {
 func TestRateLimit_RecoversOverTime(t *testing.T) {
 	// The bucket refills, so a client that waits is served again — otherwise a
 	// limiter is a ban.
-	h, _ := limited(RateLimitConfig{Name: "test", Every: 20 * time.Millisecond, Burst: 1}, false)
+	h, _ := limited(RateLimitConfig{Name: "test", Every: 20 * time.Millisecond, Burst: 1}, ClientIPRemote)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, requestFrom("203.0.113.7"))
@@ -129,9 +129,9 @@ func TestRateLimit_RecoversOverTime(t *testing.T) {
 }
 
 func TestRateLimit_KeyedByForwardedIPOnlyWhenTrusted(t *testing.T) {
-	// With trustProxy off, a client cannot escape its bucket by claiming an address:
+	// With remote, a client cannot escape its bucket by claiming an address:
 	// every request below shares one limiter because RemoteAddr is the same.
-	h, _ := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, false)
+	h, _ := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, ClientIPRemote)
 
 	first := requestFrom("203.0.113.7")
 	first.Header.Set("X-Forwarded-For", "198.51.100.1")
@@ -146,13 +146,13 @@ func TestRateLimit_KeyedByForwardedIPOnlyWhenTrusted(t *testing.T) {
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, second)
 	if w.Code != http.StatusTooManyRequests {
-		t.Error("a client escaped its bucket by changing X-Forwarded-For with trustProxy off")
+		t.Error("a client escaped its bucket by changing X-Forwarded-For with CLIENT_IP_SOURCE=remote")
 	}
 
-	// With it on, the header is the key — which is correct behind a proxy that
+	// With forwarded, the header is the key — which is correct behind a proxy that
 	// replaces the header, and a limiter that limits nothing behind one that does
 	// not. That trade is documented on ClientIP.
-	h, _ = limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, true)
+	h, _ = limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 1}, ClientIPForwarded)
 	for _, claimed := range []string{"198.51.100.1", "198.51.100.2"} {
 		r := requestFrom("203.0.113.7")
 		r.Header.Set("X-Forwarded-For", claimed)
@@ -205,7 +205,7 @@ func TestRateLimit_EvictsIdleBuckets(t *testing.T) {
 func TestRateLimit_ConcurrentClients(t *testing.T) {
 	// The map is shared, so this is worth racing rather than assuming. Run with
 	// -race, which CI does.
-	h, _ := limited(RateLimitConfig{Name: "test", Every: time.Millisecond, Burst: 50}, false)
+	h, _ := limited(RateLimitConfig{Name: "test", Every: time.Millisecond, Burst: 50}, ClientIPRemote)
 
 	var wg sync.WaitGroup
 	for i := range 20 {
@@ -224,7 +224,7 @@ func TestRateLimit_ConcurrentClients(t *testing.T) {
 func TestRateLimit_ZeroBurstStillAllowsSomething(t *testing.T) {
 	// A misconfigured burst of zero would otherwise refuse every request forever,
 	// turning a limit into an outage.
-	h, served := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 0}, false)
+	h, served := limited(RateLimitConfig{Name: "test", Every: time.Hour, Burst: 0}, ClientIPRemote)
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, requestFrom("203.0.113.7"))

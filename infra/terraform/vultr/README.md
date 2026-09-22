@@ -51,11 +51,16 @@ two changes, not one: `payfast_merchant_id`/`_key`/`_passphrase` also need to
 be your own, or the server refuses to start with live mode and a sandbox
 merchant id.
 
-`TRUST_PROXY_IP` needs no variable here: Caddy is the only thing between the
-internet and the app container, so it's always true. See
+`CLIENT_IP_SOURCE` needs no variable here: Caddy is the only thing between the
+internet and the app container, and it replaces `X-Forwarded-For` rather than
+appending to it, so `forwarded` is always the right answer. See
 `internal/middleware/clientip.go` for what a forged `X-Forwarded-For` could
 otherwise do to the PayFast callback's source-IP check and to per-IP rate
 limiting.
+
+Putting Cloudflare in front of this instance changes that answer to
+`cloudflare` — the edge appends to `X-Forwarded-For`, so its leftmost entry
+becomes whatever the client sent.
 
 ## What this is not
 

@@ -94,7 +94,7 @@ func (h *Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	access, err := h.grants.Authorize(r.Context(), e,
-		fileID, middleware.ClientIP(r, h.cfg.TrustProxyIP), r.UserAgent())
+		fileID, middleware.ClientIP(r, h.cfg.ClientIPSource), r.UserAgent())
 	if err != nil {
 		h.downloadError(w, r, err)
 		return
@@ -221,7 +221,7 @@ func (h *Handler) checkoutDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	access, err := h.grants.Authorize(r.Context(), e,
-		fileID, middleware.ClientIP(r, h.cfg.TrustProxyIP), r.UserAgent())
+		fileID, middleware.ClientIP(r, h.cfg.ClientIPSource), r.UserAgent())
 	if err != nil {
 		h.downloadError(w, r, err)
 		return

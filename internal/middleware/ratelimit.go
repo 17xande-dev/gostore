@@ -71,11 +71,11 @@ const limiterTTL = 10 * time.Minute
 
 // RateLimit limits requests per client IP.
 //
-// trustProxy decides where the client's address comes from; see ClientIP. It
-// matters more here than anywhere else in the server: with it wrongly on, every
-// client can invent an address and have a bucket to itself, which is a limiter
-// that limits nothing.
-func RateLimit(cfg RateLimitConfig, trustProxy bool, log *slog.Logger) Middleware {
+// source decides where the client's address comes from; see ClientIP. It matters
+// more here than anywhere else in the server: set to a header nothing in front is
+// actually replacing, every client can invent an address and have a bucket to
+// itself, which is a limiter that limits nothing.
+func RateLimit(cfg RateLimitConfig, source ClientIPSource, log *slog.Logger) Middleware {
 	if cfg.TTL <= 0 {
 		cfg.TTL = limiterTTL
 	}
@@ -97,7 +97,7 @@ func RateLimit(cfg RateLimitConfig, trustProxy bool, log *slog.Logger) Middlewar
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ClientIP(r, trustProxy)
+			ip := ClientIP(r, source)
 			if l.allow(ip, time.Now()) {
 				next.ServeHTTP(w, r)
 				return

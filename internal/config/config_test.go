@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/17xande-dev/gostore/internal/middleware"
 )
 
 // setRequired sets every required var to something valid, so each test can
@@ -412,30 +414,55 @@ func TestBlob_PublicOrigin(t *testing.T) {
 	}
 }
 
-func TestLoad_TrustProxyIP(t *testing.T) {
+func TestLoad_ClientIPSource(t *testing.T) {
 	setRequired(t)
 
-	// False by default: believing X-Forwarded-For without a proxy in front lets a
-	// client claim any source IP, which is one of the checks on the payment
-	// callback.
+	// remote by default: believing a header without a proxy in front that sets it
+	// lets a client claim any source IP, which is one of the checks on the
+	// payment callback.
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.TrustProxyIP {
-		t.Error("TrustProxyIP is true by default")
+	if c.ClientIPSource != middleware.ClientIPRemote {
+		t.Errorf("default ClientIPSource = %q, want %q", c.ClientIPSource, middleware.ClientIPRemote)
 	}
 
-	t.Setenv("TRUST_PROXY_IP", "true")
-	if c, err = Load(); err != nil || !c.TrustProxyIP {
-		t.Errorf("TRUST_PROXY_IP=true: %v, %v", c.TrustProxyIP, err)
+	for _, want := range []middleware.ClientIPSource{
+		middleware.ClientIPRemote,
+		middleware.ClientIPForwarded,
+		middleware.ClientIPCloudflare,
+	} {
+		t.Setenv("CLIENT_IP_SOURCE", string(want))
+		if c, err = Load(); err != nil || c.ClientIPSource != want {
+			t.Errorf("CLIENT_IP_SOURCE=%s: got %q, %v", want, c.ClientIPSource, err)
+		}
 	}
 
-	// Anything that is not plainly true is false, so a typo cannot quietly turn
-	// it on.
-	t.Setenv("TRUST_PROXY_IP", "ture")
-	if c, err = Load(); err != nil || c.TrustProxyIP {
-		t.Errorf("TRUST_PROXY_IP=ture was treated as true")
+	// A typo is refused rather than silently falling back, because every value
+	// here is load-bearing for the rate limits and the callback's source-IP check.
+	t.Setenv("CLIENT_IP_SOURCE", "cloudlfare")
+	if _, err = Load(); err == nil {
+		t.Error("a misspelt CLIENT_IP_SOURCE was accepted")
+	}
+}
+
+func TestLoad_TrustProxyIPIsRefused(t *testing.T) {
+	setRequired(t)
+
+	// The variable it replaced must not be ignored: a deployment that still sets
+	// it would fall back to remote, so every shopper would share one rate-limit
+	// bucket and the payment callback would reject every genuine notification.
+	// Both fail quietly, so the boot does not.
+	for _, v := range []string{"true", "false"} {
+		t.Setenv("TRUST_PROXY_IP", v)
+		_, err := Load()
+		if err == nil {
+			t.Fatalf("TRUST_PROXY_IP=%s was accepted", v)
+		}
+		if !strings.Contains(err.Error(), "CLIENT_IP_SOURCE") {
+			t.Errorf("TRUST_PROXY_IP=%s error does not name the replacement: %v", v, err)
+		}
 	}
 }
 

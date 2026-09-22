@@ -121,7 +121,7 @@ type Notification struct {
 	Body   []byte
 	Header http.Header
 	// SourceIP is the client address as the middleware resolved it, honouring
-	// TRUST_PROXY_IP.
+	// CLIENT_IP_SOURCE.
 	SourceIP string
 }
 

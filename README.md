@@ -77,7 +77,7 @@ list with defaults.
 | `SNAPSCAN_API_KEY` | with SnapScan | — | Reads payments back from SnapScan's API, which is how a notification is confirmed |
 | `SNAPSCAN_WEBHOOK_AUTH_KEY` | with SnapScan | — | The shared secret a notification's HMAC is computed with |
 | `SNAPSCAN_VALIDATION_KEY` | no | — | Secure QR Payload key; signs the amount and reference in the payment URL |
-| `TRUST_PROXY_IP` | no | `false` | Believe `X-Forwarded-For`; only with a proxy that replaces it |
+| `CLIENT_IP_SOURCE` | no | `remote` | Where the client address is read from: `remote`, `forwarded` (leftmost `X-Forwarded-For`, only with a proxy that replaces it) or `cloudflare` (`CF-Connecting-IP`) |
 | `PORT` | no | `8080` | Listen port |
 | `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs |
 | `STORE_NAME` | no | `gostore` | Displayed store name |
@@ -1148,11 +1148,17 @@ server **refuses to start** with `PAYFAST_SANDBOX=false` and PayFast's published
 merchant id, because that combination signs every payment with a key printed in PayFast's
 documentation.
 
-One more, if you deploy behind any proxy or managed platform: **`TRUST_PROXY_IP` must be
-`true`**, or the source-IP check below compares PayFast's ranges against your load
+One more, if you deploy behind any proxy or managed platform: **`CLIENT_IP_SOURCE` must
+describe it**, or the source-IP check below compares PayFast's ranges against your load
 balancer's address and rejects every genuine notification — money taken, nothing recorded.
-It must stay `false` when nothing in front of the server sets `X-Forwarded-For`, since a
-client could then claim any address it liked.
+Use `forwarded` behind a proxy that *replaces* `X-Forwarded-For`, and `cloudflare` where
+Cloudflare is the only way in. It must stay `remote` when nothing in front of the server
+sets either header, since a client could then claim any address it liked.
+
+Behind Cloudflare specifically, `forwarded` is the wrong answer rather than a
+conservative one: Cloudflare **appends** to `X-Forwarded-For`, so its leftmost entry is
+whatever the client sent. `CF-Connecting-IP` holds one address and is the header to read
+— and is only worth trusting where nothing can reach the origin except through Cloudflare.
 
 #### How a PayFast notification is authenticated
 

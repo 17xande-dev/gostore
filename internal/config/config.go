@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/blob"
+	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/mailer"
 )
 
@@ -133,12 +134,13 @@ type Config struct {
 	// removes it, keeping the carts table bounded.
 	CartTTLDays int
 
-	// TrustProxyIP makes the server believe X-Forwarded-For. It must be false
-	// unless something in front of the server is actually setting that header,
-	// because a client can otherwise claim any IP it likes — and the payment
-	// callback's source-IP check is one of the things that would then be
-	// trivially bypassed.
-	TrustProxyIP bool
+	// ClientIPSource says where the address a request came from is read from:
+	// the connection itself, X-Forwarded-For, or Cloudflare's CF-Connecting-IP.
+	// It describes what is actually in front of the server, and naming a header
+	// nothing is setting lets a client claim any IP it likes — which the payment
+	// callback's source-IP check and the per-IP rate limits both rely on. See
+	// middleware.ClientIPSource for what each value means.
+	ClientIPSource middleware.ClientIPSource
 
 	// CookieSecure is derived from BaseURL rather than configured separately:
 	// an HTTPS deployment always wants Secure cookies, and localhost
@@ -470,7 +472,6 @@ func Load() (Config, error) {
 		SetupToken:      strings.TrimSpace(os.Getenv("SETUP_TOKEN")),
 		SessionTTL:      24 * time.Hour,
 		ShutdownTimeout: 15 * time.Second,
-		TrustProxyIP:    boolEnv("TRUST_PROXY_IP", false),
 		CartTTLDays:     60,
 		RateLimits: RateLimits{
 			LoginPerMinute:    10,
@@ -612,6 +613,28 @@ func Load() (Config, error) {
 	if err := checkLogFormat(c.LogFormat); err != nil {
 		return Config{}, err
 	}
+
+	// TRUST_PROXY_IP was a bool meaning "believe X-Forwarded-For". It cannot
+	// describe a Cloudflare deployment, where the trustworthy address is in
+	// CF-Connecting-IP and X-Forwarded-For is appended to rather than replaced.
+	//
+	// Refused rather than ignored: silently falling back to the default would
+	// leave a deployment that had set it reading RemoteAddr instead — which is
+	// the proxy — so every shopper would share one rate-limit bucket and the
+	// payment callback's source-IP check would reject every genuine
+	// notification. Both fail quietly, which is what a boot refusal is for.
+	if _, ok := os.LookupEnv("TRUST_PROXY_IP"); ok {
+		return Config{}, errors.New(
+			"config: TRUST_PROXY_IP has been replaced by CLIENT_IP_SOURCE — " +
+				"use CLIENT_IP_SOURCE=forwarded for what TRUST_PROXY_IP=true did, " +
+				"CLIENT_IP_SOURCE=cloudflare behind Cloudflare, or unset it for remote")
+	}
+	clientIPSource, sourceErr := middleware.ParseClientIPSource(
+		env("CLIENT_IP_SOURCE", string(middleware.ClientIPRemote)))
+	if sourceErr != nil {
+		return Config{}, fmt.Errorf("config: CLIENT_IP_SOURCE: %w", sourceErr)
+	}
+	c.ClientIPSource = clientIPSource
 
 	// Taking real money with the demo credentials is a contradiction, and it is
 	// the mistake that follows naturally from the other one: somebody discovers

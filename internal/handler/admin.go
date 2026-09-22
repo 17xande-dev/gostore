@@ -77,7 +77,7 @@ type limiters struct {
 // perMinute builds a limiter allowing n requests a minute, or a pass-through when
 // n is zero. Burst is a third of the allowance, minimum two, so a shopper who
 // double-clicks is never the one who trips it.
-func perMinute(name string, n int, trustProxy bool, log *slog.Logger, exceeded http.Handler) middleware.Middleware {
+func perMinute(name string, n int, source middleware.ClientIPSource, log *slog.Logger, exceeded http.Handler) middleware.Middleware {
 	if n <= 0 {
 		log.Warn("rate limiting is disabled for a surface that has one available", "limiter", name)
 		return func(next http.Handler) http.Handler { return next }
@@ -87,7 +87,7 @@ func perMinute(name string, n int, trustProxy bool, log *slog.Logger, exceeded h
 		Every:    time.Minute / time.Duration(n),
 		Burst:    max(2, n/3),
 		Exceeded: exceeded,
-	}, trustProxy, log)
+	}, source, log)
 }
 
 // rateLimited is the page a throttled person sees. The payment callback does not
@@ -140,11 +140,11 @@ func New(d Deps) *Handler {
 	}
 	page := http.HandlerFunc(h.rateLimited)
 	h.limits = limiters{
-		login:    perMinute("admin login", cfg.RateLimits.LoginPerMinute, cfg.TrustProxyIP, log, page),
-		checkout: perMinute("checkout", cfg.RateLimits.CheckoutPerMinute, cfg.TrustProxyIP, log, page),
+		login:    perMinute("admin login", cfg.RateLimits.LoginPerMinute, cfg.ClientIPSource, log, page),
+		checkout: perMinute("checkout", cfg.RateLimits.CheckoutPerMinute, cfg.ClientIPSource, log, page),
 		// No page for the gateway: it is a machine, and the plain status with
 		// Retry-After is exactly what it acts on.
-		callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.TrustProxyIP, log, nil),
+		callback: perMinute("payment callback", cfg.RateLimits.CallbackPerMinute, cfg.ClientIPSource, log, nil),
 		// Signed URLs are cheap to mint, so a loop over one valid token should not
 		// be able to produce them without bound. The allowance is generous: a buyer
 		// clicking through a conference recording's twenty files in a minute is
@@ -152,8 +152,8 @@ func New(d Deps) *Handler {
 		// The payment-status poll. Cheap per request, but a page left open asks
 		// for it all afternoon, so it gets a tier of its own rather than eating
 		// the checkout's allowance and locking a shopper out of retrying.
-		status:   perMinute("payment status", cfg.RateLimits.StatusPerMinute, cfg.TrustProxyIP, log, page),
-		download: perMinute("downloads", cfg.RateLimits.DownloadPerMinute, cfg.TrustProxyIP, log, page),
+		status:   perMinute("payment status", cfg.RateLimits.StatusPerMinute, cfg.ClientIPSource, log, page),
+		download: perMinute("downloads", cfg.RateLimits.DownloadPerMinute, cfg.ClientIPSource, log, page),
 	}
 	return h
 }
