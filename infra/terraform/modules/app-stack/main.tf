@@ -26,6 +26,22 @@ locals {
     : "https://${var.images_domain}/${var.blob_bucket}"
   )
 
+  # Same "r2 means the caller has an account, minio means it doesn't" split
+  # as the blob_* locals above, applied to where backups go instead of where
+  # images live.
+  backup_use_tls = var.image_backend == "r2" ? true : false
+  backup_scheme  = local.backup_use_tls ? "https" : "http"
+
+  backup_endpoint = var.image_backend == "r2" ? var.backup_endpoint : "minio:9000"
+
+  backup_access_key_id = (
+    var.image_backend == "r2" ? var.backup_access_key_id : var.app_name
+  )
+
+  backup_secret_access_key = (
+    var.image_backend == "r2" ? var.backup_secret_access_key : var.minio_root_password
+  )
+
   env_file = templatefile("${path.module}/templates/env.tftpl", {
     app_name                  = var.app_name
     base_url                  = var.base_url
@@ -67,6 +83,23 @@ locals {
     minio_root_password = var.minio_root_password
     minio_data_mount    = var.minio_data_mount
     blob_bucket         = var.blob_bucket
+    backup_bucket       = var.backup_bucket
+  })
+
+  backup_sh = templatefile("${path.module}/templates/backup.sh.tftpl", {
+    app_name                 = var.app_name
+    backup_scheme            = local.backup_scheme
+    backup_endpoint          = local.backup_endpoint
+    backup_access_key_id     = local.backup_access_key_id
+    backup_secret_access_key = local.backup_secret_access_key
+    backup_bucket            = var.backup_bucket
+    backup_retention_days    = var.backup_retention_days
+  })
+
+  backup_service = templatefile("${path.module}/templates/gostore-backup.service.tftpl", {})
+
+  backup_timer = templatefile("${path.module}/templates/gostore-backup.timer.tftpl", {
+    backup_schedule = var.backup_schedule
   })
 
   caddyfile = templatefile("${path.module}/templates/Caddyfile.tftpl", {
@@ -84,5 +117,8 @@ locals {
     env_b64             = base64encode(local.env_file)
     compose_b64         = base64encode(local.compose_file)
     caddyfile_b64       = base64encode(local.caddyfile)
+    backup_sh_b64       = base64encode(local.backup_sh)
+    backup_service_b64  = base64encode(local.backup_service)
+    backup_timer_b64    = base64encode(local.backup_timer)
   })
 }

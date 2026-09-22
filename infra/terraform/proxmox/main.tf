@@ -60,6 +60,10 @@ module "app_stack" {
   images_domain       = var.images_domain
   blob_bucket         = var.blob_bucket
   minio_root_password = random_password.minio_root.result
+
+  backup_bucket         = var.backup_bucket
+  backup_retention_days = var.backup_retention_days
+  backup_schedule       = var.backup_schedule
 }
 
 # This is cloud-init *vendor-data*, not user-data: Proxmox's own cloud-init

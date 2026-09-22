@@ -9,8 +9,9 @@ Two independent root modules, one per environment and cloud:
   shape, minus the Cloudflare account: images live in a self-hosted MinIO
   container instead.
 - **[`modules/app-stack/`](modules/app-stack/README.md)** — shared by both.
-  Provider-agnostic: it renders the `docker-compose.yml`, `.env`, and
-  `Caddyfile` that ship as cloud-init, and creates no resources itself.
+  Provider-agnostic: it renders the `docker-compose.yml`, `.env`, `Caddyfile`,
+  and a nightly `pg_dump`-to-object-storage backup timer that ship as
+  cloud-init, and creates no resources itself.
 
 This replaced a Google Cloud config (Cloud Run, Cloud SQL, Secret Manager,
 Artifact Registry) — see either root module's README for what a plain VM

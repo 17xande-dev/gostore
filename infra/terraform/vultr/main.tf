@@ -92,6 +92,13 @@ module "app_stack" {
   blob_secret_access_key = var.blob_secret_access_key
   blob_region            = var.blob_region
   blob_public_base_url   = var.blob_public_base_url
+
+  backup_endpoint          = var.backup_endpoint
+  backup_bucket            = var.backup_bucket
+  backup_access_key_id     = var.backup_access_key_id
+  backup_secret_access_key = var.backup_secret_access_key
+  backup_retention_days    = var.backup_retention_days
+  backup_schedule          = var.backup_schedule
 }
 
 resource "vultr_instance" "main" {

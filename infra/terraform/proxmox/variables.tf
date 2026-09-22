@@ -218,3 +218,25 @@ variable "blob_bucket" {
   type    = string
   default = "gostore-images"
 }
+
+# --- Database backups: a second, private bucket on the same self-hosted MinIO ---
+#
+# No credentials to supply here — see ../modules/app-stack, which reuses the
+# generated minio_root_password. Shorter retention than ../vultr's default:
+# staging's backups exist to test the restore path and cover a bad seed or
+# migration, not to be a record anyone needs a month of.
+variable "backup_bucket" {
+  type    = string
+  default = "gostore-backups"
+}
+
+variable "backup_retention_days" {
+  type    = number
+  default = 7
+}
+
+variable "backup_schedule" {
+  description = "systemd OnCalendar expression."
+  type        = string
+  default     = "*-*-* 03:15:00"
+}

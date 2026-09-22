@@ -225,3 +225,52 @@ variable "minio_data_mount" {
   type    = string
   default = "/mnt/gostore-data/minio"
 }
+
+# --- database backups ---
+#
+# A systemd timer, not a container, on the grounds that this is one command
+# on a schedule and a timer already exists on the box for free — no scheduler
+# dependency to add or a long-running container to keep healthy.
+#
+# The destination follows image_backend, on the same reasoning it already
+# encodes: "r2" means the caller has a real object storage account and
+# forwards backup_* credentials for a second bucket on it; "minio" means it
+# doesn't, and this module points the timer at the same self-hosted MinIO it
+# already runs, in a bucket of its own that minio-init creates private.
+#
+# Snapshots only, not point-in-time recovery — see the module README.
+
+variable "backup_bucket" {
+  type    = string
+  default = "gostore-backups"
+}
+
+variable "backup_endpoint" {
+  description = "Required when image_backend = \"r2\". Ignored for \"minio\"."
+  type        = string
+  default     = ""
+}
+
+variable "backup_access_key_id" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "backup_secret_access_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "backup_retention_days" {
+  description = "mc prunes objects older than this on every run — no local state tracks what's already been deleted."
+  type        = number
+  default     = 14
+}
+
+variable "backup_schedule" {
+  description = "systemd OnCalendar expression, e.g. \"*-*-* 03:15:00\" for daily at 03:15 UTC."
+  type        = string
+  default     = "*-*-* 03:15:00"
+}

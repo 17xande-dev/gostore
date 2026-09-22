@@ -1,0 +1,25 @@
+#!/bin/sh
+# Written by Terraform (app-stack module). Runs on a schedule via
+# gostore-backup.timer — see that unit for when. Safe to run by hand to test
+# it or to take an ad-hoc backup before a risky change.
+set -eu
+
+ts=$(date -u +%Y%m%dT%H%M%SZ)
+dump="/tmp/${app_name}-$ts.sql.gz"
+
+# Exec'd inside the postgres container rather than run against a published
+# port: pg_dump then connects over the container's own Unix socket, which the
+# official postgres image's default pg_hba.conf trusts for local connections
+# — see the module README for why that means no password belongs in this
+# script at all.
+cd /opt/gostore
+docker compose exec -T postgres pg_dump -U ${app_name} ${app_name} | gzip > "$dump"
+
+mc alias set gostore-backup ${backup_scheme}://${backup_endpoint} '${backup_access_key_id}' '${backup_secret_access_key}' --api s3v4 --path auto >/dev/null
+mc cp --quiet "$dump" gostore-backup/${backup_bucket}/"$(basename "$dump")" >/dev/null
+rm -f "$dump"
+
+# Retention: delete backups past their age rather than tracking what this
+# script has already uploaded, so a change to backup_retention_days takes
+# effect on buckets that already have months of history in them.
+mc rm --recursive --force --older-than ${backup_retention_days}d gostore-backup/${backup_bucket}/ >/dev/null 2>&1 || true

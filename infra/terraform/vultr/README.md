@@ -23,9 +23,10 @@ see "What this is not" before treating it as a drop-in replacement.
   from an account somebody else set up and default to PayFast's published
   sandbox values until you supply your own.
 - **`../modules/app-stack`** — renders the actual cloud-init payload (a
-  `docker-compose.yml`, a `.env`, a `Caddyfile`) that the instance boots
-  with. Shared with `../proxmox`, the staging config; see that module's
-  files for what it does. This root module fixes `image_backend = "r2"`.
+  `docker-compose.yml`, a `.env`, a `Caddyfile`, and the nightly backup
+  timer) that the instance boots with. Shared with `../proxmox`, the staging
+  config; see that module's README for what it does. This root module fixes
+  `image_backend = "r2"`.
 
 ## Product images: Cloudflare R2, not Vultr Object Storage
 
@@ -65,12 +66,13 @@ scratch; the Block Storage volume survives that, so Postgres's data does, but
 there is a few minutes of downtime while the new instance boots, installs
 Docker, and starts the stack.
 
-**No automated database backups.** Cloud SQL had `backup_configuration
-{ enabled = true }`; a self-hosted Postgres container has nothing playing
-that role yet. `backups = "enabled"` on the instance snapshots the boot
-disk, not the Block Storage volume Postgres actually writes to. Add a
-`pg_dump` cron job (to the R2 bucket, or a second one) before this holds real
-orders — it's out of scope for this pass.
+**Database backups are snapshots, not Cloud SQL's managed continuous
+backup.** A systemd timer runs `pg_dump` nightly (`backup_schedule`,
+`03:15` UTC by default) into a second R2 bucket — see
+`../modules/app-stack`'s README for exactly what it does and the restore
+command. `backups = "enabled"` on the instance is separate and snapshots the
+boot disk only, not the Block Storage volume Postgres actually writes to; it
+covers "the instance is gone," the timer covers "restore last night's data."
 
 **Deploying a new image tag is a manual step**, same as any single-VM
 Compose deployment:

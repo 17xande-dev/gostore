@@ -24,6 +24,21 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: ${caddyfile_b64}
+  - path: /opt/gostore/backup.sh
+    owner: root:root
+    permissions: '0700'
+    encoding: b64
+    content: ${backup_sh_b64}
+  - path: /etc/systemd/system/gostore-backup.service
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${backup_service_b64}
+  - path: /etc/systemd/system/gostore-backup.timer
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${backup_timer_b64}
 
 runcmd:
   # Docker Engine from the official apt repository — deliberately not the
@@ -36,6 +51,15 @@ runcmd:
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+  # The mc binary backup.sh needs to talk to R2 or MinIO. A static binary
+  # verified against its published checksum, not a package — MinIO doesn't
+  # publish an apt repository the way Docker does.
+  - curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+  - curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc.sha256sum -o /usr/local/bin/mc.sha256sum
+  - (cd /usr/local/bin && sha256sum -c mc.sha256sum)
+  - rm -f /usr/local/bin/mc.sha256sum
+  - chmod +x /usr/local/bin/mc
 
   # The persistent data disk. blkid succeeds (and mkfs is skipped) on every
   # boot after the first, so a later `apply` that only touches the compose
@@ -56,3 +80,10 @@ runcmd:
 %{ endif ~}
 
   - cd /opt/gostore && docker compose up -d
+
+  # Started last, and only after the stack above is up: gostore-backup.timer
+  # has Persistent=true, so if today's scheduled time has already passed, it
+  # runs a catch-up backup immediately on enable — which must find postgres
+  # already running rather than race it.
+  - systemctl daemon-reload
+  - systemctl enable --now gostore-backup.timer

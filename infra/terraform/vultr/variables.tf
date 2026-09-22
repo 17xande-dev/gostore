@@ -205,3 +205,40 @@ variable "blob_public_base_url" {
   description = "Where a browser fetches images from: your R2 custom domain, or the bucket's pub-*.r2.dev address."
   type        = string
 }
+
+# --- Database backups: a second R2 bucket ---
+#
+# Can be the same Cloudflare account as blob_*, but ideally its own bucket
+# and its own scoped API token — a token that can only reach gostore-backups
+# is one that a compromised server can't use to overwrite the image bucket
+# too, or vice versa.
+variable "backup_endpoint" {
+  description = "<account-id>.r2.cloudflarestorage.com — often identical to blob_endpoint, same account."
+  type        = string
+}
+
+variable "backup_bucket" {
+  type    = string
+  default = "gostore-backups"
+}
+
+variable "backup_access_key_id" {
+  type      = string
+  sensitive = true
+}
+
+variable "backup_secret_access_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "backup_retention_days" {
+  type    = number
+  default = 30
+}
+
+variable "backup_schedule" {
+  description = "systemd OnCalendar expression."
+  type        = string
+  default     = "*-*-* 03:15:00"
+}

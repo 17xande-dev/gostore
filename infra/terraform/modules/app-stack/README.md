@@ -21,11 +21,42 @@ their instance/VM resource.
 - **`Caddyfile`** ([`templates/Caddyfile.tftpl`](templates/Caddyfile.tftpl))
   — one site (`domain` -> `server:8080`), plus a second (`images_domain` ->
   `minio:9000`) when `image_backend = "minio"`.
+- **`backup.sh`** ([`templates/backup.sh.tftpl`](templates/backup.sh.tftpl)),
+  **`gostore-backup.service`** and **`gostore-backup.timer`** — a nightly
+  `pg_dump`, gzipped and pushed to object storage via `mc`, on a systemd
+  timer rather than a container: it's one command on a schedule, and a timer
+  already exists on the box for free. See "Database backups" below for what
+  this does and doesn't cover.
 - **`cloud-init.yaml`** ([`templates/cloud-init.yaml.tftpl`](templates/cloud-init.yaml.tftpl))
-  wraps the three files above (base64-encoded, written to `/opt/gostore/`
-  with `.env` at `0600`) and, in `runcmd`: installs Docker from its official
-  apt repository, formats `data_device` as ext4 if it isn't already,
-  mounts it at `/mnt/gostore-data`, and runs `docker compose up -d`.
+  wraps everything above (base64-encoded, written to `/opt/gostore/` and
+  `/etc/systemd/system/`, `.env` and `backup.sh` at `0600`/`0700`) and, in
+  `runcmd`: installs Docker from its official apt repository, installs `mc`
+  as a checksum-verified static binary, formats `data_device` as ext4 if it
+  isn't already, mounts it at `/mnt/gostore-data`, runs `docker compose up
+  -d`, and enables the backup timer.
+
+## Database backups
+
+`backup_endpoint`/`backup_bucket`/`backup_access_key_id`/`backup_secret_access_key`
+work exactly like the `blob_*` set: `image_backend = "r2"` forwards real
+Cloudflare credentials for a second bucket, `image_backend = "minio"` reuses
+the self-hosted MinIO the module already runs, in a bucket of its own that
+`minio-init` creates private. `pg_dump` runs inside the `postgres` container
+via `docker compose exec`, over its own Unix socket — the official image
+trusts local connections by default, so `backup.sh` never needs
+`postgres_password` at all. Retention is `mc rm --older-than
+backup_retention_days` on every run, not a separate prune job: no local
+state tracks what's already been deleted, so a changed retention value takes
+effect immediately, backdated over whatever is already in the bucket.
+
+**This is snapshots, not point-in-time recovery.** A schedule of
+`backup_schedule` (daily by default) means losing up to a day of orders in
+the worst case, not losing nothing. Restoring is the reverse of the backup:
+
+```sh
+mc cat gostore-backup/gostore-backups/<file>.sql.gz | gunzip | \
+  docker compose exec -T postgres psql -U gostore gostore
+```
 
 ## The one thing each caller decides for itself
 

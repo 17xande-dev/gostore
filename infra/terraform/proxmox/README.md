@@ -18,8 +18,10 @@ deliberate difference — see "Product images" below.
   decision. Contrast with `payfast_merchant_key` or `smtp_password` in
   `variables.tf`, which come from an account somebody else set up.
 - **`../modules/app-stack`** — the same module `../vultr` uses, rendering
-  the `docker-compose.yml`, `.env`, and `Caddyfile` that ship as vendor-data.
-  This root module fixes `image_backend = "minio"`.
+  the `docker-compose.yml`, `.env`, `Caddyfile`, and nightly backup timer
+  that ship as vendor-data. This root module fixes `image_backend = "minio"`,
+  which also means the backup timer needs no separate credentials — see the
+  module README.
 
 ## Product images: self-hosted MinIO, not Cloudflare R2
 
@@ -78,10 +80,15 @@ if this stops being a same-network-as-the-operator setup.
 
 ## What this is not
 
-Same caveats as `../vultr`: no automated database backups, and updating the
-running image is a manual `docker compose pull && docker compose up -d` over
-SSH, or a `terraform apply` that recreates the VM (the second disk survives;
-a few minutes of downtime doesn't).
+Same caveat as `../vultr`: updating the running image is a manual `docker
+compose pull && docker compose up -d` over SSH, or a `terraform apply` that
+recreates the VM (the second disk survives; a few minutes of downtime
+doesn't).
+
+Database backups aren't a gap here, though — see `../modules/app-stack`'s
+README. `backup_retention_days` defaults to 7 rather than `../vultr`'s 30:
+staging's backups exist to test the restore path and cover a bad seed or
+migration, not to be a record anyone needs a month of.
 
 ## Usage
 

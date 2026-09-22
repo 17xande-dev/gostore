@@ -34,3 +34,10 @@ blob_endpoint          = "<account-id>.r2.cloudflarestorage.com"
 blob_access_key_id     = "..."
 blob_secret_access_key = "..."
 blob_public_base_url   = "https://images.example.com"
+
+# A second bucket (gostore-backups by default) for nightly database dumps —
+# see the module README. Same account works; a token scoped only to this
+# bucket is better.
+backup_endpoint          = "<account-id>.r2.cloudflarestorage.com"
+backup_access_key_id     = "..."
+backup_secret_access_key = "..."

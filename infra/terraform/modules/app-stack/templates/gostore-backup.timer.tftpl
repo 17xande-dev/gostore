@@ -1,0 +1,11 @@
+[Unit]
+Description=Run gostore-backup.service on a schedule
+
+[Timer]
+OnCalendar=${backup_schedule}
+# A VM that was off (a Proxmox host down for maintenance, a Vultr reboot)
+# still gets its backup, on the next boot, instead of silently skipping a day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
