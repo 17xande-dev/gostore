@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -120,12 +121,16 @@ func (f *Fake) ParseCallback(_ context.Context, n Notification) (Callback, error
 		return Callback{}, fmt.Errorf("payment: fake: amount %q: %w", amount, err)
 	}
 
+	// Matched case-insensitively because the fake stands in for any gateway, and
+	// real ones disagree about case: PayFast shouts COMPLETE and SnapScan
+	// whispers completed. Anything unrecognised stays pending, which is the rule
+	// every real gateway follows too.
 	status := values.Get("status")
 	outcome := OutcomePending
-	switch status {
-	case "paid":
+	switch strings.ToLower(status) {
+	case "paid", "complete", "completed":
 		outcome = OutcomePaid
-	case "failed":
+	case "failed", "error":
 		outcome = OutcomeFailed
 	case "cancelled":
 		outcome = OutcomeCancelled

@@ -139,7 +139,10 @@ func TestCheckout_CreatesPendingOrderAndHandsOverToTheGateway(t *testing.T) {
 		`name="order_id" value="` + order.ID + `"`,
 		`name="signature"`,
 		"/static/redirect.js", // the CSP forbids an inline script, so this is a file
-		"Continue to fake",    // and without JavaScript the button is the mechanism
+		// The label, not the route name: "fake" is what the order column and the
+		// callback path carry, and neither is something to show a shopper. Without
+		// JavaScript this button is the whole mechanism.
+		"Continue to Fake gateway",
 		order.Reference(),
 	} {
 		if !strings.Contains(body, want) {
