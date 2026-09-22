@@ -2,7 +2,10 @@
 # versions.tf for why it isn't a variable here.
 
 ssh_public_key  = "ssh-ed25519 AAAA... you@yourhost"
-container_image = "ghcr.io/you/gostore:v1"
+# Built and pushed by hand with `make publish` from a tagged release — see
+# the root Makefile. Pin a real version here, not :latest, so a production
+# apply is never surprised by whatever was pushed most recently.
+container_image = "ghcr.io/17xande-dev/gostore:v1.0.0"
 base_url        = "https://gostore.example.com"
 domain          = "gostore.example.com"
 acme_email      = "ops@example.com"

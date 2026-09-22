@@ -77,8 +77,23 @@ THEME_RELOAD ?= true
 SQLC_VERSION ?= v1.31.1
 SQLC ?= sqlc
 
+# The published image. There is no CI publishing this — see "publish" below —
+# so TAG defaults to a real version tag when HEAD has one (git tag v1.2.3) and
+# to the short commit sha otherwise, which `publish` then refuses: unlike
+# ~/dev/riverschurch/website-backend's per-commit continuous deploy, gostore is
+# published for other people to run, so the tag is the version contract, not a
+# build's provenance.
+IMAGE ?= ghcr.io/17xande-dev/gostore
+GIT_SHA := $(shell git rev-parse --short HEAD)
+TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
+
+# The binary is CGO_ENABLED=0 (see Dockerfile), so unlike website-backend's
+# go-sqlite3 build this has no architecture the image is pinned to for
+# correctness — linux/amd64 is just what infra/terraform actually deploys to.
+PLATFORM ?= linux/amd64
+
 .PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
-	check-config sqlc sqlc-check sqlc-install
+	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish
 
 ## up: build and start the whole local stack
 up:
@@ -175,3 +190,48 @@ tidy:
 
 psql:
 	$(COMPOSE) exec postgres psql -U gostore -d gostore
+
+## image: build the production image locally, tagged with TAG
+# Builds exactly what `publish` would push, without pushing it — for checking
+# a Dockerfile change or running the real image locally.
+image:
+	docker build --platform $(PLATFORM) -t $(IMAGE):$(TAG) .
+
+# check-clean: fail if the working tree has uncommitted changes. A published
+# image has to be reproducible from source, and an image built from a dirty
+# tree names a tag whose contents don't match what git says is at that tag.
+check-clean:
+	@if [ -n "$(ALLOW_DIRTY)" ]; then exit 0; fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+	  echo "refusing to publish: uncommitted changes (commit them, or ALLOW_DIRTY=1)" >&2; \
+	  git status --short >&2; \
+	  exit 1; \
+	fi
+
+# check-tagged: fail unless TAG looks like a version (vX.Y.Z), so a forgotten
+# `git tag` doesn't quietly publish a commit-sha image as if it were a release.
+# Override with ALLOW_UNTAGGED=1 for a deliberate throwaway build.
+check-tagged:
+	@if [ -n "$(ALLOW_UNTAGGED)" ]; then exit 0; fi; \
+	case "$(TAG)" in \
+	  v[0-9]*) ;; \
+	  *) echo "refusing to publish: HEAD is not tagged with a version — git tag vX.Y.Z && git push --tags, or pass TAG=vX.Y.Z (or ALLOW_UNTAGGED=1) explicitly" >&2; exit 1 ;; \
+	esac
+
+## publish: build the image and push TAG and latest to GHCR (requires docker login ghcr.io)
+# Manual, on purpose — there is no workflow that runs this on a push or a tag.
+# The release step is: tag, then `make publish` from a clean checkout of that
+# tag; on the server, infra/terraform's container_image variable points at the
+# new tag and `terraform apply` (Vultr) or a manual `docker compose pull &&
+# docker compose up -d` (either environment) picks it up.
+#
+# GHCR defaults a newly pushed package to private. After the first publish,
+# set it public in the package's GitHub settings (and "connect repository")
+# or every deploy needs a PAT with read:packages — the same trap
+# website-backend's README documents for its (deliberately private) image.
+publish: check-clean check-tagged image
+	docker push $(IMAGE):$(TAG)
+	docker tag $(IMAGE):$(TAG) $(IMAGE):latest
+	docker push $(IMAGE):latest
+	@echo
+	@echo "pushed $(IMAGE):$(TAG) and $(IMAGE):latest"

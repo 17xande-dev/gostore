@@ -1744,6 +1744,11 @@ Terraform lives in [`infra/terraform`](infra/terraform/README.md): a Vultr insta
 plus Docker Compose for production, and a Proxmox VM for staging, both built on a
 shared cloud-init module.
 
+The image is built on a workstation and pushed to GHCR by hand — `make publish`,
+usually from a tagged release (`git tag v1.2.3 && git push --tags`). There is no
+CI workflow doing this on push; see the Makefile's `publish` target for what it
+refuses to do (a dirty tree, an untagged commit) and why.
+
 ## Development
 
 ```sh

@@ -10,7 +10,9 @@ ip_address = "192.168.1.50/24"
 ip_gateway = "192.168.1.1"
 
 ssh_public_key  = "ssh-ed25519 AAAA... you@yourhost"
-container_image = "ghcr.io/you/gostore:staging"
+# Staging can point at :latest — see the root Makefile's `publish` target —
+# since a broken staging build costs nothing production doesn't already risk.
+container_image = "ghcr.io/17xande-dev/gostore:latest"
 base_url        = "https://staging.gostore.example.com"
 domain          = "staging.gostore.example.com"
 acme_email      = "ops@example.com"
