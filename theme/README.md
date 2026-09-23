@@ -33,4 +33,4 @@ that page you took, and a later release that corrects it changes nothing for you
 
 Nothing in here is used unless `TEMPLATE_DIR` / `STATIC_DIR` point at it, so this
 directory is safe to leave empty, delete the contents of, or keep in a branch of
-your own. See the README's [Theming](../README.md#theming) section.
+your own. See [Theming](../docs/theming.md).

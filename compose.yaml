@@ -30,7 +30,7 @@ services:
   #
   # From Quay because MinIO deleted its Docker Hub repositories; these are the
   # last, unpatched community builds. Being replaced by versitygw — see
-  # "Decisions still open" in the README.
+  # "Decisions still open" in docs/development.md.
   minio:
     image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"

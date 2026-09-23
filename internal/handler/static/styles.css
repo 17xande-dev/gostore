@@ -19,8 +19,8 @@
  * already allows because the file is served from this origin. Or use a hosted service:
  * set FONT_ORIGINS and FONT_CSS_URL, which widen font-src and style-src and link the
  * service's stylesheet from the layout. Either way --font below is what actually
- * applies the family; making it available and using it are separate steps. See the
- * README's "Web fonts".
+ * applies the family; making it available and using it are separate steps. See
+ * "Web fonts" in docs/theming.md.
  */
 
 :root {

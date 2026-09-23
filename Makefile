@@ -73,7 +73,7 @@ THEME_RELOAD ?= true
 # sqlc generates the row structs and scan code for the stores. It is pinned here
 # rather than as a `go tool` directive in go.mod, so that go.mod keeps stating the
 # dependencies of the *binary* — sqlc adds about forty indirect modules and never
-# links into it. See the README's dependency section.
+# links into it. See "Dependencies" in docs/development.md.
 SQLC_VERSION ?= v1.31.1
 SQLC ?= sqlc
 
