@@ -26,6 +26,28 @@ provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = var.proxmox_api_token
   insecure  = var.proxmox_insecure
+
+  # Two things this config does cannot be done through the Proxmox API, so the
+  # provider does them over SSH to the node: uploading the cloud-init snippet
+  # (main.tf's vendor_data), and importing the downloaded Ubuntu image as the
+  # VM's boot disk. With API-token authentication there are no credentials for
+  # it to fall back on, so the username is required.
+  #
+  # Authentication is through your ssh-agent (SSH_AUTH_SOCK), with a key the
+  # node accepts for that user — so the key stays in the agent rather than in
+  # a file Terraform reads. The provider ignores ~/.ssh/config.
+  ssh {
+    agent    = true
+    username = var.proxmox_ssh_username
+
+    dynamic "node" {
+      for_each = var.proxmox_ssh_address == "" ? [] : [var.proxmox_ssh_address]
+      content {
+        name    = var.proxmox_node
+        address = node.value
+      }
+    }
+  }
 }
 
 # Reads CLOUDFLARE_API_TOKEN from the environment, on the same grounds

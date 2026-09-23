@@ -17,6 +17,18 @@ variable "proxmox_insecure" {
   default     = true
 }
 
+variable "proxmox_ssh_username" {
+  description = "User the provider SSHes to the node as, for the two operations the Proxmox API cannot do (the snippet upload and the disk import). root, or a dedicated user with passwordless sudo for pvesm, qm and tee into the snippets storage — see docs/deploy/proxmox.md."
+  type        = string
+  default     = "root"
+}
+
+variable "proxmox_ssh_address" {
+  description = "The node's address for SSH, when the one the provider detects from the node's network config is not reachable from here. Empty uses the detected address."
+  type        = string
+  default     = ""
+}
+
 variable "proxmox_node" {
   description = "The Proxmox node (host) to place the VM on."
   type        = string

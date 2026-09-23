@@ -48,13 +48,12 @@ depends on: a `snippets` file resource that uploads arbitrary content (this
 module's rendered cloud-init) to the node, which is what `vendor_data_file_id`
 below needs to exist at all.
 
-## Two things Proxmox needs configured before `apply`
+## Three things Proxmox needs configured before `apply`
 
-**An API token with enough privilege.** Datacenter -> Permissions -> API
-Tokens, on a user with `PVEVMAdmin` (or a custom role covering
-`VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `Datastore.AllocateSpace`, and
-`Datastore.AllocateTemplate` for the snippet upload) on the node and
-storage this config targets.
+**An API token with enough privilege.** `PVEVMAdmin` alone is not enough:
+downloading the Ubuntu image and uploading the snippet need `Datastore.*` and
+`Sys.Modify` too. The provider documents a role with the full set — create it
+on the node and give the token's user that role.
 
 **A storage backend with the `Snippets` content type enabled**, matching
 `snippets_storage` (default `local`). Datacenter -> Storage -> (your
@@ -62,6 +61,14 @@ storage) -> Edit -> Content, tick Snippets. Without it,
 `proxmox_virtual_environment_file.vendor_data` fails to upload and nothing
 else in this config can proceed — the VM's cloud-init has nowhere to come
 from.
+
+**SSH to the node, as `proxmox_ssh_username` (default `root`), through your
+ssh-agent.** Two things here are not possible through the Proxmox API, so the
+provider does them over SSH: uploading the snippet, and importing the Ubuntu
+image as the VM's boot disk. With API-token authentication it has no other
+credentials to try. The node must accept a key your agent holds; a non-root
+user also needs passwordless `sudo` for `pvesm`, `qm`, and `tee` into the
+snippets storage path.
 
 ## Going live — staging never does
 
