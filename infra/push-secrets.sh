@@ -132,6 +132,20 @@ cleanup() {
 trap cleanup EXIT
 remote() { ssh "${ssh_opts[@]}" "$target" "$@"; }
 
+# Right after an apply, first boot is still installing Docker; pushing then
+# would land the files and fail to start the stack. So wait for cloud-init —
+# and stop if it failed, since a box whose provisioning broke is not one to
+# hand secrets to. Exit 2 is "done, with recoverable errors" (deprecation
+# warnings count), which is fine.
+echo "waiting for first-boot provisioning on $target to finish"
+remote 'if command -v cloud-init >/dev/null 2>&1; then
+  rc=0; sudo -n cloud-init status --wait >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+    echo "cloud-init failed on the box (exit $rc); nothing was pushed. See: sudo cloud-init status --long" >&2
+    exit 1
+  fi
+fi'
+
 echo "pushing $(wc -w <<<"$names") secrets from gostore/$env to $target"
 remote 'sudo -n install -d -m 0700 -o root -g root /opt/gostore/secrets'
 for name in $names; do
