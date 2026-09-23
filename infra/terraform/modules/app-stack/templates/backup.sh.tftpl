@@ -1,11 +1,18 @@
-#!/bin/sh
+#!/bin/bash
 # Written by Terraform (app-stack module). Runs on a schedule via
 # gostore-backup.timer — see that unit for when. Safe to run by hand to test
 # it or to take an ad-hoc backup before a risky change.
-set -eu
+#
+# bash rather than sh for pipefail. Without it, `pg_dump | gzip` reports only
+# gzip's status, so a pg_dump that failed — Postgres restarting, an auth error
+# — produced a valid, empty gzip that was uploaded as that night's backup and
+# reported as success.
+set -euo pipefail
 
 ts=$(date -u +%Y%m%dT%H%M%SZ)
-dump="/tmp/${app_name}-$ts.sql.gz"
+object="${app_name}-$ts.sql.gz"
+dump=$(mktemp --suffix=.sql.gz)
+trap 'rm -f "$dump"' EXIT
 
 # Exec'd inside the postgres container rather than run against a published
 # port: pg_dump then connects over the container's own Unix socket, which the
@@ -15,11 +22,57 @@ dump="/tmp/${app_name}-$ts.sql.gz"
 cd /opt/gostore
 docker compose exec -T postgres pg_dump -U ${app_name} ${app_name} | gzip > "$dump"
 
-mc alias set gostore-backup ${backup_scheme}://${backup_endpoint} '${backup_access_key_id}' '${backup_secret_access_key}' --api s3v4 --path auto >/dev/null
-mc cp --quiet "$dump" gostore-backup/${backup_bucket}/"$(basename "$dump")" >/dev/null
-rm -f "$dump"
+# Belt to pipefail's braces. pg_dump writes this trailer as the last thing it
+# does, and only when the dump finished, so its absence means the file is not a
+# backup whatever any exit status said — a dump cut short by the container
+# being stopped mid-run, say. Checked before anything is uploaded, and above
+# the prune below: a bad night aborts here and keeps every older backup,
+# rather than uploading nothing and letting retention erode the real ones.
+#
+# The marker is not the last line. Since the CVE-2025-8714 fixes (17.6, and
+# 16.10 and friends) pg_dump follows it with a `\unrestrict <key>` line, which
+# on 17.11 leaves the marker fifth from the end — so the window here is
+# generous rather than tight, and a future version adding a line does not turn
+# every night into a failure.
+#
+# tail reads gunzip's output to the end, so nothing upstream is cut off by
+# SIGPIPE — which under pipefail would read as a failure of its own.
+trailer=$(gunzip -c "$dump" | tail -n 20)
+case "$trailer" in
+  *"PostgreSQL database dump complete"*) ;;
+  *)
+    echo "backup: pg_dump output is incomplete (no completion trailer); not uploading" >&2
+    exit 1
+    ;;
+esac
+
+# mc runs in a container on the stack's own network, not on the host. That is
+# what lets staging reach MinIO at all: "minio" resolves through Docker's
+# embedded DNS and nowhere else, and MinIO publishes no port for the host to
+# use instead. R2 is reached the same way, over the container's ordinary
+# internet egress, so both backends take one path.
+#
+# Credentials go in through MC_HOST_backup, exported here and passed to the
+# container by name only (-e without a value), so they never appear in an
+# argument list that `ps` can show.
+#
+# gostore_default is the network compose creates for a project named
+# "gostore" — the literal `name:` at the top of docker-compose.yml.
+export MC_HOST_backup='${backup_scheme}://${backup_access_key_id}:${backup_secret_access_key}@${backup_endpoint}'
+mc() {
+  docker run --rm -i --network gostore_default -e MC_HOST_backup \
+    quay.io/minio/mc:latest "$@"
+}
+
+mc pipe --quiet "backup/${backup_bucket}/$object" < "$dump" >/dev/null
 
 # Retention: delete backups past their age rather than tracking what this
 # script has already uploaded, so a change to backup_retention_days takes
 # effect on buckets that already have months of history in them.
-mc rm --recursive --force --older-than ${backup_retention_days}d gostore-backup/${backup_bucket}/ >/dev/null 2>&1 || true
+#
+# Reached only after a verified upload. A failed prune is reported but does not
+# fail the run: tonight's backup is already safe, and marking it failed would
+# hide that.
+if ! mc rm --recursive --force --older-than ${backup_retention_days}d "backup/${backup_bucket}/" >/dev/null; then
+  echo "backup: uploaded, but pruning backups older than ${backup_retention_days}d failed" >&2
+fi

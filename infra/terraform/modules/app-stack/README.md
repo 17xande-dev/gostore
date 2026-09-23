@@ -31,10 +31,11 @@ their instance/VM resource.
 - **`cloud-init.yaml`** ([`templates/cloud-init.yaml.tftpl`](templates/cloud-init.yaml.tftpl))
   wraps everything above (base64-encoded, written to `/opt/gostore/` and
   `/etc/systemd/system/`, `.env` and `backup.sh` at `0600`/`0700`) and, in
-  `runcmd`: installs Docker from its official apt repository, installs `mc`
-  as a checksum-verified static binary, formats `data_device` as ext4 if it
-  isn't already, mounts it at `/mnt/gostore-data`, runs `docker compose up
-  -d`, and enables the backup timer.
+  `runcmd`: installs Docker from its official apt repository, formats
+  `data_device` as ext4 if it isn't already, mounts it at
+  `/mnt/gostore-data`, runs `docker compose up -d`, and enables the backup
+  timer. Nothing else is installed on the host — `mc` runs in a container;
+  see "Database backups".
 
 ## Database backups
 
@@ -45,18 +46,35 @@ the self-hosted MinIO the module already runs, in a bucket of its own that
 `minio-init` creates private. `pg_dump` runs inside the `postgres` container
 via `docker compose exec`, over its own Unix socket — the official image
 trusts local connections by default, so `backup.sh` never needs
-`postgres_password` at all. Retention is `mc rm --older-than
-backup_retention_days` on every run, not a separate prune job: no local
-state tracks what's already been deleted, so a changed retention value takes
-effect immediately, backdated over whatever is already in the bucket.
+`postgres_password` at all.
+
+A dump is only uploaded once it is known to be whole. The script runs under
+`set -o pipefail`, so a failed `pg_dump` fails the run rather than letting
+gzip's success stand in for it; and it checks the dump ends with pg_dump's
+own `-- PostgreSQL database dump complete` marker before uploading anything.
+Both checks sit above the prune, so a bad night leaves every older backup
+where it was instead of uploading nothing and letting retention erode the
+real ones.
+
+`mc` runs in a container on the stack's compose network rather than on the
+host, because that is the only place staging's `minio` hostname resolves;
+R2 is reached the same way, over the container's ordinary internet egress.
+Retention is `mc rm --older-than backup_retention_days` after each verified
+upload, not a separate prune job: no local state tracks what's already been
+deleted, so a changed retention value takes effect immediately, backdated
+over whatever is already in the bucket.
 
 **This is snapshots, not point-in-time recovery.** A schedule of
 `backup_schedule` (daily by default) means losing up to a day of orders in
-the worst case, not losing nothing. Restoring is the reverse of the backup:
+the worst case, not losing nothing. Restoring is the reverse of the backup,
+from `/opt/gostore` on the box — `MC_HOST_backup` takes the same
+`scheme://key:secret@endpoint` form `backup.sh` exports:
 
 ```sh
-mc cat gostore-backup/gostore-backups/<file>.sql.gz | gunzip | \
-  docker compose exec -T postgres psql -U gostore gostore
+docker run --rm --network gostore_default \
+  -e MC_HOST_backup='https://KEY:SECRET@<endpoint>' \
+  quay.io/minio/mc:latest cat backup/gostore-backups/<file>.sql.gz \
+  | gunzip | docker compose exec -T postgres psql -U gostore gostore
 ```
 
 ## Ingress: `caddy` or `tunnel`

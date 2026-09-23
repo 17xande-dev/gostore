@@ -59,14 +59,9 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-  # The mc binary backup.sh needs to talk to R2 or MinIO. A static binary
-  # verified against its published checksum, not a package — MinIO doesn't
-  # publish an apt repository the way Docker does.
-  - curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-  - curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc.sha256sum -o /usr/local/bin/mc.sha256sum
-  - (cd /usr/local/bin && sha256sum -c mc.sha256sum)
-  - rm -f /usr/local/bin/mc.sha256sum
-  - chmod +x /usr/local/bin/mc
+  # No mc on the host: backup.sh runs it in a container on the compose
+  # network, because that is the only place staging's "minio" hostname
+  # resolves. See backup.sh.tftpl.
 
   # The persistent data disk. blkid succeeds (and mkfs is skipped) on every
   # boot after the first, so a later `apply` that only touches the compose
