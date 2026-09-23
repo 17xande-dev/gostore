@@ -11,7 +11,12 @@ Two independent root modules, one per environment and cloud:
 - **[`modules/app-stack/`](modules/app-stack/README.md)** — shared by both.
   Provider-agnostic: it renders the `docker-compose.yml`, `.env`, `Caddyfile`,
   and a nightly `pg_dump`-to-object-storage backup timer that ship as
-  cloud-init, and creates no resources itself.
+  cloud-init, and creates no resources itself. Its `ingress` variable picks
+  between Caddy terminating TLS on the box and a Cloudflare Tunnel dialling
+  out, which also decides where the app reads the client IP from.
+- **[`modules/cloudflare-tunnel/`](modules/cloudflare-tunnel/README.md)** —
+  the tunnel, its ingress rules and its DNS records, for a root module that
+  sets `ingress = "tunnel"`. Currently wired into `proxmox/` only.
 
 This replaced a Google Cloud config (Cloud Run, Cloud SQL, Secret Manager,
 Artifact Registry) — see either root module's README for what a plain VM

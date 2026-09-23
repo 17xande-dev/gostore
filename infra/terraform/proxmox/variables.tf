@@ -214,6 +214,38 @@ variable "images_domain" {
   type = string
 }
 
+# --- ingress ---
+#
+# "caddy" (the default) terminates TLS on the VM with Let's Encrypt, which
+# needs this box reachable from the internet on 80 and 443 — on a Proxmox node
+# behind a home or office router that means a port-forward, and a certificate
+# renewal that quietly stops working if it is ever removed.
+#
+# "tunnel" runs cloudflared instead. It dials out, so staging needs no
+# port-forward, no public address and no inbound firewall rule at all, and
+# CF-Connecting-IP becomes trustworthy because the tunnel is the only way in.
+# It needs a Cloudflare account, a zone, and CLOUDFLARE_API_TOKEN exported.
+variable "ingress" {
+  type    = string
+  default = "caddy"
+  validation {
+    condition     = contains(["caddy", "tunnel"], var.ingress)
+    error_message = "ingress must be \"caddy\" or \"tunnel\"."
+  }
+}
+
+variable "cloudflare_account_id" {
+  description = "Required when ingress = \"tunnel\". An identifier rather than a secret, so it lives in terraform.tfvars."
+  type        = string
+  default     = ""
+}
+
+variable "cloudflare_zone_id" {
+  description = "Zone that domain and images_domain belong to. Required when ingress = \"tunnel\"."
+  type        = string
+  default     = ""
+}
+
 variable "blob_bucket" {
   type    = string
   default = "gostore-images"

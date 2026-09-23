@@ -2,11 +2,17 @@
 # their instance resource. No provider block, no resources of its own — this
 # is pure `templatefile()`, so the module needs nothing installed to plan.
 #
-# The two callers differ in exactly one place: where product images live.
-# Production (vultr/) has a Cloudflare R2 account and passes image_backend =
-# "r2" with real BLOB_* credentials; staging (proxmox/) has neither, so it
-# passes "minio" and this module adds a MinIO container plus a second Caddy
+# Callers differ in two places, and only two.
+#
+# Where product images live: vultr/ has a Cloudflare R2 account and passes
+# image_backend = "r2" with real BLOB_* credentials; proxmox/ has neither, so
+# it passes "minio" and this module adds a MinIO container plus a second Caddy
 # site fronting it, the same shape docker-compose.yaml uses in development.
+#
+# And how a request gets in: ingress = "caddy" terminates TLS on the box with
+# Let's Encrypt, "tunnel" runs cloudflared and publishes no ports at all. That
+# also decides CLIENT_IP_SOURCE, because it decides which header in front of
+# the app was written by something that cannot be lied to.
 locals {
   blob_use_tls = var.image_backend == "r2" ? true : false
 
@@ -72,6 +78,7 @@ locals {
     blob_region               = var.blob_region
     blob_use_tls              = local.blob_use_tls
     blob_public_base_url      = local.blob_public_base_url
+    ingress                   = var.ingress
   })
 
   compose_file = templatefile("${path.module}/templates/docker-compose.yml.tftpl", {
@@ -84,6 +91,8 @@ locals {
     minio_data_mount    = var.minio_data_mount
     blob_bucket         = var.blob_bucket
     backup_bucket       = var.backup_bucket
+    ingress             = var.ingress
+    tunnel_token        = var.tunnel_token
   })
 
   backup_sh = templatefile("${path.module}/templates/backup.sh.tftpl", {
@@ -114,6 +123,7 @@ locals {
     postgres_data_mount = var.postgres_data_mount
     image_backend       = var.image_backend
     minio_data_mount    = var.minio_data_mount
+    ingress             = var.ingress
     env_b64             = base64encode(local.env_file)
     compose_b64         = base64encode(local.compose_file)
     caddyfile_b64       = base64encode(local.caddyfile)

@@ -70,6 +70,7 @@ services:
         condition: service_completed_successfully
 %{ endif ~}
 
+%{ if ingress == "caddy" ~}
   # Terminates TLS and is the only container publishing a host port. The app
   # is reached at server:8080 over the compose network and never exposed
   # directly — see the "no load balancer" note in the README for why this is
@@ -86,7 +87,30 @@ services:
       - caddy_config:/config
     depends_on:
       - server
+%{ else ~}
+  # Dials out to Cloudflare and serves the app through the tunnel. Note what
+  # is absent: no published ports, no certificate, no ACME, and nothing for a
+  # firewall to allow — the box has no inbound listener at all. Routing lives
+  # in the tunnel's ingress rules, which are Terraform's (see
+  # ../cloudflare-tunnel), not in a config file here.
+  #
+  # The token goes through the environment rather than the command line so it
+  # is not visible in `ps` or `docker inspect`'s Cmd.
+  #
+  # No healthcheck: the image is distroless, so there is no shell for a CMD
+  # probe to run. `cloudflared tunnel info` from the host is the check.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${tunnel_token}
+    depends_on:
+      - server
+%{ endif ~}
+%{ if ingress == "caddy" ~}
 
 volumes:
   caddy_data:
   caddy_config:
+%{ endif ~}

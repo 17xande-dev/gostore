@@ -19,11 +19,13 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: ${compose_b64}
+%{ if ingress == "caddy" ~}
   - path: /opt/gostore/Caddyfile
     owner: root:root
     permissions: '0644'
     encoding: b64
     content: ${caddyfile_b64}
+%{ endif ~}
   - path: /opt/gostore/backup.sh
     owner: root:root
     permissions: '0700'

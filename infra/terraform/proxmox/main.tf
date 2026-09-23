@@ -2,6 +2,27 @@ locals {
   static_ip = var.ip_address != "dhcp"
 }
 
+# The tunnel, when this environment uses one. Created before the VM, because
+# the VM's cloud-init has to carry the connector token that only exists once
+# the tunnel does.
+#
+# Both hostnames go through it: the store, and the MinIO bucket that serves
+# product images — the second replacing the Caddy site that fronted it, so
+# BLOB_PUBLIC_BASE_URL keeps working unchanged.
+module "tunnel" {
+  source = "../modules/cloudflare-tunnel"
+  count  = var.ingress == "tunnel" ? 1 : 0
+
+  name       = "${var.app_name}-staging"
+  account_id = var.cloudflare_account_id
+  zone_id    = var.cloudflare_zone_id
+
+  routes = [
+    { hostname = var.domain, service = "http://server:8080" },
+    { hostname = var.images_domain, service = "http://minio:9000" },
+  ]
+}
+
 # Proxmox has no equivalent of Vultr's marketplace OS list — it boots
 # whatever disk image you give it. This downloads Ubuntu's own published
 # cloud image once; `overwrite = false` means a later apply never re-fetches
@@ -64,6 +85,9 @@ module "app_stack" {
   backup_bucket         = var.backup_bucket
   backup_retention_days = var.backup_retention_days
   backup_schedule       = var.backup_schedule
+
+  ingress      = var.ingress
+  tunnel_token = var.ingress == "tunnel" ? module.tunnel[0].token : ""
 }
 
 # This is cloud-init *vendor-data*, not user-data: Proxmox's own cloud-init

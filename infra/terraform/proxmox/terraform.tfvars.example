@@ -28,5 +28,19 @@ smtp_username = "gostore@example.com"
 email_from    = "orders@example.com"
 
 # MinIO fronts images at this hostname — see main.tf's vendor-data comment
-# for why staging doesn't use Cloudflare R2. Needs its own DNS record.
+# for why staging doesn't use Cloudflare R2. Needs its own DNS record, which
+# Terraform creates for you when ingress = "tunnel".
 images_domain = "images-staging.gostore.example.com"
+
+# How traffic reaches the VM. The default, "caddy", terminates TLS here and
+# needs 80 and 443 forwarded to this box from your router. "tunnel" runs
+# cloudflared instead: no forward, no public address, no certificate, and the
+# real client IP arrives in CF-Connecting-IP. Also export CLOUDFLARE_API_TOKEN
+# — see versions.tf for why it isn't a variable, and the README for the two
+# scopes it needs.
+#
+# The two ids are identifiers rather than secrets. Both are on the right-hand
+# side of the Cloudflare dashboard's overview page for the zone.
+# ingress               = "tunnel"
+# cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+# cloudflare_zone_id    = "fedcba9876543210fedcba9876543210"

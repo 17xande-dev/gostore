@@ -22,6 +22,9 @@ deliberate difference — see "Product images" below.
   that ship as vendor-data. This root module fixes `image_backend = "minio"`,
   which also means the backup timer needs no separate credentials — see the
   module README.
+- **`../modules/cloudflare-tunnel`** — only when `ingress = "tunnel"`, and
+  created before the VM because the VM's cloud-init has to carry a connector
+  token that does not exist until the tunnel does. See "Ingress" below.
 
 ## Product images: self-hosted MinIO, not Cloudflare R2
 
@@ -65,12 +68,50 @@ default at all. Staging exists to test the checkout flow, not to take money;
 there's no reason it would ever need `false`, so the safe default is simply
 correct rather than something to force a decision about.
 
+## Ingress: Caddy, or a Cloudflare Tunnel
+
+`ingress` defaults to `caddy`, which terminates TLS on the VM with Let's
+Encrypt. On a Proxmox node behind a home or office router that means a
+port-forward for 80 and 443, a public address, and a certificate renewal that
+quietly stops working the day the forward is removed.
+
+`ingress = "tunnel"` is the better fit here, and it is what staging is for
+proving. `cloudflared` dials out to Cloudflare, so the VM publishes **no
+ports at all**: no port-forward, no public address, no inbound firewall rule,
+no ACME. Both hostnames go through it — the store, and the MinIO bucket that
+serves product images, replacing the second Caddy site so
+`BLOB_PUBLIC_BASE_URL` keeps working unchanged.
+
+It also makes the client IP trustworthy. With the tunnel as the only way in,
+`CF-Connecting-IP` cannot have been set by anyone but Cloudflare's edge, so
+the module sets `CLIENT_IP_SOURCE=cloudflare` — which the PayFast callback's
+source-IP check and the per-IP rate limits both depend on. See
+[`../modules/cloudflare-tunnel`](../modules/cloudflare-tunnel/README.md) for
+what gets created and which token scopes it needs.
+
+Turning it on is three variables and an exported token:
+
+```sh
+export CLOUDFLARE_API_TOKEN=...   # Account: Cloudflare Tunnel:Edit, Zone: DNS:Edit
+# in terraform.tfvars:
+#   ingress               = "tunnel"
+#   cloudflare_account_id = "..."
+#   cloudflare_zone_id    = "..."
+```
+
+**Destroy order matters.** Terraform cannot delete a tunnel that still has a
+connector attached, so `docker compose down` on the VM before
+`terraform destroy`.
+
 ## Networking
 
 `ip_address` defaults to `dhcp`; `terraform.tfvars.example` sets a static
 address instead, which is usually the right call for staging — DHCP means
 re-editing `domain`'s DNS record (or a hosts-file entry, if this Proxmox
 node is only reachable on a private network) every time the VM is recreated.
+With `ingress = "tunnel"` the DNS records are Terraform's and point at the
+tunnel rather than at this VM, so the VM's own address stops being something
+anything outside the node needs to know.
 
 This config does not touch Proxmox's own firewall subsystem. If SSH needs to
 be restricted, do it at the network's edge (a router ACL, a VPN-only
