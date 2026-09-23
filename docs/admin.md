@@ -16,9 +16,8 @@ docker compose logs server | grep setup_token
 `/admin/login` redirects there while no account exists. The token is spent by the claim and
 the page stops existing — permanently: the consumed timestamp is never cleared, so a restart
 does not reopen it and neither does disabling every account. A deploy with nobody reading
-logs can supply `SETUP_TOKEN` instead, in which case nothing is printed; the Terraform stack
-generates one into Secret Manager and reads it with
-`gcloud secrets versions access latest --secret=gostore-setup-token`.
+logs can supply `SETUP_TOKEN` instead, in which case nothing is printed and the token is
+whatever the deploy put there — `openssl rand -base64 32` generates a good one.
 
 The alternatives are both worse, and both common. A fixed default credential is a CVE class,
 especially in a project published for others to copy. An unguarded first-run wizard is a race

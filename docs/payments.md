@@ -102,8 +102,8 @@ second time.
 **`PAYFAST_SANDBOX` defaults to `true` on purpose**, so that nobody's first afternoon with
 this project charges a real card. The cost of that default is the mirror mistake: a
 deployment that never sets it takes no money and looks like it works. Set it explicitly
-wherever you deploy — [`infra/terraform`](../infra/terraform) requires it as a variable with no
-default for exactly this reason.
+wherever you deploy — the [Compose deployments](deploy/README.md) refuse to start without
+it, for exactly this reason.
 
 Switching it off is two changes, not one. The merchant credentials must be your own: the
 server **refuses to start** with `PAYFAST_SANDBOX=false` and PayFast's published sandbox

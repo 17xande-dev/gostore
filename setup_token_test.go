@@ -148,7 +148,7 @@ func TestEnsureSetupToken_SaysWhenASuppliedTokenIsIgnored(t *testing.T) {
 	}
 	generated := loggedToken(t, buf)
 
-	// The operator sets SETUP_TOKEN — or Terraform rotates it — and restarts.
+	// The operator sets SETUP_TOKEN, or a deploy rotates it, and restarts.
 	log, buf = captureLogger()
 	supplied := strings.Repeat("s", 43)
 	if err := ensureSetupToken(ctx, users, supplied, log); err != nil {

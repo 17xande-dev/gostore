@@ -1,11 +1,6 @@
 .env
 /gostore
 /bin/
-infra/terraform/**/.terraform/
-infra/terraform/**/*.tfstate
-infra/terraform/**/*.tfstate.*
-infra/terraform/**/terraform.tfvars
-infra/terraform/**/*.tfplan
 
 # Dumps backup.sh writes when a deployment directory is tried out in place.
 deploy/*/backups/

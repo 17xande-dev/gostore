@@ -535,8 +535,8 @@ func Load() (Config, error) {
 			// The cost of that default is the mirror failure — a production
 			// deployment that never sets it takes no money and looks fine — so
 			// anything that deploys this is expected to set it explicitly, and
-			// infra/terraform requires it. See the check further down for the
-			// half-done version of turning it off.
+			// the Compose files in deploy/ require it. See the check further
+			// down for the half-done version of turning it off.
 			Sandbox:   boolEnv("PAYFAST_SANDBOX", true),
 			NotifyURL: strings.TrimSpace(os.Getenv("PAYFAST_NOTIFY_URL")),
 		},

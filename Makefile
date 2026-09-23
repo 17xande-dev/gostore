@@ -89,11 +89,11 @@ TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
 
 # The binary is CGO_ENABLED=0 (see Dockerfile), so unlike website-backend's
 # go-sqlite3 build this has no architecture the image is pinned to for
-# correctness — linux/amd64 is just what infra/terraform actually deploys to.
+# correctness — linux/amd64 is just what the servers it runs on are.
 PLATFORM ?= linux/amd64
 
 .PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
-	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish secrets
+	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish
 
 ## up: build and start the whole local stack
 up:
@@ -221,9 +221,8 @@ check-tagged:
 ## publish: build the image and push TAG and latest to GHCR (requires docker login ghcr.io)
 # Manual, on purpose — there is no workflow that runs this on a push or a tag.
 # The release step is: tag, then `make publish` from a clean checkout of that
-# tag; on the server, infra/terraform's container_image variable points at the
-# new tag and `terraform apply` (Vultr) or a manual `docker compose pull &&
-# docker compose up -d` (either environment) picks it up.
+# tag; on the server, GOSTORE_VERSION in the deployment's .env points at the
+# new tag and `docker compose pull && docker compose up -d` picks it up.
 #
 # GHCR defaults a newly pushed package to private. After the first publish,
 # set it public in the package's GitHub settings (and "connect repository")
@@ -235,11 +234,3 @@ publish: check-clean check-tagged image
 	docker push $(IMAGE):latest
 	@echo
 	@echo "pushed $(IMAGE):$(TAG) and $(IMAGE):latest"
-
-## secrets: push ENV's runtime secrets (ENV=staging|prod) from pass to its VM, then (re)start the stack
-# The only route a credential takes onto a box: pass on this machine, over SSH
-# stdin, into one 0400 file per secret. Terraform decides which secrets an
-# environment needs and never holds their values. Run after the first apply,
-# and again after rotating anything in pass. See infra/push-secrets.sh.
-secrets:
-	@infra/push-secrets.sh "$(ENV)"
