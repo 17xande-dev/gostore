@@ -93,7 +93,7 @@ TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
 PLATFORM ?= linux/amd64
 
 .PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
-	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish
+	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish secrets
 
 ## up: build and start the whole local stack
 up:
@@ -235,3 +235,11 @@ publish: check-clean check-tagged image
 	docker push $(IMAGE):latest
 	@echo
 	@echo "pushed $(IMAGE):$(TAG) and $(IMAGE):latest"
+
+## secrets: push ENV's runtime secrets (ENV=staging|prod) from pass to its VM, then (re)start the stack
+# The only route a credential takes onto a box: pass on this machine, over SSH
+# stdin, into one 0400 file per secret. Terraform decides which secrets an
+# environment needs and never holds their values. Run after the first apply,
+# and again after rotating anything in pass. See infra/push-secrets.sh.
+secrets:
+	@infra/push-secrets.sh "$(ENV)"

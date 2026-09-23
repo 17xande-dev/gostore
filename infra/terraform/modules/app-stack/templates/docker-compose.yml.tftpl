@@ -2,16 +2,37 @@
 # deploy workflow this implies: there is no orchestrator watching this file,
 # so a new image tag needs `docker compose pull && docker compose up -d` run
 # by hand (or a re-`apply` that recreates the instance, for everything else).
+#
+# No secret is written into this file, and none reaches Terraform. Each one is
+# its own file under ./secrets, put there by `make secrets` from pass (see
+# infra/push-secrets.sh), and handed only to the containers that need it as a
+# Compose secret — bind-mounted read-only at /run/secrets/<name>. The files are
+# owned by uid 65532, distroless's nonroot, which is what the server and
+# cloudflared run as; the containers that start as root read them regardless.
+#
+# The stack therefore cannot start until those files exist, which is why
+# cloud-init lays this down but leaves starting it to `make secrets`.
 name: gostore
+
+secrets:
+%{ for name in compose_secrets ~}
+  ${name}:
+    file: ./secrets/${name}
+%{ endfor ~}
 
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    secrets:
+      - postgres_password
     environment:
       POSTGRES_USER: ${app_name}
-      POSTGRES_PASSWORD: ${postgres_password}
       POSTGRES_DB: ${app_name}
+      # Read once, when the data directory is first initialised. Changing the
+      # file later does not change the database's password — see the README's
+      # rotation notes.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:
       - ${postgres_data_mount}:/var/lib/postgresql/data
     healthcheck:
@@ -34,9 +55,11 @@ services:
     image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
+    secrets:
+      - minio_root_password
     environment:
       MINIO_ROOT_USER: ${app_name}
-      MINIO_ROOT_PASSWORD: ${minio_root_password}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
     volumes:
       - ${minio_data_mount}:/data
     healthcheck:
@@ -45,27 +68,44 @@ services:
       timeout: 3s
       retries: 20
 
+  # The password is read from the secret by the shell at run time — the $$ is
+  # Compose's escape for a literal $ — so it appears in neither this file nor
+  # the container's configuration.
   minio-init:
     image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${app_name} ${minio_root_password} &&
-      mc mb --ignore-existing local/${blob_bucket} &&
-      mc anonymous set download local/${blob_bucket} &&
-      mc mb --ignore-existing local/${backup_bucket} &&
-      mc anonymous set none local/${backup_bucket} &&
-      echo '${blob_bucket} ready (public read), ${backup_bucket} ready (private)'
-      "
+    secrets:
+      - minio_root_password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 ${app_name} "$$(cat /run/secrets/minio_root_password)" >/dev/null &&
+        mc mb --ignore-existing local/${blob_bucket} &&
+        mc anonymous set download local/${blob_bucket} &&
+        mc mb --ignore-existing local/${backup_bucket} &&
+        mc anonymous set none local/${backup_bucket} &&
+        echo '${blob_bucket} ready (public read), ${backup_bucket} ready (private)'
 %{ endif ~}
 
+  # Every credential arrives as KEY_FILE, which the server reads at boot — see
+  # secretKeys in internal/config/config.go. The paths are not secret; the
+  # files they name are.
   server:
     image: ${container_image}
     restart: unless-stopped
     env_file:
       - .env
+    secrets:
+%{ for name in sort(distinct(values(server_secret_env))) ~}
+      - ${name}
+%{ endfor ~}
+    environment:
+%{ for key, name in server_secret_env ~}
+      ${key}_FILE: /run/secrets/${name}
+%{ endfor ~}
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,10 +138,8 @@ services:
   # in the tunnel's ingress rules, which are Terraform's (see
   # ../cloudflare-tunnel), not in a config file here.
   #
-  # The token goes through the environment rather than the command line, which
-  # keeps it out of `ps` — and that is all it does. `docker inspect` still shows
-  # it under Config.Env, and so does this file, which is why cloud-init writes
-  # it 0600. Anyone with the docker socket is root-equivalent anyway.
+  # The connector token comes from a secret file via TUNNEL_TOKEN_FILE, so it
+  # is in neither this file, the process environment, nor `docker inspect`.
   #
   # No healthcheck: the image is distroless, so there is no shell for a CMD
   # probe to run. `cloudflared tunnel info` from the host is the check.
@@ -109,8 +147,10 @@ services:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run
+    secrets:
+      - tunnel_token
     environment:
-      TUNNEL_TOKEN: ${tunnel_token}
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
     depends_on:
       - server
 %{ endif ~}

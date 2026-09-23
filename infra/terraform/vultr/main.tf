@@ -59,46 +59,36 @@ module "app_stack" {
   store_name      = var.store_name
   currency        = var.currency
 
-  postgres_password = random_password.postgres.result
-  setup_token       = random_password.setup_token.result
-
   # Vultr's first (and here, only) attached Block Storage volume always
   # appears as /dev/vdb — a platform convention, not something either
   # provider's resource schema exposes as an attribute to reference instead.
   data_device = "/dev/vdb"
 
-  payfast_sandbox      = var.payfast_sandbox
-  payfast_merchant_id  = var.payfast_merchant_id
-  payfast_merchant_key = var.payfast_merchant_key
-  payfast_passphrase   = var.payfast_passphrase
+  payfast_sandbox     = var.payfast_sandbox
+  payfast_merchant_id = var.payfast_merchant_id
 
-  snapscan_snap_code        = var.snapscan_snap_code
-  snapscan_api_key          = var.snapscan_api_key
-  snapscan_webhook_auth_key = var.snapscan_webhook_auth_key
-  snapscan_validation_key   = var.snapscan_validation_key
+  snapscan_snap_code  = var.snapscan_snap_code
+  snapscan_validation = var.snapscan_validation
 
   smtp_host          = var.smtp_host
   smtp_port          = var.smtp_port
   smtp_tls           = var.smtp_tls
   smtp_username      = var.smtp_username
-  smtp_password      = var.smtp_password
   email_from         = var.email_from
   order_notify_email = var.order_notify_email
 
-  image_backend          = "r2"
-  blob_endpoint          = var.blob_endpoint
-  blob_bucket            = var.blob_bucket
-  blob_access_key_id     = var.blob_access_key_id
-  blob_secret_access_key = var.blob_secret_access_key
-  blob_region            = var.blob_region
-  blob_public_base_url   = var.blob_public_base_url
+  image_backend        = "r2"
+  blob_endpoint        = var.blob_endpoint
+  blob_bucket          = var.blob_bucket
+  blob_access_key_id   = var.blob_access_key_id
+  blob_region          = var.blob_region
+  blob_public_base_url = var.blob_public_base_url
 
-  backup_endpoint          = var.backup_endpoint
-  backup_bucket            = var.backup_bucket
-  backup_access_key_id     = var.backup_access_key_id
-  backup_secret_access_key = var.backup_secret_access_key
-  backup_retention_days    = var.backup_retention_days
-  backup_schedule          = var.backup_schedule
+  backup_endpoint       = var.backup_endpoint
+  backup_bucket         = var.backup_bucket
+  backup_access_key_id  = var.backup_access_key_id
+  backup_retention_days = var.backup_retention_days
+  backup_schedule       = var.backup_schedule
 }
 
 resource "vultr_instance" "main" {

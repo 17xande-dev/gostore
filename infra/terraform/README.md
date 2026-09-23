@@ -24,3 +24,12 @@ plus Docker Compose does and doesn't give you compared to that.
 
 Each root module has its own state and its own `terraform.tfvars`; there is
 nothing to `init` at this level; `cd` into `vultr/` or `proxmox/` first.
+
+**No store secret goes through Terraform.** They live in `pass` on the
+operator's machine as `gostore/<env>/<name>`, and
+[`../push-secrets.sh`](../push-secrets.sh) — `make secrets ENV=staging` or
+`ENV=prod` from the repo root — writes them to the VM over SSH and starts the
+stack. Terraform only decides which secrets an environment needs, in each
+root module's `secret_names` output. An apply therefore leaves the VM
+provisioned but idle until that first push. See either root module's
+"Secrets" section for the entries to create.

@@ -5,14 +5,17 @@
 # Callers differ in two places, and only two.
 #
 # Where product images live: vultr/ has a Cloudflare R2 account and passes
-# image_backend = "r2" with real BLOB_* credentials; proxmox/ has neither, so
-# it passes "minio" and this module adds a MinIO container plus a second Caddy
-# site fronting it, the same shape docker-compose.yaml uses in development.
+# image_backend = "r2"; proxmox/ has none, so it passes "minio" and this module
+# adds a MinIO container plus a second Caddy site fronting it, the same shape
+# docker-compose.yaml uses in development.
 #
 # And how a request gets in: ingress = "caddy" terminates TLS on the box with
 # Let's Encrypt, "tunnel" runs cloudflared and publishes no ports at all. That
 # also decides CLIENT_IP_SOURCE, because it decides which header in front of
 # the app was written by something that cannot be lied to.
+#
+# No secret passes through here. The module decides which secrets the stack
+# needs and names them; `make secrets` supplies them from pass.
 locals {
   blob_use_tls = var.image_backend == "r2" ? true : false
 
@@ -20,10 +23,6 @@ locals {
 
   blob_access_key_id = (
     var.image_backend == "r2" ? var.blob_access_key_id : var.app_name
-  )
-
-  blob_secret_access_key = (
-    var.image_backend == "r2" ? var.blob_secret_access_key : var.minio_root_password
   )
 
   blob_public_base_url = (
@@ -44,65 +43,89 @@ locals {
     var.image_backend == "r2" ? var.backup_access_key_id : var.app_name
   )
 
-  backup_secret_access_key = (
-    var.image_backend == "r2" ? var.backup_secret_access_key : var.minio_root_password
-  )
+  # --- which secrets this environment needs ---
+  #
+  # Decided once, here, from which features are switched on, and read by both
+  # the compose template and the secret_names output. That is what keeps the
+  # files `make secrets` writes and the files Compose expects from drifting
+  # apart: there is only one list.
+  #
+  # On minio the app authenticates as MinIO's root user, so its storage secret
+  # and the backup's are both the MinIO root password rather than secrets of
+  # their own.
+  blob_secret   = var.image_backend == "r2" ? "blob_secret_access_key" : "minio_root_password"
+  backup_secret = var.image_backend == "r2" ? "backup_secret_access_key" : "minio_root_password"
+
+  # KEY -> the secret file the server reads it from as KEY_FILE.
+  server_secret_candidates = {
+    DATABASE_URL              = { name = "database_url", on = true }
+    SETUP_TOKEN               = { name = "setup_token", on = true }
+    PAYFAST_MERCHANT_KEY      = { name = "payfast_merchant_key", on = true }
+    PAYFAST_PASSPHRASE        = { name = "payfast_passphrase", on = true }
+    BLOB_SECRET_ACCESS_KEY    = { name = local.blob_secret, on = true }
+    SMTP_PASSWORD             = { name = "smtp_password", on = var.smtp_username != "" }
+    SNAPSCAN_API_KEY          = { name = "snapscan_api_key", on = var.snapscan_snap_code != "" }
+    SNAPSCAN_WEBHOOK_AUTH_KEY = { name = "snapscan_webhook_auth_key", on = var.snapscan_snap_code != "" }
+    SNAPSCAN_VALIDATION_KEY   = { name = "snapscan_validation_key", on = var.snapscan_snap_code != "" && var.snapscan_validation }
+  }
+  server_secret_env = { for key, s in local.server_secret_candidates : key => s.name if s.on }
+
+  # Every secret some container mounts.
+  compose_secrets = sort(distinct(concat(
+    ["postgres_password"],
+    values(local.server_secret_env),
+    var.image_backend == "minio" ? ["minio_root_password"] : [],
+    var.ingress == "tunnel" ? ["tunnel_token"] : [],
+  )))
+
+  # Plus the one only the host reads: backup.sh runs on the host, not in a
+  # container, so on r2 its secret is pushed but mounted nowhere.
+  secret_names = sort(distinct(concat(local.compose_secrets, [local.backup_secret])))
 
   env_file = templatefile("${path.module}/templates/env.tftpl", {
-    app_name                  = var.app_name
-    base_url                  = var.base_url
-    store_name                = var.store_name
-    currency                  = var.currency
-    log_format                = var.log_format
-    postgres_password         = var.postgres_password
-    setup_token               = var.setup_token
-    payfast_sandbox           = var.payfast_sandbox
-    payfast_merchant_id       = var.payfast_merchant_id
-    payfast_merchant_key      = var.payfast_merchant_key
-    payfast_passphrase        = var.payfast_passphrase
-    snapscan_snap_code        = var.snapscan_snap_code
-    snapscan_api_key          = var.snapscan_api_key
-    snapscan_webhook_auth_key = var.snapscan_webhook_auth_key
-    snapscan_validation_key   = var.snapscan_validation_key
-    smtp_host                 = var.smtp_host
-    smtp_port                 = var.smtp_port
-    smtp_tls                  = var.smtp_tls
-    smtp_username             = var.smtp_username
-    smtp_password             = var.smtp_password
-    email_from                = var.email_from
-    order_notify_email        = var.order_notify_email
-    blob_endpoint             = local.blob_endpoint
-    blob_bucket               = var.blob_bucket
-    blob_access_key_id        = local.blob_access_key_id
-    blob_secret_access_key    = local.blob_secret_access_key
-    blob_region               = var.blob_region
-    blob_use_tls              = local.blob_use_tls
-    blob_public_base_url      = local.blob_public_base_url
-    ingress                   = var.ingress
+    base_url             = var.base_url
+    store_name           = var.store_name
+    currency             = var.currency
+    log_format           = var.log_format
+    payfast_sandbox      = var.payfast_sandbox
+    payfast_merchant_id  = var.payfast_merchant_id
+    snapscan_snap_code   = var.snapscan_snap_code
+    smtp_host            = var.smtp_host
+    smtp_port            = var.smtp_port
+    smtp_tls             = var.smtp_tls
+    smtp_username        = var.smtp_username
+    email_from           = var.email_from
+    order_notify_email   = var.order_notify_email
+    blob_endpoint        = local.blob_endpoint
+    blob_bucket          = var.blob_bucket
+    blob_access_key_id   = local.blob_access_key_id
+    blob_region          = var.blob_region
+    blob_use_tls         = local.blob_use_tls
+    blob_public_base_url = local.blob_public_base_url
+    ingress              = var.ingress
   })
 
   compose_file = templatefile("${path.module}/templates/docker-compose.yml.tftpl", {
     app_name            = var.app_name
     container_image     = var.container_image
-    postgres_password   = var.postgres_password
     postgres_data_mount = var.postgres_data_mount
     image_backend       = var.image_backend
-    minio_root_password = var.minio_root_password
     minio_data_mount    = var.minio_data_mount
     blob_bucket         = var.blob_bucket
     backup_bucket       = var.backup_bucket
     ingress             = var.ingress
-    tunnel_token        = var.tunnel_token
+    compose_secrets     = local.compose_secrets
+    server_secret_env   = local.server_secret_env
   })
 
   backup_sh = templatefile("${path.module}/templates/backup.sh.tftpl", {
-    app_name                 = var.app_name
-    backup_scheme            = local.backup_scheme
-    backup_endpoint          = local.backup_endpoint
-    backup_access_key_id     = local.backup_access_key_id
-    backup_secret_access_key = local.backup_secret_access_key
-    backup_bucket            = var.backup_bucket
-    backup_retention_days    = var.backup_retention_days
+    app_name              = var.app_name
+    backup_scheme         = local.backup_scheme
+    backup_endpoint       = local.backup_endpoint
+    backup_access_key_id  = local.backup_access_key_id
+    backup_secret_file    = local.backup_secret
+    backup_bucket         = var.backup_bucket
+    backup_retention_days = var.backup_retention_days
   })
 
   backup_service = templatefile("${path.module}/templates/gostore-backup.service.tftpl", {})

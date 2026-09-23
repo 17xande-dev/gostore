@@ -78,50 +78,28 @@ variable "payfast_sandbox" {
   type        = bool
 }
 
-# PayFast's own published sandbox credentials — the same ones the Makefile
-# and compose.yaml default to. They take no real money. Replace all three
-# with your own before setting payfast_sandbox = false; the server refuses to
-# start with live mode and a sandbox merchant id.
+# PayFast's published sandbox merchant id — the same one the Makefile and
+# compose.yaml default to. An identifier, not a secret: it is in every payment
+# form a buyer's browser posts. The merchant key and passphrase are the
+# secrets, and live in pass as gostore/prod/payfast_merchant_key and
+# payfast_passphrase. Going live means your own id here AND your own key and
+# passphrase there; the server refuses to start with live mode and this
+# sandbox id.
 variable "payfast_merchant_id" {
-  type      = string
-  default   = "10000100"
-  sensitive = true
-}
-
-variable "payfast_merchant_key" {
-  type      = string
-  default   = "46f0cd694581a"
-  sensitive = true
-}
-
-variable "payfast_passphrase" {
-  type      = string
-  default   = "jt7NOE43FZPn"
-  sensitive = true
+  type    = string
+  default = "10000100"
 }
 
 variable "snapscan_snap_code" {
-  description = "Empty runs without SnapScan. No sandbox exists for it — any value here takes real money."
+  description = "Empty runs without SnapScan. No sandbox exists for it — any value here takes real money. Setting it makes snapscan_api_key and snapscan_webhook_auth_key required in pass."
   type        = string
   default     = ""
 }
 
-variable "snapscan_api_key" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "snapscan_webhook_auth_key" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "snapscan_validation_key" {
-  type      = string
-  default   = ""
-  sensitive = true
+variable "snapscan_validation" {
+  description = "Whether Secure QR Payload validation is enabled on the SnapScan account; true also requires snapscan_validation_key in pass."
+  type        = bool
+  default     = false
 }
 
 variable "smtp_host" {
@@ -145,14 +123,9 @@ variable "smtp_tls" {
 }
 
 variable "smtp_username" {
-  type    = string
-  default = ""
-}
-
-variable "smtp_password" {
-  type      = string
-  default   = ""
-  sensitive = true
+  description = "Empty for a relay that authenticates by network address. Setting it makes smtp_password required in pass."
+  type        = string
+  default     = ""
 }
 
 variable "email_from" {
@@ -174,7 +147,9 @@ variable "order_notify_email" {
 # Not provisioned by this Terraform, on the same grounds the GCP config never
 # provisioned PayFast credentials: a Cloudflare account and its API tokens
 # are a human decision, not infrastructure. Create the bucket and an R2 API
-# token (Account Home -> R2 -> Manage API Tokens) by hand, then fill these in.
+# token (Account Home -> R2 -> Manage API Tokens) by hand. The endpoint,
+# bucket and access key id go here; the token's secret goes in pass as
+# gostore/prod/blob_secret_access_key, and never through Terraform.
 variable "blob_endpoint" {
   description = "<account-id>.r2.cloudflarestorage.com"
   type        = string
@@ -186,13 +161,8 @@ variable "blob_bucket" {
 }
 
 variable "blob_access_key_id" {
-  type      = string
-  sensitive = true
-}
-
-variable "blob_secret_access_key" {
-  type      = string
-  sensitive = true
+  description = "The R2 token's access key id — an identifier. Its secret is gostore/prod/blob_secret_access_key in pass."
+  type        = string
 }
 
 variable "blob_region" {
@@ -223,13 +193,8 @@ variable "backup_bucket" {
 }
 
 variable "backup_access_key_id" {
-  type      = string
-  sensitive = true
-}
-
-variable "backup_secret_access_key" {
-  type      = string
-  sensitive = true
+  description = "The backup bucket's token access key id — an identifier. Its secret is gostore/prod/backup_secret_access_key in pass."
+  type        = string
 }
 
 variable "backup_retention_days" {

@@ -123,45 +123,26 @@ variable "payfast_sandbox" {
   default = true
 }
 
+# PayFast's published sandbox merchant id. An identifier, not a secret — it
+# is in every payment form a buyer's browser posts. The merchant key and
+# passphrase that go with it are secrets, so they live in pass
+# (gostore/staging/payfast_merchant_key and payfast_passphrase); for the
+# sandbox, store PayFast's published values there — see the README.
 variable "payfast_merchant_id" {
-  type      = string
-  default   = "10000100"
-  sensitive = true
-}
-
-variable "payfast_merchant_key" {
-  type      = string
-  default   = "46f0cd694581a"
-  sensitive = true
-}
-
-variable "payfast_passphrase" {
-  type      = string
-  default   = "jt7NOE43FZPn"
-  sensitive = true
+  type    = string
+  default = "10000100"
 }
 
 variable "snapscan_snap_code" {
-  type    = string
-  default = ""
+  description = "Empty runs without SnapScan. Setting it makes snapscan_api_key and snapscan_webhook_auth_key required in pass."
+  type        = string
+  default     = ""
 }
 
-variable "snapscan_api_key" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "snapscan_webhook_auth_key" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "snapscan_validation_key" {
-  type      = string
-  default   = ""
-  sensitive = true
+variable "snapscan_validation" {
+  description = "Whether Secure QR Payload validation is enabled on the SnapScan account; true also requires snapscan_validation_key in pass."
+  type        = bool
+  default     = false
 }
 
 variable "smtp_host" {
@@ -183,14 +164,9 @@ variable "smtp_tls" {
 }
 
 variable "smtp_username" {
-  type    = string
-  default = ""
-}
-
-variable "smtp_password" {
-  type      = string
-  default   = ""
-  sensitive = true
+  description = "Empty for a relay that authenticates by network address. Setting it makes smtp_password required in pass."
+  type        = string
+  default     = ""
 }
 
 variable "email_from" {

@@ -52,13 +52,16 @@ esac
 # use instead. R2 is reached the same way, over the container's ordinary
 # internet egress, so both backends take one path.
 #
-# Credentials go in through MC_HOST_backup, exported here and passed to the
-# container by name only (-e without a value), so they never appear in an
-# argument list that `ps` can show.
+# The secret is read at run time from the file `make secrets` wrote, not
+# rendered into this script by Terraform — so this file holds no credential,
+# and rotating one in pass needs no re-apply. It goes to the container through
+# MC_HOST_backup, passed by name only (-e without a value), so it never appears
+# in an argument list that `ps` can show.
 #
 # gostore_default is the network compose creates for a project named
 # "gostore" — the literal `name:` at the top of docker-compose.yml.
-export MC_HOST_backup='${backup_scheme}://${backup_access_key_id}:${backup_secret_access_key}@${backup_endpoint}'
+secret=$(cat /opt/gostore/secrets/${backup_secret_file})
+export MC_HOST_backup="${backup_scheme}://${backup_access_key_id}:$secret@${backup_endpoint}"
 mc() {
   docker run --rm -i --network gostore_default -e MC_HOST_backup \
     quay.io/minio/mc:latest "$@"

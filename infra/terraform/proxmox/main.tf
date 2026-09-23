@@ -51,43 +51,37 @@ module "app_stack" {
   store_name      = var.store_name
   currency        = var.currency
 
-  postgres_password = random_password.postgres.result
-  setup_token       = random_password.setup_token.result
-
   # The second disk below attaches as the guest's first scsi data disk,
   # which the virtio-scsi driver Proxmox uses enumerates as /dev/sdb —
   # boot disk /dev/sda is scsi0.
   data_device = "/dev/sdb"
 
-  payfast_sandbox      = var.payfast_sandbox
-  payfast_merchant_id  = var.payfast_merchant_id
-  payfast_merchant_key = var.payfast_merchant_key
-  payfast_passphrase   = var.payfast_passphrase
+  payfast_sandbox     = var.payfast_sandbox
+  payfast_merchant_id = var.payfast_merchant_id
 
-  snapscan_snap_code        = var.snapscan_snap_code
-  snapscan_api_key          = var.snapscan_api_key
-  snapscan_webhook_auth_key = var.snapscan_webhook_auth_key
-  snapscan_validation_key   = var.snapscan_validation_key
+  snapscan_snap_code  = var.snapscan_snap_code
+  snapscan_validation = var.snapscan_validation
 
   smtp_host          = var.smtp_host
   smtp_port          = var.smtp_port
   smtp_tls           = var.smtp_tls
   smtp_username      = var.smtp_username
-  smtp_password      = var.smtp_password
   email_from         = var.email_from
   order_notify_email = var.order_notify_email
 
-  image_backend       = "minio"
-  images_domain       = var.images_domain
-  blob_bucket         = var.blob_bucket
-  minio_root_password = random_password.minio_root.result
+  image_backend = "minio"
+  images_domain = var.images_domain
+  blob_bucket   = var.blob_bucket
 
   backup_bucket         = var.backup_bucket
   backup_retention_days = var.backup_retention_days
   backup_schedule       = var.backup_schedule
 
-  ingress      = var.ingress
-  tunnel_token = var.ingress == "tunnel" ? module.tunnel[0].token : ""
+  # The tunnel's connector token does not go in here: it is a secret, so it
+  # reaches the box the way every other one does, via `make secrets` reading
+  # this config's tunnel_token output. The module only needs to know a tunnel
+  # is in use, so it can mount the token and leave Caddy out.
+  ingress = var.ingress
 }
 
 # This is cloud-init *vendor-data*, not user-data: Proxmox's own cloud-init

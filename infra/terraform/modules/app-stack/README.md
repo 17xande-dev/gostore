@@ -6,18 +6,21 @@ it has no provider block and creates no resources; it's `templatefile()`
 three times over, producing the cloud-init user-data both callers hand
 their instance/VM resource.
 
+None of it contains a secret. See "Secrets" below for how they arrive.
+
 ## What it renders
 
-- **`.env`** ([`templates/env.tftpl`](templates/env.tftpl)) — every
-  environment variable the server reads, following `.env.example` at the
-  repo root. `DATABASE_URL` always points at the compose network's own
-  `postgres` service; that's not configurable by either caller, on the same
-  grounds the dev `compose.yaml` hardcodes it.
+- **`.env`** ([`templates/env.tftpl`](templates/env.tftpl)) — the server's
+  configuration, following `.env.example` at the repo root: every setting
+  except the credentials, including the identifiers that sit beside them (a
+  merchant id, an access key id).
 - **`docker-compose.yml`** ([`templates/docker-compose.yml.tftpl`](templates/docker-compose.yml.tftpl))
   — three services always (`postgres`, `server`, `caddy`), plus `minio` and
   `minio-init` when `image_backend = "minio"`. `server` publishes no host
   port; `caddy` is the only container reachable from outside the VM, on 80
-  and 443.
+  and 443. Its top-level `secrets:` block declares one Compose secret per
+  file in `/opt/gostore/secrets`, and each service lists only the ones it
+  needs.
 - **`Caddyfile`** ([`templates/Caddyfile.tftpl`](templates/Caddyfile.tftpl))
   — one site (`domain` -> `server:8080`), plus a second (`images_domain` ->
   `minio:9000`) when `image_backend = "minio"`. Written only when
@@ -33,9 +36,10 @@ their instance/VM resource.
   `/etc/systemd/system/`, `.env` and `backup.sh` at `0600`/`0700`) and, in
   `runcmd`: installs Docker from its official apt repository, formats
   `data_device` as ext4 if it isn't already, mounts it at
-  `/mnt/gostore-data`, runs `docker compose up -d`, and enables the backup
-  timer. Nothing else is installed on the host — `mc` runs in a container;
-  see "Database backups".
+  `/mnt/gostore-data`, creates the empty, root-only `/opt/gostore/secrets`,
+  and enables the backup timer. It does **not** start the stack — that waits
+  for `make secrets`; see "Secrets". Nothing else is installed on the host —
+  `mc` runs in a container; see "Database backups".
 
 ## Database backups
 
@@ -67,15 +71,51 @@ over whatever is already in the bucket.
 **This is snapshots, not point-in-time recovery.** A schedule of
 `backup_schedule` (daily by default) means losing up to a day of orders in
 the worst case, not losing nothing. Restoring is the reverse of the backup,
-from `/opt/gostore` on the box — `MC_HOST_backup` takes the same
-`scheme://key:secret@endpoint` form `backup.sh` exports:
+as root in `/opt/gostore` on the box. The secret is read from its file the
+way `backup.sh` reads it, so it never lands in shell history — use
+`minio_root_password` and `http://` on staging, `backup_secret_access_key`
+and `https://` on prod:
 
 ```sh
-docker run --rm --network gostore_default \
-  -e MC_HOST_backup='https://KEY:SECRET@<endpoint>' \
+export MC_HOST_backup="https://<key-id>:$(cat secrets/backup_secret_access_key)@<endpoint>"
+docker run --rm --network gostore_default -e MC_HOST_backup \
   quay.io/minio/mc:latest cat backup/gostore-backups/<file>.sql.gz \
   | gunzip | docker compose exec -T postgres psql -U gostore gostore
 ```
+
+## Secrets
+
+No credential is an input to this module, and none appears in anything it
+renders — not the `.env`, not the Compose file, not the cloud-init payload a
+provider keeps. What the module decides is *which* secrets a stack needs,
+from the features switched on: `smtp_password` only when `smtp_username` is
+set, the SnapScan keys only when `snapscan_snap_code` is, `tunnel_token` only
+with a tunnel, and so on. That one list feeds both the Compose file's
+`secrets:` block and the `secret_names` output, so what gets pushed and what
+Compose expects cannot drift apart.
+
+The values come from `pass`, written onto the box by `make secrets`
+([`infra/push-secrets.sh`](../../../push-secrets.sh)) as one file each in
+`/opt/gostore/secrets`: the directory root-only, each file `0400` and owned
+by uid 65532. That uid is distroless's nonroot, which the server and
+`cloudflared` run as; Postgres, MinIO and the `mc` job start as root and read
+the files regardless. Each reaches its container as a Compose secret,
+bind-mounted read-only at `/run/secrets/<name>`, and the server reads it as
+`KEY_FILE` (see `secretKeys` in `internal/config`). So a credential is in
+neither the container's configuration nor its environment, and
+`docker inspect` shows only the paths.
+
+Two consequences worth knowing:
+
+- **Cloud-init no longer starts the stack.** Compose refuses a secret whose
+  file does not exist, and the files only arrive with the first
+  `make secrets`, which starts it.
+- **Rotation recreates the containers.** A container holds the file it
+  started with, and the server reads its secrets once, at boot, so
+  `make secrets` ends with `docker compose up -d --force-recreate`.
+  `postgres_password` is the exception that needs more: Postgres applies it
+  only when the data directory is first created, so rotating it means
+  `ALTER USER` first.
 
 ## Ingress: `caddy` or `tunnel`
 
@@ -90,8 +130,10 @@ disappears is the interesting part: no published ports, no certificate, no
 ACME, no inbound firewall rule, and nothing for a port-forward to expose on a
 private network. Routing lives in the tunnel's ingress rules, which belong to
 [`../cloudflare-tunnel`](../cloudflare-tunnel), not to a file on the box. The
-caller passes `tunnel_token`; the token is generated by Cloudflare and read
-back through a data source, so no human ever pastes it.
+connector token is generated by Cloudflare and read back through a data
+source, so no human ever pastes it — and it reaches the box like every other
+secret, via `make secrets`, which reads it from the caller's `tunnel_token`
+output. This module only mounts it.
 
 The choice also sets `CLIENT_IP_SOURCE`, because it decides which header in
 front of the app was written by something that cannot be lied to:

@@ -1,8 +1,16 @@
-# Copy to terraform.tfvars and fill in.
+# Copy to terraform.tfvars and fill in. Nothing in this file is a secret, and
+# nothing secret belongs in it:
+#
+#   - Terraform's own credential, the Proxmox API token, comes from pass via
+#     TF_VAR_proxmox_api_token (and CLOUDFLARE_API_TOKEN for a tunnel).
+#   - The store's secrets — Postgres, setup token, PayFast key, mail and
+#     storage passwords — never go through Terraform at all. They live in pass
+#     as gostore/staging/<name> and reach the VM with `make secrets ENV=staging`.
+#
+# See the README's "Secrets" section for the entries to create.
 
-proxmox_endpoint  = "https://proxmox.example.internal:8006"
-proxmox_api_token = "terraform@pve!gostore=00000000-0000-0000-0000-000000000000"
-proxmox_node      = "pve"
+proxmox_endpoint = "https://proxmox.example.internal:8006"
+proxmox_node     = "pve"
 
 # Static is usually right for staging — a moving IP means re-editing DNS (or
 # hosts files) every time the VM is recreated.
@@ -22,6 +30,10 @@ store_name      = "Your Store Name (staging)"
 # digital download's link exists only in the confirmation email. Pointing
 # staging at a real relay is fine — it's the payment gateway that needs
 # guarding, not outgoing mail.
+#
+# Setting smtp_username means the relay authenticates, so its password becomes
+# a required pass entry, gostore/staging/smtp_password. Leave it unset for a
+# relay that trusts the VM's address.
 smtp_host     = "smtp.example.com"
 smtp_port     = 587
 smtp_username = "gostore@example.com"

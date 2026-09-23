@@ -1,10 +1,14 @@
 # cloudflare-tunnel module
 
 Creates a Cloudflare Tunnel, its ingress rules, and a DNS record per hostname,
-and hands back the connector token that [`../app-stack`](../app-stack/README.md)
-puts in the `cloudflared` container's environment. Used by a root module when
-it sets `ingress = "tunnel"`; a `caddy` deployment never instantiates it and
-never needs a Cloudflare credential.
+and hands back the connector token. The root module re-exports that token as
+its `tunnel_token` output, and `make secrets` writes it to the box as a secret
+file, which [`../app-stack`](../app-stack/README.md) mounts into `cloudflared`
+as `TUNNEL_TOKEN_FILE`. It is the one secret Terraform does hold — Cloudflare
+gives it to Terraform when the tunnel is created — but it still never travels
+in cloud-init. Used by a root module when it sets `ingress = "tunnel"`; a
+`caddy` deployment never instantiates it and never needs a Cloudflare
+credential.
 
 ## What it creates
 

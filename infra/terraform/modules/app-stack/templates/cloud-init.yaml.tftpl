@@ -8,17 +8,18 @@ packages:
   - ca-certificates
   - curl
 
+# Nothing below is secret. Credentials never travel in this payload — which a
+# provider keeps and serves back from its metadata address — nor through
+# Terraform state: `make secrets` writes them from pass straight into
+# /opt/gostore/secrets over SSH. .env and the compose file stay 0600 anyway,
+# as a guard against a secret being added to either by hand; everything that
+# reads them runs as root.
 write_files:
   - path: /opt/gostore/.env
     owner: root:root
     permissions: '0600'
     encoding: b64
     content: ${env_b64}
-  # 0600, like .env, because it is not only configuration: the Postgres and
-  # MinIO root passwords are interpolated into it, and so is the tunnel's
-  # connector token — which would let anyone who reads it run a connector of
-  # their own and have Cloudflare send them a share of the store's traffic.
-  # Everything that reads this file runs as root.
   - path: /opt/gostore/docker-compose.yml
     owner: root:root
     permissions: '0600'
@@ -81,11 +82,16 @@ runcmd:
   - mkdir -p ${minio_data_mount}
 %{ endif ~}
 
-  - cd /opt/gostore && docker compose up -d
+  # Where `make secrets` puts one file per credential. Root-only; the files in
+  # it are owned by uid 65532 so the non-root containers can read their own.
+  - install -d -m 0700 -o root -g root /opt/gostore/secrets
 
-  # Started last, and only after the stack above is up: gostore-backup.timer
-  # has Persistent=true, so if today's scheduled time has already passed, it
-  # runs a catch-up backup immediately on enable — which must find postgres
-  # already running rather than race it.
+  # The stack is deliberately NOT started here. It cannot start before its
+  # secrets exist — Compose refuses a secret whose file is missing — and they
+  # arrive only when `make secrets` runs from the operator's machine, which
+  # then starts it. Until then the box is provisioned and idle.
+  #
+  # The timer is enabled now regardless. A run before the stack is up fails
+  # loudly and uploads nothing, which is backup.sh doing its job.
   - systemctl daemon-reload
   - systemctl enable --now gostore-backup.timer
