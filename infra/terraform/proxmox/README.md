@@ -103,6 +103,14 @@ export CLOUDFLARE_API_TOKEN=...   # Account: Cloudflare Tunnel:Edit, Zone: DNS:E
 connector attached, so `docker compose down` on the VM before
 `terraform destroy`.
 
+**Switching an existing `caddy` deployment has one manual step.** Caddy mode
+has you create A records for `domain` and `images_domain` by hand, and
+Cloudflare will not create a CNAME at a name that already has a record — so
+the apply fails until they are gone. Delete both records in the dashboard
+first; the site is unreachable for the minute between that and the apply
+finishing. A fresh deployment that starts on `tunnel` has no such records and
+skips this entirely.
+
 ## Networking
 
 `ip_address` defaults to `dhcp`; `terraform.tfvars.example` sets a static

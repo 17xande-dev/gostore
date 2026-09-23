@@ -28,8 +28,10 @@ smtp_username = "gostore@example.com"
 email_from    = "orders@example.com"
 
 # MinIO fronts images at this hostname — see main.tf's vendor-data comment
-# for why staging doesn't use Cloudflare R2. Needs its own DNS record, which
-# Terraform creates for you when ingress = "tunnel".
+# for why staging doesn't use Cloudflare R2. Needs its own DNS record. With
+# ingress = "tunnel" Terraform creates it — unless a record already exists at
+# that name from running on caddy, in which case delete it first; see the
+# README's ingress section.
 images_domain = "images-staging.gostore.example.com"
 
 # How traffic reaches the VM. The default, "caddy", terminates TLS here and
