@@ -14,9 +14,14 @@ write_files:
     permissions: '0600'
     encoding: b64
     content: ${env_b64}
+  # 0600, like .env, because it is not only configuration: the Postgres and
+  # MinIO root passwords are interpolated into it, and so is the tunnel's
+  # connector token — which would let anyone who reads it run a connector of
+  # their own and have Cloudflare send them a share of the store's traffic.
+  # Everything that reads this file runs as root.
   - path: /opt/gostore/docker-compose.yml
     owner: root:root
-    permissions: '0644'
+    permissions: '0600'
     encoding: b64
     content: ${compose_b64}
 %{ if ingress == "caddy" ~}

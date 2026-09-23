@@ -94,8 +94,10 @@ services:
   # in the tunnel's ingress rules, which are Terraform's (see
   # ../cloudflare-tunnel), not in a config file here.
   #
-  # The token goes through the environment rather than the command line so it
-  # is not visible in `ps` or `docker inspect`'s Cmd.
+  # The token goes through the environment rather than the command line, which
+  # keeps it out of `ps` — and that is all it does. `docker inspect` still shows
+  # it under Config.Env, and so does this file, which is why cloud-init writes
+  # it 0600. Anyone with the docker socket is root-equivalent anyway.
   #
   # No healthcheck: the image is distroless, so there is no shell for a CMD
   # probe to run. `cloudflared tunnel info` from the host is the check.
