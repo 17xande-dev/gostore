@@ -1648,6 +1648,7 @@ Recorded here so they are decided deliberately rather than by default:
 | Accent-insensitive search | `unaccent`, behind an `IMMUTABLE` wrapper so it can be indexed | When a catalog carries accented titles and "cafe" failing to find "café" starts costing sales |
 | Keyset pagination | a cursor on the ranking and title | When a catalog is deep enough that discarding rows to reach a late page is measurable |
 | Tuned trigram thresholds | `AfterConnect` on the pgx pool | When the defaults visibly over- or under-match; they are session settings, so they belong on the connection, not in a query |
+| Local object storage (dev and staging) | [versitygw](https://github.com/versity/versitygw) as the server, [rclone](https://rclone.org) for backups, `aws-cli` for bucket setup | **Decided, not yet done** (2026-09-23). MinIO's community edition was archived in February 2026, its images stopped receiving patches in October 2025, and `minio/minio` and `minio/mc` were deleted from Docker Hub on 2026-09-11. Until the migration, `compose.yaml` and the staging stack pull the last builds from `quay.io/minio/*` — frozen, unpatched, and at risk of disappearing the same way. versitygw was chosen for Apache-2.0 licensing, several maintainers, publishing to both Docker Hub and GHCR, and serving public reads through a bucket policy at the same path-style URLs, so `BLOB_PUBLIC_BASE_URL` keeps its shape. Production is unaffected: it uses R2, and the `minio-go` client library is still maintained |
 
 ## When something goes wrong
 

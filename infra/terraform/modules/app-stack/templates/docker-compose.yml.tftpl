@@ -26,8 +26,12 @@ services:
   # creation and the public-read policy are minio-init's job, immediately
   # below — this container refuses bucket-creation rights on purpose, same
   # reasoning as compose.yaml at the repo root.
+  #
+  # From Quay because MinIO deleted its Docker Hub repositories; these are the
+  # last, unpatched community builds. Being replaced by versitygw — see
+  # "Decisions still open" in the root README.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -42,7 +46,7 @@ services:
       retries: 20
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy

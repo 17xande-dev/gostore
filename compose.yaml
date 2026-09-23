@@ -27,8 +27,12 @@ services:
 
   # S3-compatible object storage, so image uploads work locally exactly as they
   # will against S3 or GCS in production.
+  #
+  # From Quay because MinIO deleted its Docker Hub repositories; these are the
+  # last, unpatched community builds. Being replaced by versitygw — see
+  # "Decisions still open" in the README.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: gostore
@@ -49,7 +53,7 @@ services:
   # bucket-creation rights: an application that can create buckets can also be
   # made to create a thousand of them.
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
