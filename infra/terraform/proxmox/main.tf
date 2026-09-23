@@ -2,9 +2,9 @@ locals {
   static_ip = var.ip_address != "dhcp"
 }
 
-# The tunnel, when this environment uses one. Created before the VM, because
-# the VM's cloud-init has to carry the connector token that only exists once
-# the tunnel does.
+# The tunnel, when this environment uses one. Its connector token does not go
+# into the VM's cloud-init — it is a secret, so `make secrets` reads it from
+# the tunnel_token output and writes it to the box like any other.
 #
 # Both hostnames go through it: the store, and the MinIO bucket that serves
 # product images — the second replacing the Caddy site that fronted it, so
@@ -62,12 +62,17 @@ module "app_stack" {
   snapscan_snap_code  = var.snapscan_snap_code
   snapscan_validation = var.snapscan_validation
 
-  smtp_host          = var.smtp_host
-  smtp_port          = var.smtp_port
-  smtp_tls           = var.smtp_tls
-  smtp_username      = var.smtp_username
-  email_from         = var.email_from
-  order_notify_email = var.order_notify_email
+  mail_transport       = var.mail_transport
+  smtp_host            = var.smtp_host
+  smtp_port            = var.smtp_port
+  smtp_tls             = var.smtp_tls
+  smtp_username        = var.smtp_username
+  smtp_oauth_tenant_id = var.smtp_oauth_tenant_id
+  smtp_oauth_client_id = var.smtp_oauth_client_id
+  graph_tenant_id      = var.graph_tenant_id
+  graph_client_id      = var.graph_client_id
+  email_from           = var.email_from
+  order_notify_email   = var.order_notify_email
 
   image_backend = "minio"
   images_domain = var.images_domain

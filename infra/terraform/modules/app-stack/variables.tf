@@ -112,13 +112,63 @@ variable "snapscan_validation" {
 }
 
 # --- mail ---
+#
+# Three ways to send, matching the three the server supports:
+#
+#   "smtp"         — a relay, authenticated by password (smtp_username set,
+#                    so smtp_password is a required secret) or by network
+#                    address (smtp_username empty).
+#   "smtp_xoauth2" — a relay that takes an OAuth token instead of a password,
+#                    which is what Microsoft Exchange Online wants. Needs
+#                    smtp_username (XOAUTH2 authenticates as a named mailbox)
+#                    and the app registration's two ids; its client secret is
+#                    the smtp_oauth_client_secret secret. Never smtp_password
+#                    too — the server refuses the pair.
+#   "graph"        — Microsoft Graph over HTTPS, no SMTP at all. The app
+#                    registration's two ids here, and its client secret as the
+#                    graph_client_secret secret.
+#
+# The rules that span variables — smtp_host required unless graph, the ids
+# required for the oauth modes — are preconditions on the user_data output,
+# because variable validation cannot see other variables on Terraform 1.5.
+# They fail the plan just the same.
+variable "mail_transport" {
+  type    = string
+  default = "smtp"
+  validation {
+    condition     = contains(["smtp", "smtp_xoauth2", "graph"], var.mail_transport)
+    error_message = "mail_transport must be \"smtp\", \"smtp_xoauth2\" or \"graph\"."
+  }
+}
 
 variable "smtp_host" {
-  type = string
-  validation {
-    condition     = trimspace(var.smtp_host) != ""
-    error_message = "smtp_host must not be empty — a store that cannot send receipts cannot deliver a digital download either."
-  }
+  description = "Required for \"smtp\" and \"smtp_xoauth2\"; ignored for \"graph\"."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_oauth_tenant_id" {
+  description = "\"smtp_xoauth2\" only: the Entra tenant id. An identifier, not a secret."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_oauth_client_id" {
+  description = "\"smtp_xoauth2\" only: the app registration's client id. An identifier; its secret is smtp_oauth_client_secret in pass."
+  type        = string
+  default     = ""
+}
+
+variable "graph_tenant_id" {
+  description = "\"graph\" only: the Entra tenant id. An identifier, not a secret."
+  type        = string
+  default     = ""
+}
+
+variable "graph_client_id" {
+  description = "\"graph\" only: the app registration's client id. An identifier; its secret is graph_client_secret in pass."
+  type        = string
+  default     = ""
 }
 
 variable "smtp_port" {
@@ -133,7 +183,7 @@ variable "smtp_tls" {
 }
 
 variable "smtp_username" {
-  description = "Empty for a relay that authenticates by network address. When set, smtp_password becomes a required secret."
+  description = "\"smtp\": empty for a relay that authenticates by network address; when set, smtp_password becomes a required secret. \"smtp_xoauth2\": required — the mailbox XOAUTH2 authenticates as. Ignored for \"graph\"."
   type        = string
   default     = ""
 }

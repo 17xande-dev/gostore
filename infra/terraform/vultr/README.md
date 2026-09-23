@@ -125,8 +125,10 @@ pass insert gostore/prod/payfast_passphrase
 pass insert gostore/prod/blob_secret_access_key
 pass insert gostore/prod/backup_secret_access_key
 
-# Only if smtp_username is set, i.e. the relay authenticates:
-pass insert gostore/prod/smtp_password
+# Mail — the one entry for your mail_transport, if it has one:
+pass insert gostore/prod/smtp_password             # smtp, and only if the relay needs a login
+pass insert gostore/prod/smtp_oauth_client_secret  # smtp_xoauth2: the app registration's secret
+pass insert gostore/prod/graph_client_secret       # graph: the app registration's secret
 ```
 
 `database_url` is not an entry: `make secrets` builds it from

@@ -27,14 +27,31 @@ store_name      = "Your Store Name"
 payfast_sandbox = true
 # payfast_merchant_id = "your-merchant-id"
 
-# Mail. Both required: the server refuses to boot without a relay, and a
-# digital download's link exists only in the confirmation email. Setting
-# smtp_username means the relay authenticates, so gostore/prod/smtp_password
-# becomes a required pass entry.
-smtp_host     = "smtp.example.com"
-smtp_port     = 587
-smtp_username = "gostore@example.com"
-email_from    = "orders@example.com"
+# Mail. Required: the server refuses to boot without a way to send, because a
+# digital download's link exists only in the confirmation email. One of three
+# transports; each one's secret goes in pass, never here.
+email_from = "orders@example.com"
+
+# "smtp": a relay. Setting smtp_username means it needs a login, so
+# gostore/prod/smtp_password becomes a required pass entry.
+mail_transport = "smtp"
+smtp_host      = "smtp.example.com"
+smtp_port      = 587
+smtp_username  = "gostore@example.com"
+
+# "smtp_xoauth2": Exchange Online over SMTP. smtp_username is the mailbox;
+# the secret is gostore/prod/smtp_oauth_client_secret.
+# mail_transport       = "smtp_xoauth2"
+# smtp_host            = "smtp.office365.com"
+# smtp_username        = "orders@example.com"
+# smtp_oauth_tenant_id = "00000000-0000-0000-0000-000000000000"
+# smtp_oauth_client_id = "11111111-1111-1111-1111-111111111111"
+
+# "graph": Microsoft Graph over HTTPS, no SMTP settings at all. The secret is
+# gostore/prod/graph_client_secret.
+# mail_transport  = "graph"
+# graph_tenant_id = "00000000-0000-0000-0000-000000000000"
+# graph_client_id = "11111111-1111-1111-1111-111111111111"
 
 # order_notify_email = "shop@example.com"
 

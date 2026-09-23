@@ -38,7 +38,18 @@ Elsewhere:
 - **A domain**, with two hostnames to spend: one for the store (say
   `staging.example.com`) and one for product images (`images-staging.example.com`).
   *(tunnel)* The domain must be a zone on your Cloudflare account.
-- **An SMTP relay** the store can send through. The server refuses to start without one.
+- **A way to send mail.** The server refuses to start without one, because a digital
+  download's link exists only in its confirmation email. Three transports, picked with
+  `mail_transport` in step 5:
+  - `smtp` — any relay, logging in with a password or trusting the VM's address;
+  - `smtp_xoauth2` — Microsoft Exchange Online over SMTP, with an Entra app registration
+    holding `SMTP.SendAsApp`;
+  - `graph` — Microsoft Graph over HTTPS, with an app registration holding `Mail.Send`.
+    No SMTP at all.
+
+  The two Microsoft options need different permissions and are not interchangeable;
+  [Microsoft Exchange Online](../email.md#microsoft-exchange-online) covers setting up
+  the app registration for each.
 
 ## 2. Prepare the Proxmox node (once)
 
@@ -113,8 +124,10 @@ pass generate -n gostore/staging/minio_root_password 40
 pass insert gostore/staging/payfast_merchant_key
 pass insert gostore/staging/payfast_passphrase
 
-# Only if your relay needs a login (you will set smtp_username in step 5):
-pass insert gostore/staging/smtp_password
+# Mail — the one entry for your transport (step 1), if it has one:
+pass insert gostore/staging/smtp_password             # smtp, and only if the relay needs a login
+pass insert gostore/staging/smtp_oauth_client_secret  # smtp_xoauth2: the app registration's client secret
+pass insert gostore/staging/graph_client_secret       # graph: the app registration's client secret
 ```
 
 With SnapScan switched on you would also need `snapscan_api_key` and
@@ -150,11 +163,11 @@ images_domain   = "images-staging.example.com"
 store_name      = "Your Store (staging)"
 acme_email      = "ops@example.com"  # Let's Encrypt contact; required even with a tunnel, where it is unused
 
-# Mail
-smtp_host     = "smtp.example.com"
-smtp_port     = 587
-smtp_username = "orders@example.com" # set => gostore/staging/smtp_password must exist
-email_from    = "orders@example.com"
+# Mail — Microsoft Graph here; the other two transports are below
+email_from      = "orders@example.com"   # the mailbox the store sends as
+mail_transport  = "graph"
+graph_tenant_id = "00000000-0000-0000-0000-000000000000"
+graph_client_id = "11111111-1111-1111-1111-111111111111"   # its secret: gostore/staging/graph_client_secret
 
 # Ingress (tunnel). Leave these three out for caddy.
 ingress               = "tunnel"
@@ -162,10 +175,36 @@ cloudflare_account_id = "0123456789abcdef0123456789abcdef"
 cloudflare_zone_id    = "fedcba9876543210fedcba9876543210"
 ```
 
+The other two mail transports, in place of the Graph lines:
+
+```hcl
+# A relay. Set smtp_username only if it needs a login — then
+# gostore/staging/smtp_password must exist. Leave it out for a relay that
+# trusts the VM's address.
+mail_transport = "smtp"
+smtp_host      = "smtp.example.com"
+smtp_port      = 587
+smtp_username  = "orders@example.com"
+
+# Exchange Online over SMTP with XOAUTH2. smtp_username is required — the
+# mailbox it authenticates as — and its secret is
+# gostore/staging/smtp_oauth_client_secret, never smtp_password.
+mail_transport       = "smtp_xoauth2"
+smtp_host            = "smtp.office365.com"
+smtp_port            = 587
+smtp_username        = "orders@example.com"
+smtp_oauth_tenant_id = "00000000-0000-0000-0000-000000000000"
+smtp_oauth_client_id = "11111111-1111-1111-1111-111111111111"
+```
+
+A combination the server would refuse — XOAUTH2 without a mailbox, Graph without its
+ids, SMTP without a host — fails `terraform plan` with a message naming what is missing,
+rather than leaving you a container that will not start.
+
 **Required:** `proxmox_endpoint`, `proxmox_node`, `ssh_public_key`, `container_image`,
-`base_url`, `domain`, `images_domain`, `store_name`, `acme_email`, `smtp_host`,
-`email_from` — and `proxmox_api_token`, which does **not** go here: it comes from your
-shell in step 6. `base_url`'s host must be `domain`.
+`base_url`, `domain`, `images_domain`, `store_name`, `acme_email`, `email_from`, and the
+settings for your mail transport — plus `proxmox_api_token`, which does **not** go here:
+it comes from your shell in step 6. `base_url`'s host must be `domain`.
 
 **Worth knowing about, all optional:**
 

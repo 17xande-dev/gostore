@@ -34,18 +34,34 @@ domain          = "staging.gostore.example.com"
 acme_email      = "ops@example.com"
 store_name      = "Your Store Name (staging)"
 
-# Mail. Both required: the server refuses to boot without a relay, and a
+# Mail. Required: the server refuses to boot without a way to send, because a
 # digital download's link exists only in the confirmation email. Pointing
-# staging at a real relay is fine — it's the payment gateway that needs
-# guarding, not outgoing mail.
-#
-# Setting smtp_username means the relay authenticates, so its password becomes
-# a required pass entry, gostore/staging/smtp_password. Leave it unset for a
-# relay that trusts the VM's address.
-smtp_host     = "smtp.example.com"
-smtp_port     = 587
-smtp_username = "gostore@example.com"
-email_from    = "orders@example.com"
+# staging at a real mailbox is fine — it's the payment gateway that needs
+# guarding, not outgoing mail. One of three transports; each one's secret goes
+# in pass, never here.
+email_from = "orders@example.com"
+
+# "smtp": a relay. Setting smtp_username means it needs a login, so
+# gostore/staging/smtp_password becomes a required pass entry; leave it unset
+# for a relay that trusts the VM's address.
+mail_transport = "smtp"
+smtp_host      = "smtp.example.com"
+smtp_port      = 587
+smtp_username  = "gostore@example.com"
+
+# "smtp_xoauth2": Exchange Online over SMTP. smtp_username is the mailbox;
+# the secret is gostore/staging/smtp_oauth_client_secret.
+# mail_transport       = "smtp_xoauth2"
+# smtp_host            = "smtp.office365.com"
+# smtp_username        = "orders@example.com"
+# smtp_oauth_tenant_id = "00000000-0000-0000-0000-000000000000"
+# smtp_oauth_client_id = "11111111-1111-1111-1111-111111111111"
+
+# "graph": Microsoft Graph over HTTPS, no SMTP settings at all. The secret is
+# gostore/staging/graph_client_secret.
+# mail_transport  = "graph"
+# graph_tenant_id = "00000000-0000-0000-0000-000000000000"
+# graph_client_id = "11111111-1111-1111-1111-111111111111"
 
 # MinIO fronts images at this hostname — see main.tf's vendor-data comment
 # for why staging doesn't use Cloudflare R2. Needs its own DNS record. With

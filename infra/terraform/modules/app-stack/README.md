@@ -88,9 +88,10 @@ docker run --rm --network gostore_default -e MC_HOST_backup \
 No credential is an input to this module, and none appears in anything it
 renders — not the `.env`, not the Compose file, not the cloud-init payload a
 provider keeps. What the module decides is *which* secrets a stack needs,
-from the features switched on: `smtp_password` only when `smtp_username` is
-set, the SnapScan keys only when `snapscan_snap_code` is, `tunnel_token` only
-with a tunnel, and so on. That one list feeds both the Compose file's
+from the features switched on: one mail secret by `mail_transport` —
+`smtp_password` for a relay with a login, `smtp_oauth_client_secret` for
+XOAUTH2, `graph_client_secret` for Graph — the SnapScan keys only when
+`snapscan_snap_code` is set, `tunnel_token` only with a tunnel, and so on. That one list feeds both the Compose file's
 `secrets:` block and the `secret_names` output, so what gets pushed and what
 Compose expects cannot drift apart.
 

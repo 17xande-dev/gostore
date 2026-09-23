@@ -58,12 +58,16 @@ locals {
 
   # KEY -> the secret file the server reads it from as KEY_FILE.
   server_secret_candidates = {
-    DATABASE_URL              = { name = "database_url", on = true }
-    SETUP_TOKEN               = { name = "setup_token", on = true }
-    PAYFAST_MERCHANT_KEY      = { name = "payfast_merchant_key", on = true }
-    PAYFAST_PASSPHRASE        = { name = "payfast_passphrase", on = true }
-    BLOB_SECRET_ACCESS_KEY    = { name = local.blob_secret, on = true }
-    SMTP_PASSWORD             = { name = "smtp_password", on = var.smtp_username != "" }
+    DATABASE_URL           = { name = "database_url", on = true }
+    SETUP_TOKEN            = { name = "setup_token", on = true }
+    PAYFAST_MERCHANT_KEY   = { name = "payfast_merchant_key", on = true }
+    PAYFAST_PASSPHRASE     = { name = "payfast_passphrase", on = true }
+    BLOB_SECRET_ACCESS_KEY = { name = local.blob_secret, on = true }
+    # One mail credential at most, by transport. XOAUTH2 must never get
+    # smtp_password as well: the server refuses the pair as ambiguous.
+    SMTP_PASSWORD             = { name = "smtp_password", on = var.mail_transport == "smtp" && var.smtp_username != "" }
+    SMTP_OAUTH_CLIENT_SECRET  = { name = "smtp_oauth_client_secret", on = var.mail_transport == "smtp_xoauth2" }
+    GRAPH_CLIENT_SECRET       = { name = "graph_client_secret", on = var.mail_transport == "graph" }
     SNAPSCAN_API_KEY          = { name = "snapscan_api_key", on = var.snapscan_snap_code != "" }
     SNAPSCAN_WEBHOOK_AUTH_KEY = { name = "snapscan_webhook_auth_key", on = var.snapscan_snap_code != "" }
     SNAPSCAN_VALIDATION_KEY   = { name = "snapscan_validation_key", on = var.snapscan_snap_code != "" && var.snapscan_validation }
@@ -90,10 +94,15 @@ locals {
     payfast_sandbox      = var.payfast_sandbox
     payfast_merchant_id  = var.payfast_merchant_id
     snapscan_snap_code   = var.snapscan_snap_code
+    mail_transport       = var.mail_transport
     smtp_host            = var.smtp_host
     smtp_port            = var.smtp_port
     smtp_tls             = var.smtp_tls
     smtp_username        = var.smtp_username
+    smtp_oauth_tenant_id = var.smtp_oauth_tenant_id
+    smtp_oauth_client_id = var.smtp_oauth_client_id
+    graph_tenant_id      = var.graph_tenant_id
+    graph_client_id      = var.graph_client_id
     email_from           = var.email_from
     order_notify_email   = var.order_notify_email
     blob_endpoint        = local.blob_endpoint

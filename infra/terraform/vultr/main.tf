@@ -70,12 +70,17 @@ module "app_stack" {
   snapscan_snap_code  = var.snapscan_snap_code
   snapscan_validation = var.snapscan_validation
 
-  smtp_host          = var.smtp_host
-  smtp_port          = var.smtp_port
-  smtp_tls           = var.smtp_tls
-  smtp_username      = var.smtp_username
-  email_from         = var.email_from
-  order_notify_email = var.order_notify_email
+  mail_transport       = var.mail_transport
+  smtp_host            = var.smtp_host
+  smtp_port            = var.smtp_port
+  smtp_tls             = var.smtp_tls
+  smtp_username        = var.smtp_username
+  smtp_oauth_tenant_id = var.smtp_oauth_tenant_id
+  smtp_oauth_client_id = var.smtp_oauth_client_id
+  graph_tenant_id      = var.graph_tenant_id
+  graph_client_id      = var.graph_client_id
+  email_from           = var.email_from
+  order_notify_email   = var.order_notify_email
 
   image_backend        = "r2"
   blob_endpoint        = var.blob_endpoint

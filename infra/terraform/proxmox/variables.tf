@@ -158,12 +158,44 @@ variable "snapscan_validation" {
   default     = false
 }
 
+# Mail. The store must be able to send — a digital download's link exists only
+# in its confirmation email — through one of three transports; see the
+# app-stack module's variables.tf for what each needs. Its client secrets, like
+# every other, live in pass, not here.
+variable "mail_transport" {
+  description = "\"smtp\" (a relay, password or network-trusted), \"smtp_xoauth2\" (a relay taking an OAuth token — Exchange Online), or \"graph\" (Microsoft Graph over HTTPS)."
+  type        = string
+  default     = "smtp"
+}
+
 variable "smtp_host" {
-  type = string
-  validation {
-    condition     = trimspace(var.smtp_host) != ""
-    error_message = "smtp_host must not be empty — a required variable set to \"\" would deploy a store that cannot send receipts."
-  }
+  description = "Mail relay hostname. Required unless mail_transport = \"graph\"."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_oauth_tenant_id" {
+  description = "smtp_xoauth2 only. Identifier; the secret is gostore/staging/smtp_oauth_client_secret in pass."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_oauth_client_id" {
+  description = "smtp_xoauth2 only."
+  type        = string
+  default     = ""
+}
+
+variable "graph_tenant_id" {
+  description = "graph only. Identifier; the secret is gostore/staging/graph_client_secret in pass."
+  type        = string
+  default     = ""
+}
+
+variable "graph_client_id" {
+  description = "graph only."
+  type        = string
+  default     = ""
 }
 
 variable "smtp_port" {
@@ -177,7 +209,7 @@ variable "smtp_tls" {
 }
 
 variable "smtp_username" {
-  description = "Empty for a relay that authenticates by network address. Setting it makes smtp_password required in pass."
+  description = "smtp: empty for a relay that authenticates by network address; setting it makes smtp_password required in pass. smtp_xoauth2: required — the mailbox it authenticates as."
   type        = string
   default     = ""
 }
