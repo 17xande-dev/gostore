@@ -458,10 +458,14 @@ func (c Config) AllowsEmbedding() bool { return len(c.EmbedOrigins) > 0 }
 // Load reads configuration from the environment, applying defaults and
 // returning an error listing every missing or malformed required value.
 func Load() (Config, error) {
+	sec, err := loadSecrets(secretKeys...)
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
 		Port:            env("PORT", "8080"),
 		BaseURL:         strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
-		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		DatabaseURL:     sec.get("DATABASE_URL"),
 		StoreName:       env("STORE_NAME", "gostore"),
 		Currency:        env("CURRENCY", "ZAR"),
 		TemplateDir:     os.Getenv("TEMPLATE_DIR"),
@@ -469,7 +473,7 @@ func Load() (Config, error) {
 		ThemeReload:     boolEnv("THEME_RELOAD", false),
 		LogLevel:        env("LOG_LEVEL", "info"),
 		LogFormat:       env("LOG_FORMAT", "json"),
-		SetupToken:      strings.TrimSpace(os.Getenv("SETUP_TOKEN")),
+		SetupToken:      strings.TrimSpace(sec.get("SETUP_TOKEN")),
 		SessionTTL:      24 * time.Hour,
 		ShutdownTimeout: 15 * time.Second,
 		CartTTLDays:     60,
@@ -486,7 +490,7 @@ func Load() (Config, error) {
 			Endpoint:      strings.TrimSpace(os.Getenv("BLOB_ENDPOINT")),
 			Bucket:        strings.TrimSpace(os.Getenv("BLOB_BUCKET")),
 			AccessKey:     os.Getenv("BLOB_ACCESS_KEY_ID"),
-			SecretKey:     os.Getenv("BLOB_SECRET_ACCESS_KEY"),
+			SecretKey:     sec.get("BLOB_SECRET_ACCESS_KEY"),
 			Region:        env("BLOB_REGION", "auto"),
 			UseTLS:        boolEnv("BLOB_USE_TLS", true),
 			PublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("BLOB_PUBLIC_BASE_URL")), "/"),
@@ -497,7 +501,7 @@ func Load() (Config, error) {
 			Endpoint:       strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
 			Bucket:         strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
 			AccessKey:      os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
-			SecretKey:      os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
+			SecretKey:      sec.get("DOWNLOAD_SECRET_ACCESS_KEY"),
 			Region:         env("DOWNLOAD_REGION", "auto"),
 			UseTLS:         boolEnv("DOWNLOAD_USE_TLS", true),
 			PublicEndpoint: strings.TrimSpace(os.Getenv("DOWNLOAD_PUBLIC_ENDPOINT")),
@@ -505,26 +509,26 @@ func Load() (Config, error) {
 		SMTP: SMTP{
 			Host:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
 			Username: os.Getenv("SMTP_USERNAME"),
-			Password: os.Getenv("SMTP_PASSWORD"),
+			Password: sec.get("SMTP_PASSWORD"),
 			From:     strings.TrimSpace(os.Getenv("EMAIL_FROM")),
 			ReplyTo:  strings.TrimSpace(os.Getenv("EMAIL_REPLY_TO")),
 			TLS:      env("SMTP_TLS", "starttls"),
 			OAuth: SMTPOAuth{
 				TenantID:     strings.TrimSpace(os.Getenv("SMTP_OAUTH_TENANT_ID")),
 				ClientID:     strings.TrimSpace(os.Getenv("SMTP_OAUTH_CLIENT_ID")),
-				ClientSecret: os.Getenv("SMTP_OAUTH_CLIENT_SECRET"),
+				ClientSecret: sec.get("SMTP_OAUTH_CLIENT_SECRET"),
 			},
 		},
 		Graph: Graph{
 			TenantID:     strings.TrimSpace(os.Getenv("GRAPH_TENANT_ID")),
 			ClientID:     strings.TrimSpace(os.Getenv("GRAPH_CLIENT_ID")),
-			ClientSecret: os.Getenv("GRAPH_CLIENT_SECRET"),
+			ClientSecret: sec.get("GRAPH_CLIENT_SECRET"),
 			From:         strings.TrimSpace(os.Getenv("EMAIL_FROM")),
 		},
 		PayFast: PayFast{
 			MerchantID:  os.Getenv("PAYFAST_MERCHANT_ID"),
-			MerchantKey: os.Getenv("PAYFAST_MERCHANT_KEY"),
-			Passphrase:  os.Getenv("PAYFAST_PASSPHRASE"),
+			MerchantKey: sec.get("PAYFAST_MERCHANT_KEY"),
+			Passphrase:  sec.get("PAYFAST_PASSPHRASE"),
 			// Sandbox defaults to true: the wrong default here takes real money
 			// from a real card during somebody's first afternoon with the project.
 			//
@@ -538,9 +542,9 @@ func Load() (Config, error) {
 		},
 		SnapScan: SnapScan{
 			SnapCode:       strings.TrimSpace(os.Getenv("SNAPSCAN_SNAP_CODE")),
-			APIKey:         strings.TrimSpace(os.Getenv("SNAPSCAN_API_KEY")),
-			WebhookAuthKey: strings.TrimSpace(os.Getenv("SNAPSCAN_WEBHOOK_AUTH_KEY")),
-			ValidationKey:  strings.TrimSpace(os.Getenv("SNAPSCAN_VALIDATION_KEY")),
+			APIKey:         strings.TrimSpace(sec.get("SNAPSCAN_API_KEY")),
+			WebhookAuthKey: strings.TrimSpace(sec.get("SNAPSCAN_WEBHOOK_AUTH_KEY")),
+			ValidationKey:  strings.TrimSpace(sec.get("SNAPSCAN_VALIDATION_KEY")),
 		},
 	}
 	c.CookieSecure = strings.HasPrefix(c.BaseURL, "https://")
@@ -652,7 +656,6 @@ func Load() (Config, error) {
 				"credentials, or leave PAYFAST_SANDBOX=true", payFastSandboxMerchantID)
 	}
 
-	var err error
 	// "*" is allowed here and nowhere else: the fragments these origins may fetch
 	// are cookie-free and read-only, so a permissive list cannot become a way to
 	// act as somebody.
@@ -932,8 +935,15 @@ func parseOrigins(key string, allowWildcard bool) ([]string, error) {
 // no longer discovers it when migrations run. Run the binary with -check-config
 // for that, which is the same check made deliberate.
 func LoadTool() (Config, error) {
+	// Only the two credentials this loader reads, not secretKeys: a migration
+	// job that is handed DATABASE_URL_FILE alone must not fail because the
+	// merchant key's file was not mounted into it too.
+	sec, err := loadSecrets("DATABASE_URL", "DOWNLOAD_SECRET_ACCESS_KEY")
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
-		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DatabaseURL: sec.get("DATABASE_URL"),
 		LogLevel:    env("LOG_LEVEL", "info"),
 		LogFormat:   env("LOG_FORMAT", "json"),
 
@@ -951,7 +961,7 @@ func LoadTool() (Config, error) {
 			Endpoint:       strings.TrimSpace(os.Getenv("DOWNLOAD_ENDPOINT")),
 			Bucket:         strings.TrimSpace(os.Getenv("DOWNLOAD_BUCKET")),
 			AccessKey:      os.Getenv("DOWNLOAD_ACCESS_KEY_ID"),
-			SecretKey:      os.Getenv("DOWNLOAD_SECRET_ACCESS_KEY"),
+			SecretKey:      sec.get("DOWNLOAD_SECRET_ACCESS_KEY"),
 			Region:         env("DOWNLOAD_REGION", "auto"),
 			UseTLS:         boolEnv("DOWNLOAD_USE_TLS", true),
 			PublicEndpoint: strings.TrimSpace(os.Getenv("DOWNLOAD_PUBLIC_ENDPOINT")),
@@ -990,6 +1000,70 @@ func checkLogLevel(level string) error {
 	default:
 		return fmt.Errorf("config: LOG_LEVEL must be one of debug, info, warn, error; got %q", level)
 	}
+}
+
+// secretKeys are the settings that are credentials, and so may arrive as a file
+// instead of a value: KEY_FILE names a file whose contents are KEY. That keeps
+// them out of the process environment — which `docker inspect` shows, and which
+// a container's /proc/<pid>/environ exposes to anything running as its user —
+// and lets a deployment mount them as Compose secrets rather than write them
+// into a compose file. Identifiers that sit next to them (a merchant id, an
+// access key id, a snap code) are not on this list: they are not secret.
+var secretKeys = []string{
+	"DATABASE_URL",
+	"SETUP_TOKEN",
+	"PAYFAST_MERCHANT_KEY",
+	"PAYFAST_PASSPHRASE",
+	"SNAPSCAN_API_KEY",
+	"SNAPSCAN_WEBHOOK_AUTH_KEY",
+	"SNAPSCAN_VALIDATION_KEY",
+	"SMTP_PASSWORD",
+	"SMTP_OAUTH_CLIENT_SECRET",
+	"GRAPH_CLIENT_SECRET",
+	"BLOB_SECRET_ACCESS_KEY",
+	"DOWNLOAD_SECRET_ACCESS_KEY",
+}
+
+// secrets holds the values read from KEY_FILE for the keys that had one.
+type secrets map[string]string
+
+// loadSecrets reads KEY_FILE for each key that has one, so that a file which is
+// missing or unreadable is a boot failure naming the setting, rather than an
+// empty credential discovered at the first checkout.
+//
+// "Set" means non-empty on both sides. The development compose file supplies
+// most of these as `${KEY:-}`, i.e. present but empty, and that must not read as
+// a conflict with a KEY_FILE alongside it.
+//
+// Trailing newlines are stripped, and nothing else is: `pass show` and most
+// editors end a file with one, and a shell's $(< file) drops them the same way —
+// the convention the official Postgres image's *_FILE variables follow.
+func loadSecrets(keys ...string) (secrets, error) {
+	s := make(secrets)
+	for _, key := range keys {
+		path := os.Getenv(key + "_FILE")
+		if path == "" {
+			continue
+		}
+		if os.Getenv(key) != "" {
+			return nil, fmt.Errorf("config: %s and %s_FILE are both set; set one", key, key)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("config: %s_FILE: %w", key, err)
+		}
+		s[key] = strings.TrimRight(string(b), "\r\n")
+	}
+	return s, nil
+}
+
+// get returns key's value from its file if it had one, else from the
+// environment.
+func (s secrets) get(key string) string {
+	if v, ok := s[key]; ok {
+		return v
+	}
+	return os.Getenv(key)
 }
 
 // boolEnv reads a flag. Only the obvious spellings count as true, and anything

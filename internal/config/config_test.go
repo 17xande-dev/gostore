@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -508,6 +511,200 @@ func TestLoadTool_NeedsOnlyDatabaseURL(t *testing.T) {
 	}
 	if c.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want the info default", c.LogLevel)
+	}
+}
+
+// writeSecret puts contents in a file of its own and returns the path, the way a
+// Compose secret arrives under /run/secrets.
+func writeSecret(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte(contents), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoad_SecretFromFile(t *testing.T) {
+	setRequired(t)
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PAYFAST_MERCHANT_KEY", "")
+
+	// A trailing newline is what `pass show` and most editors leave, and CRLF is
+	// what a file written on Windows does; both belong to the file, not the value.
+	t.Setenv("DATABASE_URL_FILE", writeSecret(t, "postgres://u:from-file@db:5432/gostore\n"))
+	t.Setenv("PAYFAST_MERCHANT_KEY_FILE", writeSecret(t, "key-from-file\r\n"))
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := "postgres://u:from-file@db:5432/gostore"; c.DatabaseURL != want {
+		t.Errorf("DatabaseURL = %q, want %q", c.DatabaseURL, want)
+	}
+	if want := "key-from-file"; c.PayFast.MerchantKey != want {
+		t.Errorf("MerchantKey = %q, want %q", c.PayFast.MerchantKey, want)
+	}
+}
+
+func TestLoad_SecretKeepsInnerWhitespace(t *testing.T) {
+	setRequired(t)
+	t.Setenv("PAYFAST_PASSPHRASE", "")
+	// Only trailing newlines go. A passphrase is the account's choice, and one
+	// with a space in it must survive — trimming it would sign every payment
+	// with the wrong key.
+	t.Setenv("PAYFAST_PASSPHRASE_FILE", writeSecret(t, "a pass phrase\n"))
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := "a pass phrase"; c.PayFast.Passphrase != want {
+		t.Errorf("Passphrase = %q, want %q", c.PayFast.Passphrase, want)
+	}
+}
+
+func TestLoad_SecretFileSatisfiesRequired(t *testing.T) {
+	setRequired(t)
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("DATABASE_URL_FILE", writeSecret(t, "postgres://u:p@db:5432/gostore"))
+
+	// DATABASE_URL is required; arriving by file is arriving.
+	if _, err := Load(); err != nil {
+		t.Fatalf("a required secret supplied by file was reported missing: %v", err)
+	}
+}
+
+func TestLoad_SecretValueAndFileBothSetIsRefused(t *testing.T) {
+	setRequired(t)
+	t.Setenv("PAYFAST_MERCHANT_KEY_FILE", writeSecret(t, "other-key"))
+
+	// Which one wins would be a guess, and guessing wrong about a merchant key
+	// fails every payment. Refused, naming both.
+	_, err := Load()
+	if err == nil {
+		t.Fatal("PAYFAST_MERCHANT_KEY and PAYFAST_MERCHANT_KEY_FILE both set was accepted")
+	}
+	for _, want := range []string{"PAYFAST_MERCHANT_KEY", "PAYFAST_MERCHANT_KEY_FILE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %s: %v", want, err)
+		}
+	}
+}
+
+func TestLoad_EmptyValueBesideFileIsNotAConflict(t *testing.T) {
+	setRequired(t)
+	// The development compose file supplies these as ${KEY:-}: present, empty.
+	// That must not read as a clash with a KEY_FILE next to it.
+	t.Setenv("PAYFAST_MERCHANT_KEY", "")
+	t.Setenv("PAYFAST_MERCHANT_KEY_FILE", writeSecret(t, "key-from-file"))
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("empty KEY beside KEY_FILE was refused: %v", err)
+	}
+	if c.PayFast.MerchantKey != "key-from-file" {
+		t.Errorf("MerchantKey = %q, want the file's value", c.PayFast.MerchantKey)
+	}
+}
+
+func TestLoad_EmptyFileVarFallsBackToValue(t *testing.T) {
+	setRequired(t)
+	t.Setenv("PAYFAST_MERCHANT_KEY_FILE", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.PayFast.MerchantKey != "46f0cd694581a" {
+		t.Errorf("MerchantKey = %q, want the plain value when KEY_FILE is empty", c.PayFast.MerchantKey)
+	}
+}
+
+func TestLoad_UnreadableSecretFileIsRefused(t *testing.T) {
+	setRequired(t)
+	t.Setenv("SMTP_PASSWORD_FILE", filepath.Join(t.TempDir(), "not-there"))
+
+	// A secret that failed to arrive is a boot failure naming the setting, not an
+	// empty password discovered when the first receipt fails to send.
+	_, err := Load()
+	if err == nil {
+		t.Fatal("an unreadable SMTP_PASSWORD_FILE was accepted")
+	}
+	if !strings.Contains(err.Error(), "SMTP_PASSWORD_FILE") {
+		t.Errorf("error does not name SMTP_PASSWORD_FILE: %v", err)
+	}
+}
+
+func TestLoad_EverySecretKeyAcceptsAFile(t *testing.T) {
+	// Guards the list itself: each credential must actually be read through the
+	// resolver, so adding a key to secretKeys and forgetting to switch its read
+	// over is caught here rather than in production. The value is distinctive
+	// enough that finding it anywhere in the loaded config proves it arrived.
+	for _, key := range secretKeys {
+		t.Run(key, func(t *testing.T) {
+			setRequired(t)
+			// Features whose credentials are only read when the feature is on.
+			t.Setenv("SNAPSCAN_SNAP_CODE", "shop")
+			t.Setenv("SNAPSCAN_API_KEY", "api")
+			t.Setenv("SNAPSCAN_WEBHOOK_AUTH_KEY", "hook")
+			t.Setenv("BLOB_ENDPOINT", "localhost:9000")
+			t.Setenv("BLOB_BUCKET", "images")
+			t.Setenv("BLOB_ACCESS_KEY_ID", "id")
+			t.Setenv("BLOB_SECRET_ACCESS_KEY", "secret")
+			t.Setenv("BLOB_PUBLIC_BASE_URL", "http://localhost:9000/images")
+			t.Setenv("IMAGE_DIR", "")
+			t.Setenv("DOWNLOAD_ENDPOINT", "localhost:9000")
+			t.Setenv("DOWNLOAD_BUCKET", "downloads")
+			t.Setenv("DOWNLOAD_ACCESS_KEY_ID", "id")
+			t.Setenv("DOWNLOAD_SECRET_ACCESS_KEY", "secret")
+			t.Setenv("SMTP_USERNAME", "orders@example.com")
+
+			const marker = "via-file-7f3a9c"
+			value := marker
+			switch key {
+			case "DATABASE_URL":
+				value = "postgres://u:" + marker + "@db:5432/gostore"
+			case "SETUP_TOKEN":
+				value = marker + strings.Repeat("x", MinSetupTokenLen)
+			case "SMTP_OAUTH_CLIENT_SECRET":
+				// XOAUTH2 needs all three of its settings and refuses a password
+				// alongside them.
+				t.Setenv("SMTP_OAUTH_TENANT_ID", "tenant")
+				t.Setenv("SMTP_OAUTH_CLIENT_ID", "client")
+				t.Setenv("SMTP_PASSWORD", "")
+			case "GRAPH_CLIENT_SECRET":
+				t.Setenv("GRAPH_TENANT_ID", "tenant")
+				t.Setenv("GRAPH_CLIENT_ID", "client")
+			}
+			t.Setenv(key, "")
+			t.Setenv(key+"_FILE", writeSecret(t, value+"\n"))
+
+			c, err := Load()
+			if err != nil {
+				t.Fatalf("Load with %s_FILE: %v", key, err)
+			}
+			if got := fmt.Sprintf("%+v", c); !strings.Contains(got, marker) {
+				t.Errorf("%s_FILE was accepted but its value never reached the config", key)
+			}
+		})
+	}
+}
+
+func TestLoadTool_DatabaseURLFromFile(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("DATABASE_URL_FILE", writeSecret(t, "postgres://u:from-file@db:5432/gostore\n"))
+	// A secret the tool never reads must not stop it: a migration job is handed
+	// the database URL and nothing else, so a merchant key's file that was never
+	// mounted into it is none of its business.
+	t.Setenv("PAYFAST_MERCHANT_KEY_FILE", filepath.Join(t.TempDir(), "not-mounted"))
+
+	c, err := LoadTool()
+	if err != nil {
+		t.Fatalf("LoadTool: %v", err)
+	}
+	if want := "postgres://u:from-file@db:5432/gostore"; c.DatabaseURL != want {
+		t.Errorf("DatabaseURL = %q, want %q", c.DatabaseURL, want)
 	}
 }
 
