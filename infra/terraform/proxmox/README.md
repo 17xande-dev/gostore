@@ -5,6 +5,10 @@ running the app, Postgres, MinIO, and Caddy as containers under Docker
 Compose. Same shape as [`../vultr`](../vultr/README.md), production, with one
 deliberate difference — see "Product images" below.
 
+**To deploy it, follow [Deploying to Proxmox](../../../docs/deploy/proxmox.md)** —
+every step, from preparing the node to claiming the admin account. This README
+is what the Terraform creates, and why it is shaped that way.
+
 ## What this creates
 
 - **`main.tf`** — downloads Ubuntu 24.04's cloud image onto the node once,
@@ -48,27 +52,23 @@ depends on: a `snippets` file resource that uploads arbitrary content (this
 module's rendered cloud-init) to the node, which is what `vendor_data_file_id`
 below needs to exist at all.
 
-## Three things Proxmox needs configured before `apply`
+## What the node needs, and why
 
-**An API token with enough privilege.** `PVEVMAdmin` alone is not enough:
-downloading the Ubuntu image and uploading the snippet need `Datastore.*` and
-`Sys.Modify` too. The provider documents a role with the full set — create it
-on the node and give the token's user that role.
+Three things, each set up once — the commands are in step 2 of the
+[guide](../../../docs/deploy/proxmox.md#2-prepare-the-proxmox-node-once):
 
-**A storage backend with the `Snippets` content type enabled**, matching
-`snippets_storage` (default `local`). Datacenter -> Storage -> (your
-storage) -> Edit -> Content, tick Snippets. Without it,
-`proxmox_virtual_environment_file.vendor_data` fails to upload and nothing
-else in this config can proceed — the VM's cloud-init has nowhere to come
-from.
-
-**SSH to the node, as `proxmox_ssh_username` (default `root`), through your
-ssh-agent.** Two things here are not possible through the Proxmox API, so the
-provider does them over SSH: uploading the snippet, and importing the Ubuntu
-image as the VM's boot disk. With API-token authentication it has no other
-credentials to try. The node must accept a key your agent holds; a non-root
-user also needs passwordless `sudo` for `pvesm`, `qm`, and `tee` into the
-snippets storage path.
+- **An API token whose role goes beyond `PVEVMAdmin`.** Downloading the Ubuntu
+  image and uploading the snippet need `Datastore.*` and `Sys.Modify` as well,
+  so the guide uses the role the provider documents.
+- **Snippets enabled on `snippets_storage`.** Without it,
+  `proxmox_virtual_environment_file.vendor_data` cannot upload, and nothing
+  else can proceed — the VM's cloud-init has nowhere to come from.
+- **SSH to the node through your ssh-agent**, as `proxmox_ssh_username`. Two
+  things here are impossible through the Proxmox API, so the provider does
+  them over SSH: uploading the snippet, and importing the Ubuntu image as the
+  VM's boot disk. With API-token authentication there are no other
+  credentials for it to try, which is why `versions.tf` configures the `ssh`
+  block explicitly.
 
 ## Going live — staging never does
 
@@ -98,27 +98,11 @@ source-IP check and the per-IP rate limits both depend on. See
 [`../modules/cloudflare-tunnel`](../modules/cloudflare-tunnel/README.md) for
 what gets created and which token scopes it needs.
 
-Turning it on is three variables and an exported token:
-
-```sh
-export CLOUDFLARE_API_TOKEN=...   # Account: Cloudflare Tunnel:Edit, Zone: DNS:Edit
-# in terraform.tfvars:
-#   ingress               = "tunnel"
-#   cloudflare_account_id = "..."
-#   cloudflare_zone_id    = "..."
-```
-
-**Destroy order matters.** Terraform cannot delete a tunnel that still has a
-connector attached, so `docker compose down` on the VM before
-`terraform destroy`.
-
-**Switching an existing `caddy` deployment has one manual step.** Caddy mode
-has you create A records for `domain` and `images_domain` by hand, and
-Cloudflare will not create a CNAME at a name that already has a record — so
-the apply fails until they are gone. Delete both records in the dashboard
-first; the site is unreachable for the minute between that and the apply
-finishing. A fresh deployment that starts on `tunnel` has no such records and
-skips this entirely.
+Two operational edges, both covered in the guide: Terraform cannot delete a
+tunnel that still has a connector attached, so the stack comes down before
+`terraform destroy`; and switching an existing `caddy` deployment to `tunnel`
+means deleting its hand-made A records first, because Cloudflare will not
+create a CNAME at a name that already has a record.
 
 ## Networking
 
@@ -139,9 +123,15 @@ if this stops being a same-network-as-the-operator setup.
 ## What this is not
 
 Same caveat as `../vultr`: updating the running image is a manual `docker
-compose pull && docker compose up -d` over SSH, or a `terraform apply` that
-recreates the VM (the second disk survives; a few minutes of downtime
-doesn't).
+compose pull && docker compose up -d` over SSH. Changing `container_image`
+and applying does not reach a running VM — its cloud-init ran once.
+
+**Unlike `../vultr`, the data disk does not survive a rebuild.** It is a disk
+of the VM, not a separate volume: resizing it, or changing CPU or memory,
+happens in place, but anything that makes Terraform *replace* the VM destroys
+both disks — the database and MinIO with them, backups included, since the
+backups live in that MinIO. Acceptable for staging, where nothing is precious;
+not something to trigger by accident.
 
 Database backups aren't a gap here, though — see `../modules/app-stack`'s
 README. `backup_retention_days` defaults to 7 rather than `../vultr`'s 30:
@@ -158,70 +148,12 @@ the vendor-data snippet Proxmox stores. Terraform's part is deciding *which*
 secrets this environment needs, from the features switched on, in its
 `secret_names` output.
 
-The entries, created once (the first line of an entry is the value, so notes
-can go below it):
-
-```sh
-# Generated — nobody chooses these. -n keeps them URL-safe, which matters:
-# database_url embeds postgres_password, and the backup embeds MinIO's.
-pass generate -n gostore/staging/postgres_password 40
-pass generate -n gostore/staging/setup_token 40
-pass generate -n gostore/staging/minio_root_password 40
-
-# From PayFast. Staging runs on the sandbox, so these are PayFast's
-# published sandbox values: 46f0cd694581a and jt7NOE43FZPn.
-pass insert gostore/staging/payfast_merchant_key
-pass insert gostore/staging/payfast_passphrase
-
-# Only if smtp_username is set, i.e. the relay authenticates:
-pass insert gostore/staging/smtp_password
-```
-
-`database_url` is not an entry: `make secrets` builds it from
-`postgres_password`, so the two can never disagree. With SnapScan on, it also
-needs `snapscan_api_key` and `snapscan_webhook_auth_key` (plus
-`snapscan_validation_key` if `snapscan_validation = true`). Run
-`make secrets` without them and it lists what is missing, with the command to
-create each, and pushes nothing.
-
-Terraform's own credentials are separate, and also in `pass`: the Proxmox API
-token, and the Cloudflare token when `ingress = "tunnel"`.
-
-**Rotation** is `pass generate -f` or `pass insert -f`, then `make secrets`
-again, which rewrites the files and recreates the containers. Except for
-`postgres_password`: Postgres reads it only when the data directory is first
-created, so changing it in `pass` does not change the database. Run
-`ALTER USER gostore PASSWORD '…'` inside the container first, then update
-`pass` and push.
-
-## Usage
-
-```sh
-cd infra/terraform/proxmox
-cp terraform.tfvars.example terraform.tfvars   # non-secret settings only
-export TF_VAR_proxmox_api_token="$(pass show gostore/staging/proxmox_api_token)"
-# If ingress = "tunnel":
-export CLOUDFLARE_API_TOKEN="$(pass show gostore/staging/cloudflare_api_token)"
-terraform init
-terraform plan
-terraform apply
-
-# The VM is now provisioned but idle — the stack cannot start before its
-# secrets exist. This pushes them and starts it:
-cd ../../..
-make secrets ENV=staging            # HOST=ubuntu@<address> if ip_address = "dhcp"
-```
-
-Point `domain` and `images_domain`'s DNS records at the VM's address (from
-`ip_address`, or the `ip_addresses` output if you left it on `dhcp`) before
-applying, or right after — Caddy retries the ACME HTTP-01 challenge until
-both resolve.
-
-The one-time admin setup token for `/admin/setup` is in `pass`:
-
-```sh
-pass show gostore/staging/setup_token
-```
+`database_url` is not an entry of its own: `make secrets` builds it from
+`postgres_password`, so the two can never disagree. The one secret Terraform
+does hold is the tunnel's connector token, because Cloudflare hands it over
+when the tunnel is created; `make secrets` reads it from the `tunnel_token`
+output. Which entries to create, and how to rotate them, is step 4 and "Day
+two" in the [guide](../../../docs/deploy/proxmox.md).
 
 State is local by default (`terraform.tfstate`), gitignored. It holds no
 store credentials, but it does hold the tunnel's connector token when

@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: ${app_name}
       POSTGRES_DB: ${app_name}
       # Read once, when the data directory is first initialised. Changing the
-      # file later does not change the database's password — see the README's
+      # file later does not change the database's password — see the module README's
       # rotation notes.
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     volumes:

@@ -31,5 +31,9 @@ operator's machine as `gostore/<env>/<name>`, and
 `ENV=prod` from the repo root — writes them to the VM over SSH and starts the
 stack. Terraform only decides which secrets an environment needs, in each
 root module's `secret_names` output. An apply therefore leaves the VM
-provisioned but idle until that first push. See either root module's
-"Secrets" section for the entries to create.
+provisioned but idle until that first push.
+
+**To deploy, follow a guide:** [Deploying to Proxmox](../../docs/deploy/proxmox.md)
+for staging. Production's guide is still to come; until then the steps are in
+[`vultr/README.md`](vultr/README.md). The READMEs in this directory are what the
+Terraform creates and why.

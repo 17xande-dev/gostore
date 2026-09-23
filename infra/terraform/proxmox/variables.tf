@@ -6,7 +6,7 @@ variable "proxmox_endpoint" {
 }
 
 variable "proxmox_api_token" {
-  description = "\"user@realm!token-id=uuid\", from Datacenter -> Permissions -> API Tokens. Needs enough privilege to create VMs and upload files — see the README."
+  description = "\"user@realm!token-id=secret\", e.g. terraform@pve!gostore=<secret>. Set via TF_VAR_proxmox_api_token from pass, never in terraform.tfvars. Its role needs more than PVEVMAdmin — step 2 of docs/deploy/proxmox.md creates the right one."
   type        = string
   sensitive   = true
 }
@@ -139,7 +139,8 @@ variable "payfast_sandbox" {
 # is in every payment form a buyer's browser posts. The merchant key and
 # passphrase that go with it are secrets, so they live in pass
 # (gostore/staging/payfast_merchant_key and payfast_passphrase); for the
-# sandbox, store PayFast's published values there — see the README.
+# sandbox, store PayFast's published values there — see step 4 of
+# docs/deploy/proxmox.md.
 variable "payfast_merchant_id" {
   type    = string
   default = "10000100"

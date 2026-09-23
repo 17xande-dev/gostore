@@ -127,9 +127,11 @@ resource "proxmox_virtual_environment_vm" "main" {
     size         = var.boot_disk_gb
   }
 
-  # Postgres's and MinIO's data, kept on its own disk on the same grounds as
-  # the Block Storage volume in ../vultr: resizing or rebuilding the VM must
-  # not be able to take the database or the image bucket with it.
+  # Postgres's and MinIO's data, on a disk of its own, apart from the OS and
+  # sized separately. But it is still a disk OF this VM,
+  # not a separate volume like ../vultr's Block Storage: replacing the VM
+  # destroys it, database, image bucket and backups together. Resizing it, or
+  # changing CPU or memory, happens in place and keeps it.
   disk {
     datastore_id = var.vm_storage
     interface    = "scsi1"

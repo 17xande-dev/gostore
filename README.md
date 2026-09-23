@@ -32,7 +32,8 @@ cd gostore
 make up
 curl localhost:8080/healthz   # -> ok
 make seed                     # load the demo catalog
-open http://localhost:8080/admin      # sign in with the development password: gostore
+docker compose logs server | grep setup_token   # the one-time token for the first admin
+open http://localhost:8080/admin      # redirects to /admin/setup; paste the token there
 ```
 
 `make up` starts Postgres, [mailpit](http://localhost:8025) (captures outgoing email),

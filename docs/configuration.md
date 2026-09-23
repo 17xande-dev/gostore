@@ -45,9 +45,8 @@ exception is a Cloudflare Tunnel's connector token, which Cloudflare hands to
 Terraform when it creates the tunnel. There is no need to install `pass` or
 copy a GPG key onto the VPS. What still exposes the running credentials is
 root on the box, since the Docker socket is root-equivalent, and the GPG key
-that unlocks your store. See the [Vultr](../infra/terraform/vultr/README.md) and
-[Proxmox](../infra/terraform/proxmox/README.md) instructions for the entries
-each environment needs.
+that unlocks your store. [Deploying](deploy/README.md) has the step-by-step
+guides, including the entries each environment needs.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
