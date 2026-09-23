@@ -71,7 +71,7 @@ Other useful targets:
 | [Theming](docs/theming.md) | Writing a theme, web fonts, overriding templates, bundled assets |
 | [Security](docs/security.md) | CSRF, rate limits, password hashing, response headers, overselling |
 | [Operations](docs/operations.md) | When something goes wrong, and logging |
-| [Deploying](docs/deploy/README.md) | Running it anywhere a container runs, and the Terraform targets |
+| [Deploying](docs/deploy/README.md) | Two ready-made Compose deployments, backups, and running it anywhere else |
 | [Developing gostore](docs/development.md) | The store layer, migrations, dependencies, and the build order |
 
 ## Licence

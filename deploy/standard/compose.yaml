@@ -1,0 +1,81 @@
+# gostore behind Caddy, with product images in Cloudflare R2 and mail over SMTP.
+#
+# Copy this directory to the server, then:
+#
+#   cp .env.example .env && chmod 600 .env    # and fill it in
+#   docker compose up -d
+#
+# Every step, from an empty server to a claimed admin account, is in
+# docs/deploy/standard.md.
+name: gostore
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gostore
+      POSTGRES_DB: gostore
+      # Read once, when the data directory is first created. Changing it in .env
+      # later does not change the database's password — see the guide's
+      # "Changing a secret".
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gostore -d gostore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    image: ghcr.io/17xande-dev/gostore:${GOSTORE_VERSION:?set GOSTORE_VERSION in .env}
+    restart: unless-stopped
+    env_file: .env
+    # Derived here rather than asked for in .env, so the values that have to
+    # agree cannot disagree.
+    environment:
+      DATABASE_URL: postgres://gostore:${POSTGRES_PASSWORD}@postgres:5432/gostore?sslmode=disable
+      BASE_URL: https://${DOMAIN:?set DOMAIN in .env}
+      # Caddy is the only way in, and it discards any X-Forwarded-For a client
+      # sends, so the leftmost entry is the real peer. Wrong behind anything
+      # that appends to the header instead — Cloudflare's proxy included; see
+      # CLIENT_IP_SOURCE in .env.example at the repo root.
+      CLIENT_IP_SOURCE: forwarded
+      # No default on purpose. The server's own default is the sandbox, which
+      # is safe for a first afternoon and silently wrong for a live store: it
+      # takes no money and looks fine. A deploy says which it means.
+      PAYFAST_SANDBOX: ${PAYFAST_SANDBOX:?set PAYFAST_SANDBOX in .env to true or false}
+    volumes:
+      # Purchased files, when DOWNLOAD_DIR=/downloads. Mounted either way: an
+      # unused volume costs nothing.
+      - downloads:/downloads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Terminates TLS with a Let's Encrypt certificate it obtains and renews on its
+  # own, and is the only container that publishes a port. The Caddyfile reads
+  # DOMAIN and ACME_EMAIL from here, so it never needs editing.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+
+volumes:
+  pgdata:
+  downloads:
+  caddy_data:
+  caddy_config:

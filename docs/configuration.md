@@ -10,43 +10,25 @@ for the environment you run. It contains published PayFast sandbox credentials
 and local Postgres/MinIO defaults, not private credentials. A real `.env` may
 contain passwords, API keys, and a database URL with a password. It is
 gitignored; also keep it readable only by its owner (`chmod 600 .env`). Do not
-commit real values to `.env.example` or to either `terraform.tfvars.example`.
+commit real values to `.env.example`.
 
-**Any credential can instead arrive as a file.** For each of the twelve
-secrets the server takes — `DATABASE_URL`, `SETUP_TOKEN`, the payment keys,
-the mail and storage secrets; `secretKeys` in `internal/config` is the list —
-`KEY_FILE` names a file whose contents are the value. That keeps it out of the
-process environment, which `docker inspect` shows, and lets a deployment mount
-it as a Compose secret. Setting both `KEY` and `KEY_FILE` is refused at boot,
-and so is a file that cannot be read.
+A deployment works the same way. The [Compose deployments](deploy/README.md)
+each have their own `.env.example`, holding only what that deployment needs,
+and the server's `.env` — credentials included — is one file at `0600` beside
+its `compose.yaml`. That is the whole secrets story, and it is the right one
+for a single server: anyone who can read that file is root on the box, and
+root can read a running container's environment regardless.
 
-For the Terraform VPS deployments, there are three kinds of value, and each
-lives in exactly one place:
-
-- **Configuration** — domain, image tag, email addresses, bucket names, the
-  payment sandbox switch, and identifiers such as a merchant id or an access
-  key id — goes in the local, gitignored `terraform.tfvars`.
-- **Terraform's own credentials** — `VULTR_API_KEY`, `CLOUDFLARE_API_TOKEN`,
-  and `TF_VAR_proxmox_api_token` — live in `pass` and are exported into the
-  shell that runs Terraform. Do not also assign `proxmox_api_token` in
-  `terraform.tfvars`: that file takes precedence over `TF_VAR_*`.
-- **The store's runtime secrets** — the Postgres password, the setup token,
-  the payment keys, the mail and storage secrets — live in `pass` as
-  `gostore/<env>/<name>` and **never go near Terraform**. Terraform decides
-  which ones an environment needs; `make secrets ENV=staging` (or `prod`)
-  reads them from `pass` and writes them to the VM over SSH, one file each.
-
-On the VM those files sit in `/opt/gostore/secrets` — root-only, each `0400`
-and owned by uid 65532, the distroless user the server runs as — and reach
-the containers as Compose secrets, which the server reads as `KEY_FILE`.
-Nothing secret is in `/opt/gostore/.env`, in the Compose file, in the
-cloud-init payload the provider keeps, or in Terraform state; the one
-exception is a Cloudflare Tunnel's connector token, which Cloudflare hands to
-Terraform when it creates the tunnel. There is no need to install `pass` or
-copy a GPG key onto the VPS. What still exposes the running credentials is
-root on the box, since the Docker socket is root-equivalent, and the GPG key
-that unlocks your store. [Deploying](deploy/README.md) has the step-by-step
-guides, including the entries each environment needs.
+**Any credential can instead arrive as a file**, for a deployment that wants
+more than that. For each of the twelve secrets the server takes —
+`DATABASE_URL`, `SETUP_TOKEN`, the payment keys, the mail and storage
+secrets; `secretKeys` in `internal/config` is the list — `KEY_FILE` names a
+file whose contents are the value. That keeps it out of the process
+environment, which `docker inspect` shows, and lets a deployment mount it as
+a Compose secret or a Kubernetes one, or render it from a secrets manager.
+Setting both `KEY` and `KEY_FILE` is refused at boot, and so is a file that
+cannot be read. A trailing newline is stripped, so a file written by
+`echo` or `pass show` works as it is.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
