@@ -75,6 +75,32 @@ func TestCart_EmptyByDefault(t *testing.T) {
 	}
 }
 
+func TestCart_ExternalProductNavigationCanAdd(t *testing.T) {
+	for _, site := range []string{"cross-site", "same-site"} {
+		t.Run(site, func(t *testing.T) {
+			srv, _, variants := shopper(t)
+			req, err := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/products/tee", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Sec-Fetch-Site", site)
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Sec-Fetch-Dest", "document")
+			res, body := do(t, srv, req)
+			m := csrfFieldRE.FindStringSubmatch(body)
+			if res.StatusCode != http.StatusOK || m == nil || m[1] == "" {
+				t.Fatalf("external navigation has no usable form: %d %s", res.StatusCode, body)
+			}
+			res, body = post(t, srv, "/cart/items", url.Values{
+				"csrf_token": {html.UnescapeString(m[1])}, "variant_id": {variants["S"].ID}, "quantity": {"1"},
+			})
+			if res.StatusCode != http.StatusSeeOther {
+				t.Fatalf("add: %d %s", res.StatusCode, body)
+			}
+		})
+	}
+}
+
 func TestCart_AddSetsCookieAndShowsTheItem(t *testing.T) {
 	srv, _, variants := shopper(t)
 

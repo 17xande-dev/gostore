@@ -5,6 +5,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -92,6 +93,9 @@ type Config struct {
 	// parcel. Empty means the customer's confirmation is the only mail sent, and
 	// the operator finds orders in /admin/orders instead.
 	OrderNotifyEmail string
+	// EmailQueueKey encrypts pending receipts, including their download tokens.
+	// Keep it across restarts and with backups until the queue is empty.
+	EmailQueueKey string
 
 	// Blob is object storage for product images.
 	Blob Blob
@@ -485,6 +489,7 @@ func Load() (Config, error) {
 			DownloadPerMinute: 60,
 		},
 		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
+		EmailQueueKey:    strings.TrimSpace(sec.get("EMAIL_QUEUE_KEY")),
 		ImageDir:         strings.TrimSpace(os.Getenv("IMAGE_DIR")),
 		Blob: Blob{
 			Endpoint:      strings.TrimSpace(os.Getenv("BLOB_ENDPOINT")),
@@ -556,6 +561,9 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		missing = append(missing, "DATABASE_URL")
 	}
+	if c.EmailQueueKey == "" {
+		missing = append(missing, "EMAIL_QUEUE_KEY")
+	}
 	// Each gateway's credentials are required only when that gateway is switched
 	// on, so a SnapScan-only store needs no PayFast account and the reverse.
 	if c.PayFast.Configured() && c.PayFast.MerchantKey == "" {
@@ -575,6 +583,9 @@ func Load() (Config, error) {
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
+	}
+	if key, err := hex.DecodeString(c.EmailQueueKey); err != nil || len(key) != 32 {
+		return Config{}, errors.New("config: EMAIL_QUEUE_KEY must be 64 hexadecimal characters; generate with openssl rand -hex 32")
 	}
 
 	// A store with no gateway at all starts, serves a catalog, and fails at the
@@ -924,20 +935,10 @@ func parseOrigins(key string, allowWildcard bool) ([]string, error) {
 	return out, nil
 }
 
-// LoadTool loads what a database-only operation needs, which is just
-// DATABASE_URL. cmd/seed and the server's own -migrate and -migrate-status
-// modes serve no HTTP and hold no session, so requiring the admin and payment
-// secrets before they will touch the schema would be an obstacle with nothing
-// behind it — and worse, it would mean handing a deploy pipeline's migration
-// step the live merchant key to run an ALTER TABLE.
-//
-// The tradeoff is that a deployment whose payment or session config is broken
-// no longer discovers it when migrations run. Run the binary with -check-config
-// for that, which is the same check made deliberate.
+// LoadTool loads the database and optional seed-file storage settings for seed
+// and migration commands. Neither needs payment or mail credentials.
 func LoadTool() (Config, error) {
-	// Only the two credentials this loader reads, not secretKeys: a migration
-	// job that is handed DATABASE_URL_FILE alone must not fail because the
-	// merchant key's file was not mounted into it too.
+	// Tool jobs must not require unrelated secret files to be mounted.
 	sec, err := loadSecrets("DATABASE_URL", "DOWNLOAD_SECRET_ACCESS_KEY")
 	if err != nil {
 		return Config{}, err
@@ -1010,6 +1011,7 @@ func checkLogLevel(level string) error {
 // into a compose file. Identifiers that sit next to them (a merchant id, an
 // access key id, a snap code) are not on this list: they are not secret.
 var secretKeys = []string{
+	"EMAIL_QUEUE_KEY",
 	"DATABASE_URL",
 	"SETUP_TOKEN",
 	"PAYFAST_MERCHANT_KEY",

@@ -12,10 +12,7 @@
 version: "2"
 sql:
   - engine: postgresql
-    # The goose migrations *are* the schema. sqlc reads their `-- +goose Up`
-    # sections, so there is no second copy of the DDL to keep in step — which
-    # matters more than the convenience: a schema sqlc believed but Postgres did
-    # not would generate code that compiles and fails at runtime.
+    # sqlc reads the Up sections of the same migrations the application embeds.
     schema: internal/db/migrations
     queries: internal/db/queries
     gen:
@@ -49,6 +46,11 @@ sql:
           # 22P02, which each store's translate() already maps to ErrNotFound.
           - db_type: "uuid"
             go_type: "string"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              type: "string"
+              pointer: true
 
           # Timestamps as time.Time, and a nullable one as *time.Time — which is
           # exactly the distinction the hand-written scan already drew for

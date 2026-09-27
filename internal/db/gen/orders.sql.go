@@ -11,14 +11,17 @@ import (
 )
 
 const clearCartForOrder = `-- name: ClearCartForOrder :exec
-DELETE FROM cart_items WHERE cart_id = (SELECT cart_id FROM orders WHERE orders.id = $1)
+WITH consumed AS (
+    UPDATE carts c SET version = c.version + 1, updated_at = now()
+    FROM orders o
+    WHERE o.id = $1 AND c.id = o.cart_id AND c.version = o.cart_version
+    RETURNING c.id
+)
+DELETE FROM cart_items WHERE cart_id IN (SELECT id FROM consumed)
 `
 
-// The basket has become an order, so empty it. The cart row itself stays, so the
-// shopper's cookie keeps working for their next visit.
-// `orders.id` is qualified deliberately: cart_items has an id column too, so a
-// bare `id` here relies on Postgres resolving the innermost scope. It does, and
-// sqlc refuses to guess — which is the better position of the two.
+// Only the unchanged purchased version is consumed. UPDATE takes the same cart
+// lock as every mutation, so a later edit cannot race the comparison and delete.
 func (q *Queries) ClearCartForOrder(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, clearCartForOrder, id)
 	return err
@@ -26,8 +29,8 @@ func (q *Queries) ClearCartForOrder(ctx context.Context, id string) error {
 
 const createOrder = `-- name: CreateOrder :one
 INSERT INTO orders (id, cart_id, customer_name, customer_email, customer_phone,
-                    shipping_address, total_cents, currency, status, gateway)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    shipping_address, total_cents, currency, status, gateway, cart_version, checkout_key)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id, created_at
 `
 
@@ -41,6 +44,8 @@ type CreateOrderParams struct {
 	Currency        string
 	Status          string
 	Gateway         string
+	CartVersion     *int64
+	CheckoutKey     *string
 }
 
 type CreateOrderRow struct {
@@ -59,6 +64,8 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Creat
 		arg.Currency,
 		arg.Status,
 		arg.Gateway,
+		arg.CartVersion,
+		arg.CheckoutKey,
 	)
 	var i CreateOrderRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -131,8 +138,50 @@ func (q *Queries) FlagOrderOversold(ctx context.Context, id string) error {
 	return err
 }
 
+const getCheckoutByKey = `-- name: GetCheckoutByKey :one
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at, cart_version, checkout_key, fulfilled_at, tracking_reference, internal_note, fulfillment_updated_at, fulfillment_updated_by FROM orders WHERE cart_id = $1 AND checkout_key = $2
+`
+
+type GetCheckoutByKeyParams struct {
+	CartID      *string
+	CheckoutKey *string
+}
+
+func (q *Queries) GetCheckoutByKey(ctx context.Context, arg GetCheckoutByKeyParams) (Order, error) {
+	row := q.db.QueryRow(ctx, getCheckoutByKey, arg.CartID, arg.CheckoutKey)
+	var i Order
+	err := row.Scan(
+		&i.ID,
+		&i.CartID,
+		&i.CustomerName,
+		&i.CustomerEmail,
+		&i.CustomerPhone,
+		&i.ShippingAddress,
+		&i.TotalCents,
+		&i.Currency,
+		&i.Status,
+		&i.Gateway,
+		&i.GatewayRef,
+		&i.GatewayStatus,
+		&i.GatewayAmount,
+		&i.GatewayPayload,
+		&i.Emailed,
+		&i.Oversold,
+		&i.CreatedAt,
+		&i.PaidAt,
+		&i.CartVersion,
+		&i.CheckoutKey,
+		&i.FulfilledAt,
+		&i.TrackingReference,
+		&i.InternalNote,
+		&i.FulfillmentUpdatedAt,
+		&i.FulfillmentUpdatedBy,
+	)
+	return i, err
+}
+
 const getLatestOrderForCart = `-- name: GetLatestOrderForCart :one
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at, cart_version, checkout_key, fulfilled_at, tracking_reference, internal_note, fulfillment_updated_at, fulfillment_updated_by FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestOrderForCart(ctx context.Context, cartID *string) (Order, error) {
@@ -157,12 +206,19 @@ func (q *Queries) GetLatestOrderForCart(ctx context.Context, cartID *string) (Or
 		&i.Oversold,
 		&i.CreatedAt,
 		&i.PaidAt,
+		&i.CartVersion,
+		&i.CheckoutKey,
+		&i.FulfilledAt,
+		&i.TrackingReference,
+		&i.InternalNote,
+		&i.FulfillmentUpdatedAt,
+		&i.FulfillmentUpdatedBy,
 	)
 	return i, err
 }
 
 const getOrder = `-- name: GetOrder :one
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders WHERE id = $1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at, cart_version, checkout_key, fulfilled_at, tracking_reference, internal_note, fulfillment_updated_at, fulfillment_updated_by FROM orders WHERE id = $1
 `
 
 func (q *Queries) GetOrder(ctx context.Context, id string) (Order, error) {
@@ -187,6 +243,13 @@ func (q *Queries) GetOrder(ctx context.Context, id string) (Order, error) {
 		&i.Oversold,
 		&i.CreatedAt,
 		&i.PaidAt,
+		&i.CartVersion,
+		&i.CheckoutKey,
+		&i.FulfilledAt,
+		&i.TrackingReference,
+		&i.InternalNote,
+		&i.FulfillmentUpdatedAt,
+		&i.FulfillmentUpdatedBy,
 	)
 	return i, err
 }
@@ -351,7 +414,7 @@ func (q *Queries) ListOrderItems(ctx context.Context, orderID string) ([]ListOrd
 }
 
 const listRecentOrders = `-- name: ListRecentOrders :many
-SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at FROM orders ORDER BY created_at DESC LIMIT $1
+SELECT id, cart_id, customer_name, customer_email, customer_phone, shipping_address, total_cents, currency, status, gateway, gateway_ref, gateway_status, gateway_amount, gateway_payload, emailed, oversold, created_at, paid_at, cart_version, checkout_key, fulfilled_at, tracking_reference, internal_note, fulfillment_updated_at, fulfillment_updated_by FROM orders ORDER BY created_at DESC LIMIT $1
 `
 
 // The admin's order list. Limited rather than unpaginated: products are a small
@@ -391,6 +454,13 @@ func (q *Queries) ListRecentOrders(ctx context.Context, limit int32) ([]Order, e
 			&i.Oversold,
 			&i.CreatedAt,
 			&i.PaidAt,
+			&i.CartVersion,
+			&i.CheckoutKey,
+			&i.FulfilledAt,
+			&i.TrackingReference,
+			&i.InternalNote,
+			&i.FulfillmentUpdatedAt,
+			&i.FulfillmentUpdatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -519,6 +589,112 @@ func (q *Queries) RecordUnpaidOrder(ctx context.Context, arg RecordUnpaidOrderPa
 		arg.GatewayAmount,
 		arg.GatewayPayload,
 		arg.Status_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const searchOrders = `-- name: SearchOrders :many
+SELECT o.id, o.cart_id, o.customer_name, o.customer_email, o.customer_phone, o.shipping_address, o.total_cents, o.currency, o.status, o.gateway, o.gateway_ref, o.gateway_status, o.gateway_amount, o.gateway_payload, o.emailed, o.oversold, o.created_at, o.paid_at, o.cart_version, o.checkout_key, o.fulfilled_at, o.tracking_reference, o.internal_note, o.fulfillment_updated_at, o.fulfillment_updated_by FROM orders o
+WHERE ($1::text = ''
+       OR strpos(lower(o.id::text), lower($1)) > 0
+       OR strpos(lower(o.customer_email), lower($1)) > 0
+       OR strpos(lower(o.customer_name), lower($1)) > 0)
+  AND ($2::text = ''
+       OR ($2 = 'oversold' AND o.oversold)
+       OR ($2 = 'email' AND EXISTS
+           (SELECT 1 FROM email_jobs e WHERE e.order_id = o.id AND e.sent_at IS NULL))
+       OR ($2 = 'unfulfilled' AND o.status = 'paid' AND o.fulfilled_at IS NULL
+           AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND i.kind = 'physical')))
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT $4 OFFSET $3
+`
+
+type SearchOrdersParams struct {
+	Search     string
+	Filter     string
+	PageOffset int32
+	PageLimit  int32
+}
+
+func (q *Queries) SearchOrders(ctx context.Context, arg SearchOrdersParams) ([]Order, error) {
+	rows, err := q.db.Query(ctx, searchOrders,
+		arg.Search,
+		arg.Filter,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Order{}
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.CartID,
+			&i.CustomerName,
+			&i.CustomerEmail,
+			&i.CustomerPhone,
+			&i.ShippingAddress,
+			&i.TotalCents,
+			&i.Currency,
+			&i.Status,
+			&i.Gateway,
+			&i.GatewayRef,
+			&i.GatewayStatus,
+			&i.GatewayAmount,
+			&i.GatewayPayload,
+			&i.Emailed,
+			&i.Oversold,
+			&i.CreatedAt,
+			&i.PaidAt,
+			&i.CartVersion,
+			&i.CheckoutKey,
+			&i.FulfilledAt,
+			&i.TrackingReference,
+			&i.InternalNote,
+			&i.FulfillmentUpdatedAt,
+			&i.FulfillmentUpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateOrderFulfillment = `-- name: UpdateOrderFulfillment :execrows
+UPDATE orders SET
+    fulfilled_at = CASE WHEN $1::bool THEN COALESCE(fulfilled_at, now()) ELSE NULL END,
+    tracking_reference = $2, internal_note = $3,
+    fulfillment_updated_at = now(), fulfillment_updated_by = $4
+WHERE orders.id = $5 AND orders.status = 'paid'
+  AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = orders.id AND i.kind = 'physical')
+`
+
+type UpdateOrderFulfillmentParams struct {
+	Fulfilled         bool
+	TrackingReference string
+	InternalNote      string
+	Actor             *string
+	ID                string
+}
+
+// Payment facts are never written by the administrator.
+func (q *Queries) UpdateOrderFulfillment(ctx context.Context, arg UpdateOrderFulfillmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateOrderFulfillment,
+		arg.Fulfilled,
+		arg.TrackingReference,
+		arg.InternalNote,
+		arg.Actor,
+		arg.ID,
 	)
 	if err != nil {
 		return 0, err

@@ -3,12 +3,7 @@
 <a class="back" href="/admin/orders">← All orders</a>
 <h1>Order {{.Order.Reference}}</h1>
 
-{{/*
-  There are no buttons on this page, and that is deliberate: an order records
-  something that happened, and only an authenticated gateway notification may
-  change one. A "mark as paid" button here would be a way to record money that
-  never arrived.
-*/}}
+{{/* Payment facts are immutable here; delivery and access can be managed. */}}
 
 {{/* The state of the order in badges, because these three facts are what an
      operator checks first and a sentence makes them read them all. */}}
@@ -38,6 +33,21 @@
 </div>
 {{end}}
 
+{{if .Emails}}
+<h2>Email delivery</h2>
+<ul>
+{{range .Emails}}
+  <li>{{.Kind}} — {{if .SentAt}}sent{{else}}pending ({{.Attempts}} attempts)
+    {{with .LastError}}<span class="badge problem">{{.}}</span>{{end}}{{end}}</li>
+{{end}}
+</ul>
+{{if and .PendingEmails (.Can "orders.write")}}
+<form method="post" action="/admin/orders/{{.Order.ID}}/email/retry">
+  {{template "csrf" .CSRFToken}}
+  <button type="submit">Retry pending emails</button>
+</form>
+{{end}}
+{{end}}
 <h2>Pack</h2>
 <div class="scroll-x">
   <table>
@@ -72,6 +82,24 @@
   </table>
 </div>
 
+{{if and .Order.Paid .Order.NeedsShipping}}
+<h2>Fulfillment</h2>
+{{if .Can "orders.write"}}
+<form method="post" action="/admin/orders/{{.Order.ID}}/fulfillment">
+  {{template "csrf" .CSRFToken}}
+  <p><label>Status <select name="fulfilled">
+    <option value="0"{{if not .Order.FulfilledAt}} selected{{end}}>Unfulfilled</option>
+    <option value="1"{{if .Order.FulfilledAt}} selected{{end}}>Fulfilled</option>
+  </select></label></p>
+  <p><label>Tracking reference <input name="tracking" value="{{.Order.TrackingReference}}" maxlength="200"></label></p>
+  <p><label>Internal note <textarea name="note" maxlength="4000" rows="3">{{.Order.InternalNote}}</textarea></label></p>
+  <button type="submit">Save fulfillment</button>
+</form>
+{{else}}
+<p>{{if .Order.FulfilledAt}}Fulfilled{{else}}Unfulfilled{{end}}</p>
+<p>{{.Order.TrackingReference}}</p><p>{{.Order.InternalNote}}</p>
+{{end}}
+{{end}}
 <h2>Ship to</h2>
 <div class="panel">
   <p>

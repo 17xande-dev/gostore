@@ -2,8 +2,19 @@
 
 <h1>Orders</h1>
 
+<form method="get" action="/admin/orders" class="row">
+  <label>Reference, name or email <input type="search" name="q" value="{{.Search}}" maxlength="200"></label>
+  <label>Show <select name="filter">
+    <option value=""{{if eq .Filter ""}} selected{{end}}>All orders</option>
+    <option value="unfulfilled"{{if eq .Filter "unfulfilled"}} selected{{end}}>Awaiting fulfillment</option>
+    <option value="oversold"{{if eq .Filter "oversold"}} selected{{end}}>Oversold</option>
+    <option value="email"{{if eq .Filter "email"}} selected{{end}}>Pending email delivery</option>
+  </select></label>
+  <button type="submit">Search orders</button>
+</form>
+
 {{if not .Orders}}
-  <p>No orders yet.</p>
+  <p>{{if or .Search .Filter}}No matching orders.{{else}}No orders yet.{{end}}</p>
 {{else}}
 <div class="scroll-x">
   <table>
@@ -35,6 +46,7 @@
             it is marked here rather than only on the detail page.
           */}}
           {{if .Oversold}}<br><span class="badge problem">oversold</span>{{end}}
+          {{if .FulfilledAt}}<br><span class="badge done">fulfilled</span>{{end}}
         </td>
         <td>{{if .Emailed}}yes{{else}}<span class="muted">no</span>{{end}}</td>
       </tr>
@@ -43,7 +55,11 @@
   </table>
 </div>
 
-<small class="hint">Showing the {{.Limit}} most recent orders.</small>
 {{end}}
+<nav aria-label="Order pages" class="row">
+  {{with .Previous}}<a href="{{.}}">Previous page</a>{{end}}
+  <span>Page {{.Number}}</span>
+  {{with .Next}}<a href="{{.}}">Next page</a>{{end}}
+</nav>
 
 {{end}}

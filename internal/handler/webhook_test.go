@@ -96,6 +96,36 @@ func TestCallback_MarksPaidAndDecrementsStock(t *testing.T) {
 	}
 }
 
+func TestCallback_DatabaseFailureRequestsRetry(t *testing.T) {
+	s := newCheckoutShop(t)
+	order := placeOrder(t, s, "S", 1)
+	// Fail the transaction after the order has been read, then replay exactly the
+	// same notification after recovery. No money or stock may be lost or doubled.
+	_, err := s.pool.Exec(t.Context(), `ALTER TABLE orders ADD CONSTRAINT test_unpaid CHECK (status <> 'paid')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := payment.FakeCallbackBody(order.ID, "retry-payment", "paid", order.TotalCents)
+	res := callback(t, s.srv, "fake", body)
+	if res.StatusCode != http.StatusServiceUnavailable || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("failed write acknowledged: %d", res.StatusCode)
+	}
+	if s.reload(t, order.ID).Paid() || s.stockOf(t, "TEE-S") != 4 {
+		t.Fatal("failed transaction changed order or stock")
+	}
+	if _, err := s.pool.Exec(t.Context(), `ALTER TABLE orders DROP CONSTRAINT test_unpaid`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if res := callback(t, s.srv, "fake", body); res.StatusCode != http.StatusOK {
+			t.Fatal(res.StatusCode)
+		}
+	}
+	if !s.reload(t, order.ID).Paid() || s.stockOf(t, "TEE-S") != 3 {
+		t.Fatal("retry did not settle exactly once")
+	}
+}
+
 func TestCallback_IdempotentOnReplay(t *testing.T) {
 	// Gateways retry, so a replay is routine traffic. It must not sell the same
 	// stock twice.

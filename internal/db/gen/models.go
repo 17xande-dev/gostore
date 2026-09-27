@@ -38,6 +38,7 @@ type Cart struct {
 	ID        string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Version   int64
 }
 
 type CartItem struct {
@@ -63,6 +64,17 @@ type DownloadEvent struct {
 	CreatedAt     time.Time
 }
 
+type EmailJob struct {
+	ID            int64
+	OrderID       string
+	Kind          string
+	Payload       []byte
+	Attempts      int
+	NextAttemptAt time.Time
+	LastError     string
+	SentAt        *time.Time
+}
+
 type Entitlement struct {
 	ID          string
 	OrderID     string
@@ -74,24 +86,31 @@ type Entitlement struct {
 }
 
 type Order struct {
-	ID              string
-	CartID          *string
-	CustomerName    string
-	CustomerEmail   string
-	CustomerPhone   string
-	ShippingAddress string
-	TotalCents      int64
-	Currency        string
-	Status          string
-	Gateway         string
-	GatewayRef      *string
-	GatewayStatus   string
-	GatewayAmount   string
-	GatewayPayload  string
-	Emailed         bool
-	Oversold        bool
-	CreatedAt       time.Time
-	PaidAt          *time.Time
+	ID                   string
+	CartID               *string
+	CustomerName         string
+	CustomerEmail        string
+	CustomerPhone        string
+	ShippingAddress      string
+	TotalCents           int64
+	Currency             string
+	Status               string
+	Gateway              string
+	GatewayRef           *string
+	GatewayStatus        string
+	GatewayAmount        string
+	GatewayPayload       string
+	Emailed              bool
+	Oversold             bool
+	CreatedAt            time.Time
+	PaidAt               *time.Time
+	CartVersion          *int64
+	CheckoutKey          *string
+	FulfilledAt          *time.Time
+	TrackingReference    string
+	InternalNote         string
+	FulfillmentUpdatedAt *time.Time
+	FulfillmentUpdatedBy *string
 }
 
 type OrderItem struct {

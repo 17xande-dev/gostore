@@ -737,8 +737,7 @@ LIMIT $1
 // page loads.
 //
 // No index on created_at, deliberately: a top-N sort over a small products table
-// is a sequential scan and a heap, which is right at this size, and adding one
-// would be a migration. See the search plan discussion for the same argument.
+// is a sequential scan and a heap, which is right at this size.
 func (q *Queries) ListNewestActiveProducts(ctx context.Context, rowLimit int32) ([]Product, error) {
 	rows, err := q.db.Query(ctx, listNewestActiveProducts, rowLimit)
 	if err != nil {

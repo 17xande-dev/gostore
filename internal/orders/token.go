@@ -22,10 +22,8 @@ const tokenBytes = 32
 
 // NewToken returns a fresh download token and the hash to store for it.
 //
-// The plaintext is returned once, to go into the confirmation email, and is
-// unrecoverable afterwards. That is the point: what sits in the database is a
-// SHA-256 digest, so a dump of the entitlements table is a list of hashes rather
-// than a set of working download links.
+// The plaintext goes into an encrypted email job until delivery. The entitlement
+// stores only the SHA-256 digest, so that table contains no working download links.
 //
 // SHA-256 rather than a password hash, deliberately. bcrypt and argon2 are slow on
 // purpose because a password is short, human-chosen and guessable; this token is

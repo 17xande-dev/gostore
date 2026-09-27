@@ -29,10 +29,8 @@ const maxCallbackBytes = 64 << 10
 //   - The gateway authenticates the notification; this handler does not try to.
 //     ParseCallback returning without an error is the proof, and there is no code
 //     path here that acts on an unproven one.
-//   - **It always answers 200.** A gateway retries anything else, and a
-//     notification that fails validation is not "try again later" — it is either
-//     forged or broken, and neither improves on the third attempt. Rejections are
-//     logged, in full, and dropped.
+//   - Permanent rejections and completed transactions answer 200. Temporary
+//     verification or persistence failures answer 503 so the provider retries.
 //   - What only this handler can do, it does: find the order, check the amount
 //     against the order's own total, and keep a replay from decrementing stock
 //     twice.
@@ -44,21 +42,19 @@ func (h *Handler) RegisterPayments(mux *http.ServeMux) {
 	// and every accepted request makes the store POST to the gateway to validate it,
 	// which is an amplifier.
 	//
-	// The limiter answers 429, which looks like it contradicts this handler's
-	// always-200 rule. It does not: 200 means "read and decided", so a gateway does
-	// not retry a forgery. A throttled request has not been read, and a retry is
-	// exactly what should happen — hence 429 with Retry-After, from in front of the
-	// handler rather than inside it.
+	// A throttled request has not been processed: 429 with Retry-After lets the
+	// provider try again, just like the handler's 503 on a temporary failure.
 	mux.Handle("POST /payments/{gateway}/callback", h.limits.callback(http.HandlerFunc(h.paymentCallback)))
 }
 
 func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
-	// Whatever happens below, the answer is 200 and an empty body. Deferring it
-	// means no early return can accidentally leave a gateway retrying a
-	// notification this store has already decided to ignore.
+	status := http.StatusOK
 	defer func() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
+		if status == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", "30")
+		}
+		w.WriteHeader(status)
 	}()
 
 	// The {gateway} segment names which provider is claiming to have taken money,
@@ -73,6 +69,7 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxCallbackBytes+1))
 	if err != nil {
 		h.log.Error("payment callback: read body", "error", err)
+		status = http.StatusServiceUnavailable
 		return
 	}
 
@@ -81,6 +78,9 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 		Body: body, Header: r.Header, SourceIP: sourceIP,
 	})
 	if err != nil {
+		if errors.Is(err, payment.ErrRetryable) {
+			status = http.StatusServiceUnavailable
+		}
 		// Which check failed is the whole diagnostic value of this log line: a
 		// signature mismatch is usually a passphrase that disagrees with the
 		// dashboard, an IP rejection is usually a proxy or a changed range, and a
@@ -90,11 +90,13 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.applyCallback(r, gateway, cb)
+	if err := h.applyCallback(r, gateway, cb); err != nil {
+		status = http.StatusServiceUnavailable
+	}
 }
 
 // applyCallback is everything that happens once a notification is proven genuine.
-func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb payment.Callback) {
+func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb payment.Callback) error {
 	log := h.log.With("gateway", gateway.Name(), "order", cb.OrderID,
 		"gateway_ref", cb.Ref, "gateway_status", cb.Status)
 
@@ -106,10 +108,10 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 			// account, which is how one store's payments get confirmed against
 			// another's database.
 			log.Warn("payment callback names an unknown order")
-			return
+			return nil
 		}
 		log.Error("payment callback: read order", "error", err)
-		return
+		return err
 	}
 
 	// A gateway only ever proves things about its own account, so a genuine
@@ -119,7 +121,7 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	if order.Gateway != gateway.Name() {
 		log.Warn("payment callback names an order placed through a different gateway",
 			"order_gateway", order.Gateway)
-		return
+		return nil
 	}
 
 	p := orders.Payment{
@@ -136,10 +138,10 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 		status := unpaidStatus(cb.Outcome)
 		if err := h.orders.RecordUnpaid(r.Context(), order.ID, status, p); err != nil {
 			log.Error("record unpaid order", "error", err)
-			return
+			return err
 		}
 		log.Info("payment did not complete", "status", status)
-		return
+		return nil
 	}
 
 	// The amount is checked against the order's own total, which was computed from
@@ -156,23 +158,24 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 			"paid_cents", cb.AmountCents, "order_cents", order.TotalCents, "paid_amount", cb.Amount)
 		if err := h.orders.RecordNotification(r.Context(), order.ID, p); err != nil {
 			log.Error("record mismatched payment", "error", err)
+			return err
 		}
-		return
+		return nil
 	}
 
-	result, err := h.orders.MarkPaid(r.Context(), order.ID, p)
+	result, err := h.orders.MarkPaidWithMail(r.Context(), order.ID, p, h.prepareOrderEmails(order))
 	if err != nil {
 		// The money is taken and this store failed to record it. Nothing here can
 		// fix that, so it is logged at the level someone is paged for; the gateway's
 		// retry is the actual recovery mechanism, and the operation is idempotent.
 		log.Error("failed to mark a paid order paid", "error", err)
-		return
+		return err
 	}
 	if result.AlreadyPaid {
 		// Routine: gateways retry, and this is what stops a retry selling the same
 		// stock twice.
 		log.Info("ignored a replayed payment notification")
-		return
+		return nil
 	}
 
 	if len(result.Oversold) > 0 {
@@ -185,15 +188,9 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	log.Info("order paid", "total_cents", order.TotalCents, "items", order.Count(),
 		"downloads", len(result.Grants))
 
-	// Mail last, and only now that the order is recorded paid: a mail server
-	// having a bad afternoon must not be able to lose a sale. Nothing below can
-	// fail this request — see internal/handler/order_mail.go.
-	// The grants carry plaintext download tokens, which exist nowhere else — only
-	// their hashes are stored. If this send fails the buyer has no link and the
-	// admin has to issue a fresh entitlement, so a digital order's mail failure is
-	// worse than a physical one's and the log line above records how many were at
-	// stake.
-	h.sendOrderEmails(r.Context(), order, result.Oversold, result.Grants)
+	// The durable worker owns delivery. The provider can stop retrying now that
+	// the payment and its email jobs have committed together.
+	return nil
 }
 
 // unpaidStatus maps a normalised outcome onto this store's order status.

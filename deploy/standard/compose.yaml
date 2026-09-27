@@ -1,4 +1,4 @@
-# gostore behind Caddy, with product images in Cloudflare R2 and mail over SMTP.
+# gostore behind Caddy, with images and purchased files in R2 and mail over SMTP.
 #
 # Copy this directory to the server, then:
 #
@@ -46,10 +46,6 @@ services:
       # is safe for a first afternoon and silently wrong for a live store: it
       # takes no money and looks fine. A deploy says which it means.
       PAYFAST_SANDBOX: ${PAYFAST_SANDBOX:?set PAYFAST_SANDBOX in .env to true or false}
-    volumes:
-      # Purchased files, when DOWNLOAD_DIR=/downloads. Mounted either way: an
-      # unused volume costs nothing.
-      - downloads:/downloads
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,6 +72,5 @@ services:
 
 volumes:
   pgdata:
-  downloads:
   caddy_data:
   caddy_config:

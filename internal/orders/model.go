@@ -135,13 +135,25 @@ type Order struct {
 
 	CreatedAt time.Time
 	// PaidAt is zero until an authenticated notification says otherwise.
-	PaidAt time.Time
+	PaidAt            time.Time
+	FulfilledAt       *time.Time
+	TrackingReference string
+	InternalNote      string
 
 	Items []Item
 }
 
 // Paid reports whether the money is in.
 func (o Order) Paid() bool { return o.Status == StatusPaid }
+
+func (o Order) NeedsShipping() bool {
+	for _, item := range o.Items {
+		if item.Kind == "physical" {
+			return true
+		}
+	}
+	return false
+}
 
 // Count is the number of individual things ordered.
 func (o Order) Count() int {

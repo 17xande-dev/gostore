@@ -205,11 +205,14 @@ The order of events matters more than the routes do:
   therefore holds no inventory, which is the right trade for a small shop: two people can
   reach a payment page for the last item, and the second one is refunded rather than everyone
   being blocked by carts nobody will pay for.
-- **The cart survives checkout** and is emptied when payment succeeds, so backing out of the
-  gateway's page leaves the basket intact.
+- **The cart survives checkout.** Payment empties it only if its version still matches
+  the checkout snapshot. Any subsequent cart edit preserves the current basket.
+- **Each checkout form carries a submission key.** Double-clicking or retrying that
+  form returns the same order. A new form is a new checkout attempt.
 - **`/cart/checkout/success` grants nothing.** A shopper can navigate there without paying, so
   it says the payment is being confirmed rather than that it succeeded. It names the order —
-  the cart cookie identifies it, and a reference is what a customer needs to quote.
+  `?order=...` selects it and the cart cookie authorises access. New return URLs and
+  status polls carry this id so another tab cannot switch the order being shown.
 
 **Which gateway** is a field on the checkout form, resolved before the order row is written —
 `orders.gateway` records it, and the callback later refuses to settle the order unless it
@@ -219,6 +222,16 @@ somebody to pay through a provider they did not choose is not an improvement on 
 message.
 
 The hand-over itself takes one of two shapes, and each has a consequence for the CSP:
+
+**Theme upgrade:** an override of `pages/checkout.gohtml` must include the submission
+key inside its checkout form, alongside the CSRF field:
+
+```html
+<input type="hidden" name="checkout_key" value="{{.Form.Key}}">
+```
+
+Custom status polls and success/download links should preserve `?order={{.Order.ID}}`
+so they keep showing the selected checkout when another tab places a newer order.
 
 - **A form post** (PayFast) is a real cross-origin submission, not a redirect, so the
   gateway's origin must be in `form-action`, and the submit-on-load script is a **file**

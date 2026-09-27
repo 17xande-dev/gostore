@@ -14,9 +14,13 @@ restores from them, and checks that restoring works.
 | What | Where it lives | Standard | Tunnel |
 |---|---|---|---|
 | The database — products, orders, accounts | Postgres's volume, dumped by `backup.sh` | copy off-box | copy off-box |
-| Product images | the image bucket | already in R2 | MinIO's volume — copy off-box |
-| Purchased files, with `DOWNLOAD_DIR` | the `gostore_downloads` volume | copy off-box | copy off-box |
-| `.env` | `/opt/gostore/.env` | keep a copy in your password manager | same |
+| Product images | public R2 image bucket | independent copy | independent copy |
+| Purchased files | private R2 download bucket | independent copy | independent copy |
+| `.env`, including `EMAIL_QUEUE_KEY` | `/opt/gostore/.env` | keep a copy in your password manager | same |
+
+R2 is primary storage, not a backup against accidental deletion. Keep independent
+copies under credentials the running store cannot use. Database backups include
+encrypted pending emails: retain their matching `EMAIL_QUEUE_KEY` separately.
 
 Everything else — the image, Caddy's certificates, the tunnel — is recreated by following
 the guide again.
@@ -33,9 +37,10 @@ Storage**, create a bucket called `gostore-backups` and leave public access **of
 bucket, and copy the access key id, secret and endpoint. Use a token of its own, not the
 image bucket's: a leaked store credential should not be able to delete the backups.
 
-**Retention** belongs to the bucket: under its **Settings** → **Object lifecycle rules**,
-add a rule deleting objects after, say, 90 days. The copy below never deletes anything, so
-a dump pruned on the server stays off it until the rule removes it.
+**Retention** belongs to the bucket: add a lifecycle rule for the **`db/` prefix**
+deleting old dumps after, say, 90 days. Do not apply it to `images/` or `downloads/`:
+old objects there may still be referenced by current orders. The copy never deletes
+objects merely because the live bucket no longer contains them.
 
 **Give rclone the credentials** in a file of their own beside `.env`, at `0600`:
 
@@ -52,9 +57,18 @@ RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID=
 RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=
 # The token can write to the bucket but not create it, so rclone must not try.
 RCLONE_CONFIG_OFFSITE_NO_CHECK_BUCKET=true
+
+# A separate read-only token scoped to the two live buckets.
+RCLONE_CONFIG_LIVE_TYPE=s3
+RCLONE_CONFIG_LIVE_PROVIDER=Cloudflare
+RCLONE_CONFIG_LIVE_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+RCLONE_CONFIG_LIVE_ACCESS_KEY_ID=
+RCLONE_CONFIG_LIVE_SECRET_ACCESS_KEY=
+RCLONE_CONFIG_LIVE_NO_CHECK_BUCKET=true
 ```
 
-That defines an rclone remote called `offsite`, with no config file to keep.
+That defines `offsite` and `live` remotes. An independent account or provider for
+`offsite` also protects against losing access to the primary account.
 
 **The copy script**, `/opt/gostore/offsite.sh`:
 
@@ -64,27 +78,18 @@ That defines an rclone remote called `offsite`, with no config file to keep.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-extra=()
 rclone() {
-  docker run --rm --network gostore_default --env-file offsite.env \
-    -v "$PWD/backups:/backups:ro" -v gostore_downloads:/downloads:ro \
-    "${extra[@]}" rclone/rclone:latest --quiet "$@"
+  docker run --rm --env-file offsite.env \
+    -v "$PWD/backups:/backups:ro" rclone/rclone:latest --quiet "$@"
 }
 
 rclone copy /backups offsite:gostore-backups/db
-rclone copy /downloads offsite:gostore-backups/downloads
+rclone copy live:gostore-images offsite:gostore-backups/images
+rclone copy live:gostore-downloads offsite:gostore-backups/downloads
 ```
 
-On the **tunnel** deployment, add product images, read straight out of MinIO — the
-`minio` remote is defined inline, from `.env`'s password:
-
-```bash
-extra=(-e RCLONE_CONFIG_MINIO_TYPE=s3 -e RCLONE_CONFIG_MINIO_PROVIDER=Minio
-       -e RCLONE_CONFIG_MINIO_ENDPOINT=http://minio:9000
-       -e RCLONE_CONFIG_MINIO_ACCESS_KEY_ID=gostore
-       -e "RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY=$(grep '^MINIO_ROOT_PASSWORD=' .env | cut -d= -f2-)")
-rclone copy minio:gostore-images offsite:gostore-backups/images
-```
+Use the actual bucket names from `BLOB_BUCKET` and `DOWNLOAD_BUCKET`. Both
+production deployments use this same procedure.
 
 Make it executable, run it once, and check the bucket in the dashboard:
 
@@ -100,8 +105,8 @@ Then have cron run it after each successful backup, replacing the guide's line i
 15 3 * * * /opt/gostore/backup.sh && /opt/gostore/offsite.sh >>/var/log/gostore-backup.log 2>&1
 ```
 
-`gostore_default` and `gostore_downloads` are the names Compose gives the stack's network
-and volume, from `name: gostore` at the top of `compose.yaml`.
+For a custom disk-backed deployment, also mount its image/download directories
+read-only into the backup container and copy their contents with the same key paths.
 
 ## Restoring the database
 
@@ -126,9 +131,11 @@ sudo docker run --rm --env-file offsite.env -v "$PWD/backups:/backups" \
   rclone/rclone:latest --quiet copy offsite:gostore-backups/db/gostore-<timestamp>.sql.gz /backups
 ```
 
-Purchased files and, on the tunnel deployment, images come back the same way, with the
-source and destination swapped: `copy offsite:gostore-backups/downloads /downloads` with
-the volume mounted read-write, and `copy offsite:gostore-backups/images minio:gostore-images`.
+Restore images and purchased files by reversing the corresponding copy, using a
+temporary write-capable credential for the destination buckets. For example:
+`copy offsite:gostore-backups/downloads live:gostore-downloads`. Keep the download
+bucket private. Restore `.env` and the matching queue key before starting the app;
+pending emails in the restored snapshot may be delivered again.
 
 ## Testing a restore
 

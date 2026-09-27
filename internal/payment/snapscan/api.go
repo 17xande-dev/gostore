@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/17xande-dev/gostore/internal/payment"
 )
 
 // maxAPIResponseBytes caps the confirmation response. A payment object is a few
@@ -52,13 +54,13 @@ func (g *Gateway) getPayment(ctx context.Context, id int64) (Payment, error) {
 		// A network failure is not a rejection: the notification may well be
 		// genuine. It is still not confirmed, so the order stays as it was and
 		// SnapScan's retry — three minutes of them — gets another chance.
-		return Payment{}, fmt.Errorf("%w: %w", ErrNotValidated, err)
+		return Payment{}, fmt.Errorf("%w: %w: %w", payment.ErrRetryable, ErrNotValidated, err)
 	}
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxAPIResponseBytes))
 	if err != nil {
-		return Payment{}, fmt.Errorf("%w: read response: %w", ErrNotValidated, err)
+		return Payment{}, fmt.Errorf("%w: %w: read response: %w", payment.ErrRetryable, ErrNotValidated, err)
 	}
 	switch res.StatusCode {
 	case http.StatusOK:
@@ -68,14 +70,14 @@ func (g *Gateway) getPayment(ctx context.Context, id int64) (Payment, error) {
 		// something that is not SnapScan.
 		return Payment{}, fmt.Errorf("%w: SnapScan has no payment %d", ErrNotValidated, id)
 	case http.StatusUnauthorized:
-		return Payment{}, fmt.Errorf("%w: SNAPSCAN_API_KEY was refused", ErrNotValidated)
+		return Payment{}, fmt.Errorf("%w: %w: SNAPSCAN_API_KEY was refused", payment.ErrRetryable, ErrNotValidated)
 	default:
-		return Payment{}, fmt.Errorf("%w: SnapScan answered %d", ErrNotValidated, res.StatusCode)
+		return Payment{}, fmt.Errorf("%w: %w: SnapScan answered %d", payment.ErrRetryable, ErrNotValidated, res.StatusCode)
 	}
 
 	var p Payment
 	if err := json.Unmarshal(body, &p); err != nil {
-		return Payment{}, fmt.Errorf("%w: response is not a payment object: %v", ErrNotValidated, err)
+		return Payment{}, fmt.Errorf("%w: %w: response is not a payment object: %v", payment.ErrRetryable, ErrNotValidated, err)
 	}
 	if p.ID != id {
 		// Belt and braces against a caching proxy or a redirect handing back

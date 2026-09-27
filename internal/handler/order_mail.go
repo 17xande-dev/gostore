@@ -2,121 +2,111 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"time"
 
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/mailer"
 )
 
-// Mail for a paid order, and the one invariant that governs all of it: **the order
-// is already recorded paid before any of this runs.** A mail server that is down,
-// slow, or misconfigured must never be able to lose a sale, so nothing here can
-// fail the payment callback and nothing here is retried by failing it.
-//
-// Two messages go out, and they are deliberately separate sends rather than one
-// message with two recipients: the customer's copy is a receipt and the owner's is
-// a work order, they say different things, and one of them failing should not
-// suppress the other.
-//
-//   - The customer gets a confirmation, once. orders.emailed records that, so a
-//     replayed gateway notification does not send a second receipt.
-//   - Whoever packs the parcel gets a notification, if ORDER_NOTIFY_EMAIL is set.
-//     It also carries the oversell warning, which otherwise only exists in the
-//     logs — the person who has to tell a customer their item is not in stock
-//     after all should not have to find that in a log aggregator.
-
-// orderMailData is what both order emails render from.
 type orderMailData struct {
-	StoreName string
-	Currency  string
-	BaseURL   string
-	Order     orders.Order
-
-	// Oversold names the lines whose stock could not be decremented. Only the
-	// owner's copy shows it; telling a customer their order may not be
-	// deliverable, in the same breath as confirming it, is not the way to find
-	// out.
-	Oversold []string
-
-	// Downloads are the links this payment created, one per digital line. They
-	// appear only in the customer's copy: the owner has no use for somebody else's
-	// download link, and putting a working credential in a second inbox is the
-	// kind of thing that is obvious once it has happened.
-	//
-	// This is the only moment these exist in readable form — only the hash is
-	// stored — so an email that fails to send costs the buyer their link, and the
-	// admin has to issue a new entitlement. That is the deliberate cost of a
-	// database dump not being a set of working links.
-	Downloads []DownloadLink
+	StoreName  string
+	Currency   string
+	BaseURL    string
+	Order      orders.Order
+	Oversold   []string
+	Downloads  []DownloadLink
+	OwnerEmail string
 }
 
-// DownloadLink is one buyer's link, ready to render.
-type DownloadLink struct {
-	Title string
-	Label string
-	URL   string
+type DownloadLink struct{ Title, Label, URL string }
+
+func (h *Handler) prepareOrderEmails(order orders.Order) func(orders.PaidResult) ([]outbox.Message, error) {
+	return func(result orders.PaidResult) ([]outbox.Message, error) {
+		if h.outbox == nil {
+			return nil, errors.New("email queue is not configured")
+		}
+		data := orderMailData{
+			StoreName: h.cfg.StoreName, Currency: order.Currency, BaseURL: h.cfg.BaseURL,
+			Order: order, Oversold: result.Oversold, OwnerEmail: h.cfg.OrderNotifyEmail,
+		}
+		for _, grant := range result.Grants {
+			data.Downloads = append(data.Downloads, DownloadLink{Title: grant.Title, Label: grant.VariantLabel,
+				URL: h.cfg.BaseURL + "/downloads/" + grant.Token})
+		}
+		plain, err := json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		jobs := []outbox.Message{h.outbox.Encrypt(order.ID, "confirmation", plain)}
+		if data.OwnerEmail != "" {
+			// The owner never needs a buyer's download credentials.
+			data.Downloads = nil
+			plain, err = json.Marshal(data)
+			if err != nil {
+				return nil, err
+			}
+			jobs = append(jobs, h.outbox.Encrypt(order.ID, "owner", plain))
+		}
+		return jobs, nil
+	}
 }
 
-// sendOrderEmails delivers the receipt and the notification for a paid order. It
-// returns nothing: every outcome here is logged and none of them changes what the
-// caller does.
-func (h *Handler) sendOrderEmails(ctx context.Context, order orders.Order, oversold []string, grants []orders.Grant) {
-	data := orderMailData{
-		StoreName: h.cfg.StoreName,
-		Currency:  h.cfg.Currency,
-		BaseURL:   h.cfg.BaseURL,
-		Order:     order,
-		Oversold:  oversold,
-		Downloads: h.downloadLinks(grants),
+// ProcessMail drains a bounded batch. Tests call the same worker synchronously;
+// the server calls it on a timer so HTTP callbacks never wait for SMTP.
+func (h *Handler) ProcessMail(ctx context.Context) {
+	for range 20 {
+		found, err := h.outbox.DeliverOne(ctx, h.deliverOrderEmail)
+		if err != nil {
+			h.log.Error("email queue", "error", err)
+		}
+		if !found || ctx.Err() != nil {
+			return
+		}
 	}
-	log := h.log.With("order", order.ID)
-
-	if order.Emailed {
-		// A replay, or a retry after the notification email failed. Either way the
-		// customer already has their receipt.
-		log.Info("confirmation already sent; not sending another")
-	} else if err := h.sendConfirmation(ctx, data); err != nil {
-		// Logged and dropped. The order stands, and the customer has already seen
-		// a confirmation page with their reference on it.
-		log.Error("failed to send the order confirmation", "to", order.Customer.Email, "error", err)
-	} else if err := h.orders.MarkEmailed(ctx, order.ID); err != nil {
-		// The mail went out but the flag did not stick, so a retry would send a
-		// second copy. Worth logging loudly and not worth failing over.
-		log.Error("sent the confirmation but failed to record it", "error", err)
-	} else {
-		log.Info("sent the order confirmation", "to", order.Customer.Email)
-	}
-
-	if h.cfg.OrderNotifyEmail == "" {
-		return
-	}
-	if err := h.sendOwnerNotification(ctx, data); err != nil {
-		log.Error("failed to notify the store owner", "to", h.cfg.OrderNotifyEmail, "error", err)
-		return
-	}
-	log.Info("notified the store owner", "to", h.cfg.OrderNotifyEmail)
 }
 
-// downloadLinks turns freshly minted grants into absolute URLs.
-//
-// Absolute, and from BaseURL rather than from the request: this renders into an
-// email, where a relative href points at the reader's mail client and nothing at
-// all.
-func (h *Handler) downloadLinks(grants []orders.Grant) []DownloadLink {
-	if len(grants) == 0 {
-		return nil
-	}
-	out := make([]DownloadLink, 0, len(grants))
-	for _, g := range grants {
-		out = append(out, DownloadLink{
-			Title: g.Title,
-			Label: g.VariantLabel,
-			URL:   h.cfg.BaseURL + "/downloads/" + g.Token,
-		})
-	}
-	return out
+// StartMailWorker returns a wait function so shutdown joins the worker before
+// closing the database pool. Jobs survive cancellation and are retried at boot.
+func (h *Handler) StartMailWorker(ctx context.Context) func() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			h.ProcessMail(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() { <-done }
 }
 
-func (h *Handler) sendConfirmation(ctx context.Context, data orderMailData) error {
+func (h *Handler) deliverOrderEmail(ctx context.Context, kind string, plain []byte) error {
+	var data orderMailData
+	if err := json.Unmarshal(plain, &data); err != nil {
+		return err
+	}
+	if kind == "owner" {
+		text, err := h.tmpl.Text("email_order_notify.txt", data)
+		if err != nil {
+			return err
+		}
+		subject := "New order " + data.Order.Reference() + " — " + data.Currency + " " + formatCents(data.Order.TotalCents)
+		if len(data.Oversold) > 0 {
+			subject = "OVERSOLD: " + subject
+		}
+		return h.mail.Send(ctx, mailer.Message{To: []string{data.OwnerEmail}, Subject: subject, Text: text})
+	}
+	if kind != "confirmation" {
+		return errors.New("unknown email kind")
+	}
 	text, err := h.tmpl.Text("email_order_paid.txt", data)
 	if err != nil {
 		return err
@@ -125,29 +115,6 @@ func (h *Handler) sendConfirmation(ctx context.Context, data orderMailData) erro
 	if err != nil {
 		return err
 	}
-	return h.mail.Send(ctx, mailer.Message{
-		To:      []string{data.Order.Customer.Email},
-		Subject: data.StoreName + " order " + data.Order.Reference() + " — payment received",
-		Text:    text,
-		HTML:    html,
-	})
-}
-
-func (h *Handler) sendOwnerNotification(ctx context.Context, data orderMailData) error {
-	text, err := h.tmpl.Text("email_order_notify.txt", data)
-	if err != nil {
-		return err
-	}
-	subject := "New order " + data.Order.Reference() + " — " + data.Currency + " " +
-		formatCents(data.Order.TotalCents)
-	if len(data.Oversold) > 0 {
-		// In the subject, because it is the one thing on this page that needs
-		// acting on before the parcel is packed.
-		subject = "OVERSOLD: " + subject
-	}
-	return h.mail.Send(ctx, mailer.Message{
-		To:      []string{h.cfg.OrderNotifyEmail},
-		Subject: subject,
-		Text:    text,
-	})
+	return h.mail.Send(ctx, mailer.Message{To: []string{data.Order.Customer.Email},
+		Subject: data.StoreName + " order " + data.Order.Reference() + " — payment received", Text: text, HTML: html})
 }

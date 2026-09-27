@@ -110,6 +110,38 @@ func TestITN_ValidNotification(t *testing.T) {
 	}
 }
 
+func TestITN_TemporaryVerificationFailureCanRetry(t *testing.T) {
+	for _, code := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+		}))
+		g := testGateway(t, func(c *Config) { c.ValidateURL = srv.URL })
+		body := encodeITN(itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "299.00"), g.cfg.Passphrase)
+		_, err := g.ParseCallback(t.Context(), notify(body, validIP))
+		if !errors.Is(err, payment.ErrRetryable) {
+			t.Errorf("HTTP %d: %v", code, err)
+		}
+		srv.Close()
+		_, err = g.ParseCallback(t.Context(), notify(body, validIP))
+		if !errors.Is(err, payment.ErrRetryable) {
+			t.Errorf("connection failure: %v", err)
+		}
+	}
+	endpoint, _ := validatorSaying(t, "INVALID")
+	g := testGateway(t, func(c *Config) { c.ValidateURL = endpoint })
+	body := encodeITN(itnFieldsFor("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "299.00"), g.cfg.Passphrase)
+	_, err := g.ParseCallback(t.Context(), notify(body, validIP))
+	if err == nil || errors.Is(err, payment.ErrRetryable) {
+		t.Fatalf("explicit rejection: %v", err)
+	}
+	endpoint, _ = validatorSaying(t, "<html>Temporarily unavailable</html>")
+	g = testGateway(t, func(c *Config) { c.ValidateURL = endpoint })
+	_, err = g.ParseCallback(t.Context(), notify(body, validIP))
+	if !errors.Is(err, payment.ErrRetryable) {
+		t.Fatalf("unexpected HTTP 200 body was treated as a permanent rejection: %v", err)
+	}
+}
+
 func TestITN_IncludesEmptyValuesInTheSignature(t *testing.T) {
 	// The asymmetry that costs people an afternoon: building the redirect form
 	// *excludes* blank fields, verifying a notification *includes* them. This test

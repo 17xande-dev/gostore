@@ -8,7 +8,7 @@ server, fill in one `.env`, and start with `docker compose up -d`.
 |---|---|---|
 | **Directory** | [`deploy/standard`](../../deploy/standard) | [`deploy/tunnel`](../../deploy/tunnel) |
 | **How requests get in** | Caddy, with a Let's Encrypt certificate | A Cloudflare Tunnel — no open ports at all |
-| **Product images** | Cloudflare R2 | MinIO, on the same server |
+| **Images and downloads** | Separate public/private R2 buckets | Separate public/private R2 buckets |
 | **Mail** | Any SMTP provider | Microsoft 365, through Microsoft Graph |
 | **Pick it when** | You have a VPS with a public address. The default | The server has no public address — a home lab, an office — or you would rather open no ports; your domain is on Cloudflare; your mail is Microsoft 365 |
 
@@ -16,6 +16,26 @@ Both run Postgres beside the store, and both take a nightly database backup to t
 server's own disk with the `backup.sh` in their directory. That covers a bad migration or
 a mistaken delete, not losing the server — [Backups](backups.md) copies them off it and
 covers restoring.
+
+Both require a generated `EMAIL_QUEUE_KEY` (`openssl rand -hex 32`). Keep it with
+your secrets backup: pending download emails are encrypted with it. See
+[email delivery](../email.md#what-gets-sent-and-when) for retry and key rotation.
+
+### Upgrading from local production storage
+
+Before replacing an older deployment's Compose file, stop uploads, retain the old
+Compose file and volumes, and copy objects to R2 **with their existing object keys**.
+Copy public images and private purchased files into separate buckets. For disk storage,
+copy the contents of the storage directory, including its nested key directories;
+do not add an extra top-level directory. For MinIO, use an S3-aware copy tool such as
+rclone rather than copying MinIO's internal volume files. Verify an image and a paid
+download before switching configuration. Then remove `IMAGE_DIR`/`DOWNLOAD_DIR` from
+the production environment and set `BLOB_*`/`DOWNLOAD_*`. Keep the original data until
+the new deployment and its backups have been verified.
+
+Development now uses `.local/images` and `.local/downloads`; existing MinIO demo
+objects similarly need copying by key, or a freshly recreated demo database can be
+seeded into the new directories. Changing a backend does not move existing objects.
 
 ## The `.env`
 

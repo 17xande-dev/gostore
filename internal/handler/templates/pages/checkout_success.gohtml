@@ -24,14 +24,14 @@
         {{else}}
           <ul>
           {{range $grant.Files}}
-            <li><a href="/cart/checkout/downloads/{{$grant.Entitlement.ID}}/{{.ID}}">{{.Title}}</a>
+            <li><a href="/cart/checkout/downloads/{{$grant.Entitlement.ID}}/{{.ID}}?order={{$.Order.ID}}">{{.Title}}</a>
                 <small>{{.HumanSize}}</small></li>
           {{end}}
           </ul>
         {{end}}
       {{end}}
-      <p><small>We have also emailed you a permanent link. Keep that email — this
-      page is tied to this browser and will not be here tomorrow.</small></p>
+      <p><small>Your permanent link is {{if .Order.Emailed}}in your confirmation email{{else}}queued for email delivery{{end}}.
+      Keep that email — access from this page depends on this browser's basket cookie.</small></p>
     {{end}}
   {{else}}
     <p>We are waiting for the payment to be confirmed. This usually takes a few

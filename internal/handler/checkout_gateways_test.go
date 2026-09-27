@@ -203,7 +203,7 @@ func TestCheckoutStatus_ReportsTheOrderAndRedirectsWhenPaid(t *testing.T) {
 	}
 	defer res.Body.Close()
 
-	if got := res.Header.Get("HX-Redirect"); got != "/cart/checkout/success" {
+	if got := res.Header.Get("HX-Redirect"); got != "/cart/checkout/success?order="+order.ID {
 		t.Errorf("HX-Redirect = %q, want the success page once the money is in", got)
 	}
 }

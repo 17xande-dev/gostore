@@ -17,6 +17,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
 	"github.com/17xande-dev/mailer"
@@ -39,6 +40,7 @@ type Handler struct {
 	// resolve a name to the provider that can prove a notification genuine.
 	gateways payment.Registry
 	mail     mailer.Sender
+	outbox   *outbox.Store
 	// blob is the PUBLIC image store and files is the PRIVATE download store.
 	// They are never interchangeable: putting a purchased file through blob would
 	// publish it, and it is worth the two fields being named differently enough
@@ -117,6 +119,7 @@ type Deps struct {
 	Grants   *downloads.Store
 	Gateways payment.Registry
 	Mail     mailer.Sender
+	Outbox   *outbox.Store
 	Images   blob.Storage
 	Files    blob.Downloads
 	Users    *auth.Store
@@ -128,6 +131,7 @@ func New(d Deps) *Handler {
 		cfg: cfg, log: log, tmpl: d.Tmpl, cat: d.Catalog, cart: d.Carts,
 		orders: d.Orders, grants: d.Grants, gateways: d.Gateways, mail: d.Mail,
 		blob: d.Images, files: d.Files, users: d.Users,
+		outbox: d.Outbox,
 	}
 	// Both storage backends are optional and both must be non-nil, so that a
 	// caller omitting one gets a refusal with a message rather than a nil panic on
@@ -295,12 +299,12 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("GET /admin/categories/{id}/edit", auth.PermRead, h.adminCategoryEdit)
 	admin("POST /admin/categories/{id}", auth.PermCatalogWrite, h.adminCategoryUpdate)
 	admin("POST /admin/categories/{id}/delete", auth.PermCatalogWrite, h.adminCategoryDelete)
-	// Read-only on purpose: only an authenticated gateway notification may change
-	// an order. See internal/handler/admin_orders.go.
+	// Payment facts are read-only; operational state has its own write routes.
 	admin("GET /admin/orders", auth.PermRead, h.adminOrderList)
 	admin("GET /admin/orders/{id}", auth.PermRead, h.adminOrderShow)
-	// The only mutating routes under /admin/orders. See adminEntitlementRevoke for
-	// why they do not break the read-only rule the order pages otherwise keep.
+	admin("POST /admin/orders/{id}/email/retry", auth.PermOrdersWrite, h.adminOrderEmailRetry)
+	admin("POST /admin/orders/{id}/fulfillment", auth.PermOrdersWrite, h.adminOrderFulfillment)
+	// Access changes do not change the payment record.
 	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", auth.PermOrdersWrite, h.adminEntitlementRevoke)
 	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/restore", auth.PermOrdersWrite, h.adminEntitlementRestore)
 	// Administrator accounts. See internal/handler/admin_users.go — accounts are

@@ -25,6 +25,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/handler"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/payment/payfast"
 	"github.com/17xande-dev/gostore/internal/payment/snapscan"
@@ -41,26 +42,13 @@ func main() {
 }
 
 func run() error {
-	// Operational escape hatches, so migrations don't have to be a side effect of
-	// starting the server: `-migrate` runs them as its own deploy step,
-	// `-migrate-status` answers "is this database up to date?", and
-	// `-check-config` validates the environment without touching anything.
 	migrateOnly := flag.Bool("migrate", false, "apply pending migrations and exit")
 	migrateStatus := flag.Bool("migrate-status", false, "print migration status and exit")
 	checkConfig := flag.Bool("check-config", false, "validate the full server configuration and exit")
 	flag.Parse()
 
-	// The migration modes load only DATABASE_URL. A schema change has no gateway
-	// and no mail relay, so a migration job should not have to be trusted with the
-	// merchant key and the SMTP password to run one — see config.LoadTool.
-	//
-	// What that gives up is the accident that a broken payment config used to
-	// fail at the migration step, before the schema moved. -check-config is that
-	// same check, asked for on purpose: run it in the deploy alongside -migrate
-	// to fail before the database changes rather than after.
-	// -check-config wins over the migration modes, so that asking for the full
-	// check and a migration in one command cannot report "ok" having validated
-	// nothing but DATABASE_URL.
+	// Migration jobs need database access, not the store's payment or mail secrets.
+	// An explicit full configuration check takes precedence over these modes.
 	load := config.Load
 	if (*migrateOnly || *migrateStatus) && !*checkConfig {
 		load = config.LoadTool
@@ -92,9 +80,6 @@ func run() error {
 	if *migrateStatus {
 		return printMigrationStatus(ctx, pool, log)
 	}
-
-	// Migrations run before serving: the app must never handle a request
-	// against a schema it does not expect.
 	if err := db.Migrate(ctx, pool, log); err != nil {
 		return err
 	}
@@ -155,6 +140,10 @@ func run() error {
 	}
 
 	carts := cart.NewStore(pool)
+	queue, err := outbox.New(pool, cfg.EmailQueueKey)
+	if err != nil {
+		return err
+	}
 	cat := catalog.NewStore(pool)
 	h := handler.New(handler.Deps{
 		Config:   cfg,
@@ -166,10 +155,14 @@ func run() error {
 		Grants:   downloads.NewStore(pool, cat),
 		Gateways: gateways,
 		Mail:     mail,
+		Outbox:   queue,
 		Images:   images,
 		Files:    files,
 		Users:    users,
 	})
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	waitWorker := h.StartMailWorker(workerCtx)
+	defer func() { stopWorker(); waitWorker() }()
 
 	// Abandoned carts and expired admin sessions are swept in-process, on this
 	// context, so they stop with the server rather than outliving it.
@@ -388,13 +381,8 @@ func newSnapScan(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 
 // newMailer builds the mail sender.
 //
-// Mail is required, and that reverses what this comment used to say. The old
-// position — a shop's job is to take an order and record it, which does not depend
-// on a mail server — was right about a shop selling parcels and is wrong about one
-// that can sell downloads: a download's link lives in the confirmation email and
-// nowhere else, because only its hash is stored. An unconfigured relay there does
-// not drop a receipt, it takes money for something the buyer can never reach.
-// config.Load is where the refusal happens.
+// Mail is required for receipts and durable download links. The encrypted outbox
+// handles temporary failures; config.Load refuses a missing transport at boot.
 func newMailer(cfg config.Config, log *slog.Logger) (mailer.Sender, error) {
 	// config.Load refuses to boot without SMTP or Graph, so this is unreachable
 	// through main. It is kept as an error rather than deleted because newMailer

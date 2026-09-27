@@ -194,16 +194,15 @@ func attachment(filename string) string {
 // whose name, address and total the page is showing. A buyer who has just paid
 // gets their files without waiting for mail, and nothing new is granted.
 //
-// Two checks that make it safe: the entitlement must belong to the *latest order
-// placed from this cart*, and the file must be one that entitlement grants. Both
-// are done in SQL against the ids rather than trusted from the URL.
+// The selected order must belong to the cart cookie, the entitlement to that
+// order, and the file to that entitlement. A URL's order id is not a credential.
 func (h *Handler) checkoutDownload(w http.ResponseWriter, r *http.Request) {
 	token := h.tokenFromCookie(r)
 	if token == "" {
 		h.downloadNotFound(w, r)
 		return
 	}
-	order, err := h.orders.LatestForCart(r.Context(), token)
+	order, err := h.checkoutOrder(r)
 	if err != nil {
 		h.downloadNotFound(w, r)
 		return

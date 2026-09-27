@@ -42,8 +42,7 @@ jobs:
 
       - run: go vet ./...
       - run: go build ./...
-      # The database-backed tests run here, so a PR cannot break migrations
-      # silently.
+      # Database-backed tests apply migrations to fresh schemas and exercise real SQL.
       - run: go test -race ./...
 
   docker:

@@ -6,6 +6,10 @@ INSERT INTO carts (id) VALUES ($1);
 -- name: GetCart :one
 SELECT * FROM carts WHERE id = $1;
 
+-- All cart mutations and checkout snapshots serialize on this row.
+-- name: LockCart :one
+SELECT version FROM carts WHERE id = $1 FOR UPDATE;
+
 -- The join is deliberately not filtered by active: a line whose product has been
 -- withdrawn stays visible and is marked unavailable, because a line silently
 -- disappearing between page loads looks like a bug or a hidden price change.
@@ -42,7 +46,7 @@ ON CONFLICT (cart_id, variant_id) DO UPDATE SET quantity = EXCLUDED.quantity;
 -- Stamping the cart is what makes the cleanup job measure activity rather than
 -- creation.
 -- name: TouchCart :exec
-UPDATE carts SET updated_at = now() WHERE id = $1;
+UPDATE carts SET updated_at = now(), version = version + 1 WHERE id = $1;
 
 -- name: DeleteCartLine :exec
 DELETE FROM cart_items WHERE cart_id = $1 AND variant_id = $2;

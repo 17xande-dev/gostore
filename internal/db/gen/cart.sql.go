@@ -56,13 +56,18 @@ func (q *Queries) DeleteCartsOlderThan(ctx context.Context, days int32) (int64, 
 }
 
 const getCart = `-- name: GetCart :one
-SELECT id, created_at, updated_at FROM carts WHERE id = $1
+SELECT id, created_at, updated_at, version FROM carts WHERE id = $1
 `
 
 func (q *Queries) GetCart(ctx context.Context, id string) (Cart, error) {
 	row := q.db.QueryRow(ctx, getCart, id)
 	var i Cart
-	err := row.Scan(&i.ID, &i.CreatedAt, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
 	return i, err
 }
 
@@ -171,8 +176,20 @@ func (q *Queries) ListCartItems(ctx context.Context, cartID string) ([]ListCartI
 	return items, nil
 }
 
+const lockCart = `-- name: LockCart :one
+SELECT version FROM carts WHERE id = $1 FOR UPDATE
+`
+
+// All cart mutations and checkout snapshots serialize on this row.
+func (q *Queries) LockCart(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, lockCart, id)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const touchCart = `-- name: TouchCart :exec
-UPDATE carts SET updated_at = now() WHERE id = $1
+UPDATE carts SET updated_at = now(), version = version + 1 WHERE id = $1
 `
 
 // Stamping the cart is what makes the cleanup job measure activity rather than

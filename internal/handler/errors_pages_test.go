@@ -195,6 +195,7 @@ func TestErrorPages_DetailShownInDevAndHiddenInProduction(t *testing.T) {
 }
 
 func TestConfig_ShowErrorDetailFollowsBaseURL(t *testing.T) {
+	t.Setenv("EMAIL_QUEUE_KEY", strings.Repeat("ab", 32))
 	// The derivation itself, without a server in the way.
 	t.Setenv("DATABASE_URL", "postgres://x/y")
 	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")

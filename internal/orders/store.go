@@ -2,12 +2,14 @@ package orders
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/db/gen"
+	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,7 +22,8 @@ var (
 	ErrNotFound = errors.New("orders: not found")
 
 	// ErrEmptyCart means there is nothing to order.
-	ErrEmptyCart = errors.New("orders: cart is empty")
+	ErrEmptyCart      = errors.New("orders: cart is empty")
+	ErrNotFulfillable = errors.New("orders: only paid physical orders can be fulfilled")
 )
 
 // UnavailableError reports that the cart cannot be turned into an order, and
@@ -59,11 +62,9 @@ type PaidResult struct {
 	// Grants are the download entitlements this payment created, one per digital
 	// line, each carrying its plaintext token.
 	//
-	// This is the only time the token exists in readable form. Only its SHA-256
-	// hash is stored, so if the confirmation email does not go out the link cannot
-	// be recovered — a new entitlement has to be issued. That is the deliberate
-	// trade for a database leak not being a licence to download the catalogue, and
-	// it is why the email is sent on the same request that mints these.
+	// Entitlements keep only the hash. The email outbox retains the token encrypted
+	// until delivery, so a restart can recover the same link without exposing it
+	// in a database dump.
 	Grants []Grant
 }
 
@@ -75,7 +76,7 @@ type Grant struct {
 	Title         string
 	VariantLabel  string
 	// Token is the plaintext credential, to be put in the email and then
-	// forgotten. It is never stored and never logged.
+	// forgotten. It is only persisted inside the encrypted outbox, never logged.
 	Token string
 }
 
@@ -103,12 +104,38 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // back to an intact basket, and the cart is cleared when payment actually
 // succeeds.
 func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, currency, gateway string) (Order, error) {
+	return s.Checkout(ctx, cartID, rand.Text(), c, currency, gateway)
+}
+
+// Checkout snapshots a cart once per form submission key. Retrying a submission
+// returns the original order, even after its payment has emptied the basket.
+func (s *Store) Checkout(ctx context.Context, cartID, key string, c Customer, currency, gateway string) (Order, error) {
+	if key == "" {
+		return Order{}, fmt.Errorf("orders: checkout key is required")
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Order{}, fmt.Errorf("orders: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	q := s.q.WithTx(tx)
+	version, err := q.LockCart(ctx, cartID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, ErrEmptyCart
+	}
+	if err != nil {
+		return Order{}, fmt.Errorf("orders: lock cart: %w", err)
+	}
+	previous, err := q.GetCheckoutByKey(ctx, gen.GetCheckoutByKeyParams{CartID: &cartID, CheckoutKey: &key})
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return Order{}, err
+		}
+		return s.Get(ctx, previous.ID)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Order{}, err
+	}
 
 	lines, err := q.ListCartLinesForOrder(ctx, cartID)
 	if err != nil {
@@ -161,6 +188,8 @@ func (s *Store) CreateFromCart(ctx context.Context, cartID string, c Customer, c
 		Currency:        currency,
 		Status:          string(StatusPending),
 		Gateway:         gateway,
+		CartVersion:     &version,
+		CheckoutKey:     &key,
 	})
 	if err != nil {
 		return Order{}, translate(fmt.Errorf("orders: create: %w", err))
@@ -208,6 +237,14 @@ func (s *Store) Get(ctx context.Context, id string) (Order, error) {
 		return Order{}, err
 	}
 	return o, nil
+}
+
+func (s *Store) CheckoutByKey(ctx context.Context, cartID, key string) (Order, error) {
+	row, err := s.q.GetCheckoutByKey(ctx, gen.GetCheckoutByKeyParams{CartID: &cartID, CheckoutKey: &key})
+	if err != nil {
+		return Order{}, translate(err)
+	}
+	return s.Get(ctx, row.ID)
 }
 
 // LatestForCart returns the most recent order placed from a cart, which is how the
@@ -286,6 +323,12 @@ func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
 // failing the call: the money has been taken, so refusing to record the order
 // would lose the sale as well as overselling the item.
 func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult, error) {
+	return s.MarkPaidWithMail(ctx, id, p, nil)
+}
+
+// MarkPaidWithMail commits payment, entitlements and encrypted delivery jobs
+// together. Preparing a job does no network I/O; delivery happens after commit.
+func (s *Store) MarkPaidWithMail(ctx context.Context, id string, p Payment, prepare func(PaidResult) ([]outbox.Message, error)) (PaidResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return PaidResult{}, fmt.Errorf("orders: begin: %w", err)
@@ -364,9 +407,20 @@ func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult,
 			return PaidResult{}, fmt.Errorf("orders: flag oversold: %w", err)
 		}
 	}
+	if prepare != nil {
+		messages, err := prepare(result)
+		if err != nil {
+			return PaidResult{}, err
+		}
+		for _, m := range messages {
+			if err := q.EnqueueEmail(ctx, gen.EnqueueEmailParams{OrderID: id, Kind: m.Kind, Payload: m.Payload}); err != nil {
+				return PaidResult{}, fmt.Errorf("orders: queue email: %w", err)
+			}
+		}
+	}
 
-	// The basket has become an order, so empty it. The cart row itself stays, so
-	// the shopper's cookie keeps working for their next visit.
+	// Consume only the unchanged basket version this order purchased. New edits
+	// belong to the shopper's current basket, not to a late payment notification.
 	if err := q.ClearCartForOrder(ctx, id); err != nil {
 		return PaidResult{}, fmt.Errorf("orders: clear cart: %w", err)
 	}
@@ -452,7 +506,10 @@ func (s *Store) MarkEmailed(ctx context.Context, id string) error {
 // instant" are not going to be confused.
 func order(r gen.Order) Order {
 	o := Order{
-		ID: r.ID,
+		FulfilledAt:       r.FulfilledAt,
+		TrackingReference: r.TrackingReference,
+		InternalNote:      r.InternalNote,
+		ID:                r.ID,
 		Customer: Customer{
 			Name:    r.CustomerName,
 			Email:   r.CustomerEmail,
@@ -480,6 +537,43 @@ func order(r gen.Order) Order {
 		o.PaidAt = *r.PaidAt
 	}
 	return o
+}
+
+const PageSize = 50
+
+// Search reads one extra row to offer a next link without a second count query.
+func (s *Store) Search(ctx context.Context, search, filter string, page int) ([]Order, bool, error) {
+	if page < 1 || page > 1000000 {
+		return nil, false, errors.New("orders: page out of range")
+	}
+	rows, err := s.q.SearchOrders(ctx, gen.SearchOrdersParams{
+		Search: search, Filter: filter, PageLimit: PageSize + 1, PageOffset: int32((page - 1) * PageSize),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	next := len(rows) > PageSize
+	if next {
+		rows = rows[:PageSize]
+	}
+	result := make([]Order, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, order(row))
+	}
+	return result, next, nil
+}
+
+func (s *Store) SetFulfillment(ctx context.Context, id, actor string, fulfilled bool, tracking, note string) error {
+	n, err := s.q.UpdateOrderFulfillment(ctx, gen.UpdateOrderFulfillmentParams{
+		ID: id, Actor: &actor, Fulfilled: fulfilled, TrackingReference: tracking, InternalNote: note,
+	})
+	if err != nil {
+		return translate(err)
+	}
+	if n == 0 {
+		return ErrNotFulfillable
+	}
+	return nil
 }
 
 // nullable keeps an empty gateway reference out of the partial unique index on

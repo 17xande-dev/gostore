@@ -251,8 +251,8 @@ func (g *Gateway) Handover(r payment.Request) (payment.Handover, error) {
 
 	add("merchant_id", g.cfg.MerchantID)
 	add("merchant_key", g.cfg.MerchantKey)
-	add("return_url", g.cfg.ReturnURL)
-	add("cancel_url", g.cfg.CancelURL)
+	add("return_url", payment.OrderReturnURL(g.cfg.ReturnURL, r.OrderID))
+	add("cancel_url", payment.OrderReturnURL(g.cfg.CancelURL, r.OrderID))
 	add("notify_url", g.cfg.NotifyURL)
 	add("name_first", r.NameFirst)
 	add("name_last", r.NameLast)

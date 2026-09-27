@@ -171,9 +171,9 @@ GET /downloads/{token}/{fileID}   check it is not revoked, check the file
 ```
 
 The token in the URL is the whole credential: there is no account and no login. **Only its
-SHA-256 hash is stored**, so a dump of the entitlements table is a list of hashes rather than
-a set of working links — and the consequence, stated plainly, is that a confirmation email
-that never arrives cannot be recovered from. Issue a fresh entitlement in that case.
+SHA-256 hash is stored in the entitlement**, so a dump of that table is a list of hashes
+rather than working links. Pending email jobs retain the link **encrypted** until sent,
+allowing delivery to recover after failure or restart without rotating the token.
 
 The link never points at the bucket. Authorising and recording happen before any bytes move,
 which is what makes revocation take effect on the next click and makes the counts trustworthy.
@@ -181,17 +181,16 @@ The signed URL is minted per click, so one forwarded to a friend is already expi
 
 A presigned URL's signature covers the `Host` header, so it must be signed for the address the
 *browser* will use rather than the one the server connects through. Those are the same
-everywhere except a container stack, which is what `DOWNLOAD_PUBLIC_ENDPOINT` is for — compose
-sets it, because the server reaches MinIO at `minio:9000` and a browser reaches it at
-`localhost:9000`.
+in the default R2 deployment. `DOWNLOAD_PUBLIC_ENDPOINT` is available for custom S3
+setups where the server and browser use different addresses. Local development uses
+disk storage and needs neither endpoint.
 
 ### Revoking
 
 `/admin/orders/{id}` lists an order's downloads with a **Revoke** button and how many times
 each has been taken. Revoking stops that buyer and nobody else, takes effect on their next
-click, and is reversible. These are the only forms on the order page — everything else there
-is read-only, because an order records what happened and a button that changed it would be a
-way to record money that never arrived. Revoking changes no financial fact.
+click, and is reversible. Fulfillment and email retry controls also change no financial
+fact: only a verified payment callback can mark an order paid.
 
 ### Statistics
 

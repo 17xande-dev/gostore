@@ -3,25 +3,28 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/downloads"
+	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/outbox"
 )
 
-// The admin's view of orders is read-only, and stays that way for a reason: an
-// order is a record of something that happened, and the only thing allowed to
-// change one is an authenticated gateway notification. A button here that marked an
-// order paid would be a way to record money that never arrived.
-//
-// What the operator needs is what these two pages show: what to pack, where to
-// send it, and — on the detail page — exactly what the gateway said, for the day a
-// customer and a bank disagree.
+// Payment facts stay read-only. Fulfillment, download access and email delivery
+// are separate operational state the administrator can manage.
 
 type ordersPage struct {
 	page
-	Orders []orders.Order
-	Limit  int
+	Orders   []orders.Order
+	Search   string
+	Filter   string
+	Number   int
+	Previous string
+	Next     string
 }
 
 type orderPage struct {
@@ -29,20 +32,82 @@ type orderPage struct {
 	Order orders.Order
 	// Entitlements are the download grants this order created, with a revoke
 	// button each. Empty for an order of physical goods only.
-	Entitlements []downloads.OrderEntitlement
+	Entitlements  []downloads.OrderEntitlement
+	Emails        []outbox.Status
+	PendingEmails bool
 }
 
 func (h *Handler) adminOrderList(w http.ResponseWriter, r *http.Request) {
-	list, err := h.orders.List(r.Context(), orders.DefaultListLimit)
+	search := strings.TrimSpace(r.URL.Query().Get("q"))
+	filter := r.URL.Query().Get("filter")
+	number := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		var err error
+		number, err = strconv.Atoi(raw)
+		if err != nil || number < 1 || number > 1000000 {
+			h.badForm(w, r)
+			return
+		}
+	}
+	if len(search) > 200 {
+		h.badForm(w, r)
+		return
+	}
+	switch filter {
+	case "", "oversold", "email", "unfulfilled":
+	default:
+		h.badForm(w, r)
+		return
+	}
+	list, next, err := h.orders.Search(r.Context(), search, filter, number)
 	if err != nil {
 		h.serverError(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "admin_orders", ordersPage{
+	data := ordersPage{
 		page:   h.newPage(r, "Orders"),
 		Orders: list,
-		Limit:  orders.DefaultListLimit,
-	})
+		Search: search, Filter: filter, Number: number,
+	}
+	link := func(page int) string {
+		return "/admin/orders?" + url.Values{"q": {search}, "filter": {filter}, "page": {strconv.Itoa(page)}}.Encode()
+	}
+	if number > 1 {
+		data.Previous = link(number - 1)
+	}
+	if next {
+		data.Next = link(number + 1)
+	}
+	h.render(w, r, http.StatusOK, "admin_orders", data)
+}
+
+func (h *Handler) adminOrderFulfillment(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		h.badForm(w, r)
+		return
+	}
+	state := r.PostFormValue("fulfilled")
+	tracking, note := strings.TrimSpace(r.PostFormValue("tracking")), strings.TrimSpace(r.PostFormValue("note"))
+	if (state != "0" && state != "1") || len(tracking) > 200 || len(note) > 4000 {
+		h.badForm(w, r)
+		return
+	}
+	actor, ok := middleware.AdminUser(r)
+	if !ok {
+		h.clientError(w, r, http.StatusForbidden, "Sign in required", "Sign in before updating an order.")
+		return
+	}
+	err := h.orders.SetFulfillment(r.Context(), r.PathValue("id"), actor.ID, state == "1", tracking, note)
+	if errors.Is(err, orders.ErrNotFulfillable) {
+		h.clientError(w, r, http.StatusConflict, "Cannot fulfill this order", "Only paid orders containing physical goods can be fulfilled.")
+		return
+	}
+	if err != nil {
+		h.orderError(w, r, err)
+		return
+	}
+	h.logger(r).Info("updated order fulfillment", "order", r.PathValue("id"), "actor", actor.ID, "fulfilled", state == "1")
+	http.Redirect(w, r, "/admin/orders/"+r.PathValue("id"), http.StatusSeeOther)
 }
 
 func (h *Handler) adminOrderShow(w http.ResponseWriter, r *http.Request) {
@@ -60,11 +125,41 @@ func (h *Handler) adminOrderShow(w http.ResponseWriter, r *http.Request) {
 		h.serverError(w, r, err)
 		return
 	}
+	var emails []outbox.Status
+	var pending bool
+	if h.outbox != nil {
+		emails, err = h.outbox.ForOrder(r.Context(), order.ID)
+		if err != nil {
+			h.serverError(w, r, err)
+			return
+		}
+		for _, email := range emails {
+			if email.SentAt == nil {
+				pending = true
+			}
+		}
+	}
 	h.render(w, r, http.StatusOK, "admin_order", orderPage{
-		page:         h.newPage(r, "Order "+order.Reference()),
-		Order:        order,
-		Entitlements: grants,
+		page:          h.newPage(r, "Order "+order.Reference()),
+		Order:         order,
+		Entitlements:  grants,
+		Emails:        emails,
+		PendingEmails: pending,
 	})
+}
+
+func (h *Handler) adminOrderEmailRetry(w http.ResponseWriter, r *http.Request) {
+	order, err := h.orders.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.orderError(w, r, err)
+		return
+	}
+	if err := h.outbox.Retry(r.Context(), order.ID); err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	h.logger(r).Info("queued order emails for retry", "order", order.ID)
+	http.Redirect(w, r, "/admin/orders/"+order.ID, http.StatusSeeOther)
 }
 
 // orderError maps an orders error onto a response. It exists separately from

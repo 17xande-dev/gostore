@@ -1,11 +1,4 @@
-// Package db owns the Postgres connection pool and runs migrations on boot.
-//
-// Migrations are goose-managed .sql files embedded into the binary, applied in
-// version order, one transaction each. goose is used as a library rather than
-// through its CLI so a deploy is always a single binary with its schema
-// changes travelling inside it — but the files are ordinary goose migrations,
-// so the `goose` CLI works against this directory unchanged when a migration
-// needs to be inspected, resumed, or applied by hand.
+// Package db owns the Postgres connection pool and runs embedded goose migrations.
 package db
 
 import (
@@ -26,9 +19,7 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// migrationLockID is an arbitrary but fixed key for the Postgres advisory lock
-// goose holds while migrating, so concurrent boots of a scaled-out deployment
-// queue instead of racing.
+// Concurrent boots queue rather than applying the same migration twice.
 const migrationLockID int64 = 8_675_309_001
 
 // Connect opens a pool and verifies it can reach the database.
@@ -37,12 +28,10 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: parse DATABASE_URL: %w", err)
 	}
-
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: create pool: %w", err)
 	}
-
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
@@ -52,20 +41,18 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Migrate applies every embedded migration that has not been applied yet.
+// Migrate applies embedded migrations in version order, skipping completed ones.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	return MigrateFS(ctx, pool, migrationsFS, "migrations", log)
 }
 
-// MigrateFS applies migrations from an arbitrary filesystem. Migrate uses the
-// embedded set; tests use this directly.
+// MigrateFS lets tests exercise future schema changes and their failure modes.
 func MigrateFS(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, log *slog.Logger) error {
 	provider, closeDB, err := newProvider(pool, fsys, dir, log)
 	if err != nil {
 		return err
 	}
 	defer closeDB()
-
 	results, err := provider.Up(ctx)
 	if err != nil {
 		return fmt.Errorf("db: apply migrations: %w", err)
@@ -76,15 +63,13 @@ func MigrateFS(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir string, 
 	return nil
 }
 
-// Status returns each known migration and whether it has been applied, for
-// operators asking "is this database up to date?" without a psql session.
+// Status reports applied and pending migrations without starting the server.
 func Status(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) ([]*goose.MigrationStatus, error) {
 	provider, closeDB, err := newProvider(pool, migrationsFS, "migrations", log)
 	if err != nil {
 		return nil, err
 	}
 	defer closeDB()
-
 	status, err := provider.Status(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("db: migration status: %w", err)
@@ -92,39 +77,27 @@ func Status(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) ([]*goose
 	return status, nil
 }
 
-// newProvider adapts the pgx pool to the database/sql handle goose wants. The
-// returned func closes only that adapter, never the pool.
+// The database/sql adapter belongs to goose; closing it must not close the pgx pool.
 func newProvider(pool *pgxpool.Pool, fsys fs.FS, dir string, log *slog.Logger) (*goose.Provider, func(), error) {
-	// goose resolves migrations from the root of the FS it is given.
 	sub, err := fs.Sub(fsys, dir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("db: migrations dir %q: %w", dir, err)
 	}
-
 	sqlDB := stdlib.OpenDBFromPool(pool)
-
-	// A session-level advisory lock: goose holds it on one connection for the
-	// whole run, so a second instance booting at the same time waits rather
-	// than applying the same migration twice.
 	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(migrationLockID))
 	if err != nil {
 		sqlDB.Close()
 		return nil, nil, fmt.Errorf("db: create migration locker: %w", err)
 	}
-
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub,
 		goose.WithSessionLocker(locker),
 		goose.WithSlog(log),
-		// Forward-only: a migration numbered below one already applied would
-		// produce a different schema depending on when you first ran it, which
-		// a published project must never do to an adopter's database.
 		goose.WithAllowOutofOrder(false),
 	)
 	if err != nil {
 		sqlDB.Close()
 		return nil, nil, fmt.Errorf("db: create migration provider: %w", err)
 	}
-
 	return provider, func() { closeQuietly(sqlDB, log) }, nil
 }
 

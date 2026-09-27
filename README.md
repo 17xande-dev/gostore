@@ -37,10 +37,16 @@ open http://localhost:8080/admin      # redirects to /admin/setup; paste the tok
 ```
 
 `make up` starts Postgres, [mailpit](http://localhost:8025) (captures outgoing email),
-[MinIO](http://localhost:9001) (S3-compatible object storage) and the server. Migrations
+and the server. Images and purchased files live in `.local/images` and
+`.local/downloads`, shared with host-side `make run` and `make seed`. Migrations
 are applied automatically on boot. It also mounts [`theme/`](theme) into the server with
 reloading on, so a stylesheet or template dropped in there takes effect on the next page
 refresh — see [Theming](docs/theming.md#theming).
+
+Production templates use **Cloudflare R2**: a public image bucket and a separate
+private download bucket. They also require `EMAIL_QUEUE_KEY` (`openssl rand -hex 32`)
+to encrypt pending email jobs. Keep this key with your backups. The development
+stack supplies a public development-only key.
 
 Other useful targets:
 

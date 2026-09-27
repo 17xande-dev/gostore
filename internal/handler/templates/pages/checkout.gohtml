@@ -34,6 +34,7 @@
 
 <form method="post" action="/cart/checkout">
   {{template "csrf" .CSRFToken}}
+  <input type="hidden" name="checkout_key" value="{{.Form.Key}}">
 
   <p>
     <label>Name

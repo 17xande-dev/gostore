@@ -115,6 +115,11 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 // same-origin navigation, so its presence and value is the signal. Sec-Fetch-Site
 // is checked too, for browsers that send Origin on same-origin fetches.
 func (h *Handler) isEmbedded(r *http.Request) bool {
+	// Following a link from another website is still a first-party page visit.
+	// Fetch-Site alone describes the source, not where the response will render.
+	if r.Header.Get("Sec-Fetch-Mode") == "navigate" && r.Header.Get("Sec-Fetch-Dest") == "document" {
+		return false
+	}
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "same-origin", "none":
 		return false

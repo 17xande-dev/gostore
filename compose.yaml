@@ -1,4 +1,5 @@
-# The whole local stack. `make up` should be the entire quickstart.
+# Local development: Go, Postgres, Mailpit, and ordinary files. Production
+# deployments in deploy/ use public-image and private-download R2 buckets.
 name: gostore
 
 services:
@@ -9,7 +10,7 @@ services:
       POSTGRES_PASSWORD: gostore
       POSTGRES_DB: gostore
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,167 +19,70 @@ services:
       timeout: 3s
       retries: 20
 
-  # Catches every outgoing email in development; web UI on :8025.
   mailpit:
     image: axllent/mailpit:latest
     ports:
-      - "1025:1025"
-      - "8025:8025"
-
-  # S3-compatible object storage, so image uploads work locally exactly as they
-  # will against S3 or GCS in production.
-  #
-  # From Quay because MinIO deleted its Docker Hub repositories; these are the
-  # last, unpatched community builds. Being replaced by versitygw — see
-  # "Decisions still open" in docs/development.md.
-  minio:
-    image: quay.io/minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: gostore
-      MINIO_ROOT_PASSWORD: gostore123
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  # Creates the image bucket and makes it publicly readable, then exits. MinIO does
-  # not create buckets on demand, and the store deliberately has no
-  # bucket-creation rights: an application that can create buckets can also be
-  # made to create a thousand of them.
-  minio-init:
-    image: quay.io/minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 gostore gostore123 &&
-      mc mb --ignore-existing local/gostore-images &&
-      mc anonymous set download local/gostore-images &&
-      mc mb --ignore-existing local/gostore-downloads &&
-      mc anonymous set none local/gostore-downloads &&
-      echo 'gostore-images ready (public read), gostore-downloads ready (private)'
-      "
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
 
   server:
     build: .
-    # Anything in a local .env overrides the development defaults below, which
-    # is what makes "copy .env.example to .env and edit" actually do something.
+    # make up supplies the host UID/GID and creates these bind directories, so
+    # container uploads and host-side make run/seed share writable files.
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     env_file:
       - path: .env
         required: false
     environment:
-      # Deliberately not interpolated: inside compose the server must reach the
-      # postgres service, whatever DATABASE_URL a local .env sets for host-side
-      # runs. Everything else below takes a .env value when there is one.
       DATABASE_URL: postgres://gostore:gostore@postgres:5432/gostore?sslmode=disable
       PORT: "8080"
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       STORE_NAME: ${STORE_NAME:-gostore}
       CURRENCY: ${CURRENCY:-ZAR}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      # No admin credential here, on purpose, and none defaulted either: a
-      # published default password is a real CVE class, and worse in a file
-      # adopters copy. The first start against an empty database prints a
-      # one-time setup token —
-      #
-      #   docker compose logs server | grep setup_token
-      #
-      # — which /admin/setup exchanges for the first administrator. SETUP_TOKEN
-      # can supply that token instead, for a deploy with nobody reading logs.
       SETUP_TOKEN: ${SETUP_TOKEN:-}
-      # PayFast's own published sandbox credentials, so `make up` yields a
-      # working checkout. They are in PayFast's documentation and take no real
-      # money — but PAYFAST_SANDBOX must stay true for that to remain the case.
       PAYFAST_MERCHANT_ID: ${PAYFAST_MERCHANT_ID:-10000100}
       PAYFAST_MERCHANT_KEY: ${PAYFAST_MERCHANT_KEY:-46f0cd694581a}
       PAYFAST_PASSPHRASE: ${PAYFAST_PASSPHRASE:-jt7NOE43FZPn}
       PAYFAST_SANDBOX: ${PAYFAST_SANDBOX:-true}
-      # The sandbox does not necessarily notify from PayFast's published
-      # production ranges, and a local notification cannot arrive at all without
-      # a tunnel. Off here, never off in production.
       PAYFAST_ALLOWED_CIDRS: ${PAYFAST_ALLOWED_CIDRS:-any}
       PAYFAST_NOTIFY_URL: ${PAYFAST_NOTIFY_URL:-}
-      # SnapScan is off unless a snap code is supplied, and deliberately has no
-      # default: it has no sandbox, so any value here takes real money. See
-      # .env.example.
-      SNAPSCAN_SNAP_CODE: ${SNAPSCAN_SNAP_CODE:-}
-      SNAPSCAN_API_KEY: ${SNAPSCAN_API_KEY:-}
-      SNAPSCAN_WEBHOOK_AUTH_KEY: ${SNAPSCAN_WEBHOOK_AUTH_KEY:-}
-      SNAPSCAN_VALIDATION_KEY: ${SNAPSCAN_VALIDATION_KEY:-}
-      # Mail goes to the mailpit service, where every message is caught and
-      # readable at http://localhost:8025 rather than delivered to anybody. TLS is
-      # off because mailpit offers none; that is correct here and nowhere else.
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
-      SMTP_TLS: ${SMTP_TLS:-none}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_TLS: none
       EMAIL_FROM: ${EMAIL_FROM:-orders@gostore.example}
       ORDER_NOTIFY_EMAIL: ${ORDER_NOTIFY_EMAIL:-shop@gostore.example}
-      # Product images go to the MinIO service. Note the two addresses, which is
-      # exactly why BLOB_PUBLIC_BASE_URL exists as its own value rather than being
-      # derived from the endpoint: the *server* reaches MinIO at minio:9000 inside
-      # the compose network, while the *browser* fetching an image reaches it at
-      # localhost:9000. In production the same split is R2's
-      # <account>.r2.cloudflarestorage.com versus a custom domain.
-      BLOB_ENDPOINT: ${BLOB_ENDPOINT:-minio:9000}
-      BLOB_BUCKET: ${BLOB_BUCKET:-gostore-images}
-      BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-gostore}
-      BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-gostore123}
-      BLOB_USE_TLS: ${BLOB_USE_TLS:-false}
-      BLOB_PUBLIC_BASE_URL: ${BLOB_PUBLIC_BASE_URL:-http://localhost:9000/gostore-images}
-      # Private storage for the files a digital product is made of. NEVER the image
-      # bucket: that one is anonymously readable above, so a purchased file in it
-      # would be one URL guess away from everybody — and public access on GCS and R2
-      # is a whole-bucket toggle rather than something a prefix can carry. The config
-      # refuses the overlap at boot.
-      #
-      # DOWNLOAD_PUBLIC_ENDPOINT is the interesting line. This server reaches MinIO
-      # at minio:9000 and a browser reaches it at localhost:9000, and a presigned
-      # URL's signature covers the Host header — so a URL signed for the first
-      # address cannot be rewritten to the second, it has to be signed for the
-      # browser's address from the start. Without it the download redirect would
-      # point at a hostname only this container can resolve. Real deployments have
-      # one address and leave it unset.
-      DOWNLOAD_ENDPOINT: ${DOWNLOAD_ENDPOINT:-minio:9000}
-      DOWNLOAD_PUBLIC_ENDPOINT: ${DOWNLOAD_PUBLIC_ENDPOINT:-localhost:9000}
-      DOWNLOAD_BUCKET: ${DOWNLOAD_BUCKET:-gostore-downloads}
-      DOWNLOAD_ACCESS_KEY_ID: ${DOWNLOAD_ACCESS_KEY_ID:-gostore}
-      DOWNLOAD_SECRET_ACCESS_KEY: ${DOWNLOAD_SECRET_ACCESS_KEY:-gostore123}
-      DOWNLOAD_USE_TLS: ${DOWNLOAD_USE_TLS:-false}
-      # Theming. The paths are the container's and so are deliberately not
-      # interpolated, for the same reason DATABASE_URL is not: a local .env
-      # pointing TEMPLATE_DIR at a host-relative ./theme/templates for `make run`
-      # must not become a path that does not exist in here.
-      #
-      # Both directories are empty on a clean checkout, so this changes nothing
-      # until a file is put in one. With THEME_RELOAD the server re-reads them on
-      # every request, which is what makes editing a template or a stylesheet and
-      # refreshing the page enough — no restart, no rebuild. Development only: set
-      # THEME_RELOAD=false to get production's read-once behaviour back.
+      # Public development key, never use for a live store. Production requires
+      # a generated EMAIL_QUEUE_KEY (or EMAIL_QUEUE_KEY_FILE).
+      EMAIL_QUEUE_KEY: ${EMAIL_QUEUE_KEY:-abababababababababababababababababababababababababababababababab}
+      IMAGE_DIR: /images
+      DOWNLOAD_DIR: /downloads
+      # An older .env may still contain S3 settings. Development deliberately
+      # uses disk; choose deploy/ for an R2-backed installation.
+      BLOB_ENDPOINT: ""
+      BLOB_BUCKET: ""
+      BLOB_ACCESS_KEY_ID: ""
+      BLOB_SECRET_ACCESS_KEY: ""
+      BLOB_PUBLIC_BASE_URL: ""
+      DOWNLOAD_ENDPOINT: ""
+      DOWNLOAD_BUCKET: ""
+      DOWNLOAD_ACCESS_KEY_ID: ""
+      DOWNLOAD_SECRET_ACCESS_KEY: ""
+      DOWNLOAD_PUBLIC_ENDPOINT: ""
       TEMPLATE_DIR: /theme/templates
       STATIC_DIR: /theme/static
       THEME_RELOAD: ${THEME_RELOAD:-true}
     volumes:
-      # Read-only: the store renders a theme, it never writes one.
+      - ./.local/images:/images
+      - ./.local/downloads:/downloads
       - ./theme:/theme:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
       mailpit:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
 
 volumes:
   pgdata:
-  miniodata:

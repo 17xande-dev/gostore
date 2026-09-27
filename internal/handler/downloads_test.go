@@ -128,6 +128,7 @@ func (d *digitalShop) buy(t *testing.T, variantID string) string {
 		t.Fatalf("LatestForCart: %v", err)
 	}
 	callback(t, d.srv, "fake", payment.FakeCallbackBody(order.ID, "pf-"+order.ID[:8], "paid", order.TotalCents))
+	d.handler.ProcessMail(t.Context())
 
 	sent := d.mail.To("jane@example.com")
 	if len(sent) == 0 {

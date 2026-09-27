@@ -1,34 +1,35 @@
 # Orders and email
 
-Two pages, both read-only:
+Two order views:
 
 | Route | Shows |
 |---|---|
 | `GET /admin/orders` | Recent orders, newest first |
 | `GET /admin/orders/{id}` | What to pack, where it goes, and what the gateway said |
 
-**There are no buttons on either page, deliberately.** An order records something that
-happened, and the only thing allowed to change one is an authenticated gateway notification.
-A "mark as paid" button in the admin would be a way to record money that never arrived. A test
-asserts that no route under `/admin/orders` accepts a `POST`, so adding one is a decision
-somebody has to make on purpose.
+Only authenticated gateway callbacks can mark an order paid. Administrators with
+`orders.write` can update fulfillment, retry pending email delivery and revoke or restore download access;
+neither action changes the payment record.
 
 The order page shows the **snapshot** — the title, options and unit price as they were when
 the order was placed — so renaming, repricing or withdrawing a product afterwards does not
 rewrite what somebody bought. It also shows the raw gateway notification, for the day a
 customer and a bank disagree about what happened.
 
-The list is capped at the 200 most recent. Products are a small fixed set; orders accumulate
-forever, so "the catalog is small" does not carry over to this table.
+The list is paginated, 50 orders per page. Search by short/full reference, name or email;
+filter for awaiting fulfillment, oversold orders, or pending email delivery (either
+customer or owner). Paid orders with physical items have a separate fulfillment state,
+tracking reference and internal note. Changes record the acting administrator and time,
+and never alter payment status, inventory, totals or gateway evidence.
 
 ## What gets sent, and when
 
-When an authenticated notification says an order is paid, two emails go out — and both go out
-**after** the order is recorded paid. That ordering is the whole point: a mail server having a
-bad afternoon must never be able to lose a sale. Nothing in the mail path can fail the payment
-callback.
+Payment, download entitlements, and encrypted email jobs commit in **one transaction**.
+A worker in the Go process checks for due jobs every five seconds, independently of
+the callback. SMTP failures never roll back a committed payment. If the transaction
+cannot save the jobs, the callback returns 503 so the provider retries the payment.
 
-- **The customer** gets a receipt, once. `orders.emailed` records it, so a replayed gateway
+- **The customer** gets a receipt. `orders.emailed` records it, so a replayed gateway
   notification does not send a second copy. Both a plain-text and an HTML part are sent; the
   plain-text one is not optional, because a receipt has to arrive readable in a client that
   refuses HTML.
@@ -40,12 +41,25 @@ callback.
 They are two separate sends rather than one message with two recipients: a receipt and a work
 order say different things, and one of them failing should not suppress the other.
 
-**Mail is required and the server will not start without it.** That reverses what this
-section used to say. The old reasoning — the shop's job is to take an order and record it,
-which does not depend on a mail server — held while every product was a parcel. It stopped
-holding when a product could be a download: that link is emailed and nowhere else, because
-only its hash is stored. `mailer.Discard` still exists for tests and for an adopter assembling
-their own `main`, but the shipped binary no longer reaches it.
+Mail configuration and `EMAIL_QUEUE_KEY` are required. Generate the key with
+`openssl rand -hex 32`, or supply it through `EMAIL_QUEUE_KEY_FILE`. Jobs use AES-256-GCM
+with a random nonce and authenticated order/kind metadata. Only encrypted pending
+payloads retain download tokens; successful delivery erases the payload and leaves
+delivery status. Backups can retain older ciphertext, so protect the key separately.
+
+Failures retry with exponential backoff from 30 seconds to one hour. The order detail
+page shows attempts and failures; **Retry pending emails** makes unsent jobs due now.
+It does not resend successful messages or regenerate download credentials. Restarting
+the server resumes the queue with the same key and the same links.
+
+Delivery is **at least once**, not exactly once: if SMTP accepts a message and the
+process dies before recording success, the worker may send it again. Payment and
+stock changes remain idempotent. Multiple workers coordinate with Postgres row locks.
+
+Keep `EMAIL_QUEUE_KEY` unchanged while jobs are pending. To rotate it, pause checkout,
+drain the queue, change the key, then resume. Restoring an older backup requires its
+matching key and may redeliver jobs that were pending at backup time. Existing paid
+orders from before this feature do not acquire jobs automatically.
 
 Sending itself lives in [`github.com/17xande-dev/mailer`](https://github.com/17xande-dev/mailer),
 which is shared with another application rather than kept here.
@@ -77,8 +91,8 @@ mailbox** — it is disabled tenant-wide by default. Check each against current 
 documentation; these requirements move.
 
 Worth weighing before choosing this at all: Exchange Online is a mailbox service rather than
-a transactional relay, and it throttles accordingly. A dropped confirmation costs a buyer
-their download link, since it exists nowhere else. A dedicated transactional provider over
+a transactional relay, and it throttles accordingly. A delayed confirmation keeps a buyer
+waiting for their download link. A dedicated transactional provider over
 ordinary SMTP is the lower-risk option for a storefront, and needs none of the above — just
 `SMTP_USERNAME` and `SMTP_PASSWORD`.
 

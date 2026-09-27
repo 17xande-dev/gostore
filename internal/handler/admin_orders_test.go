@@ -16,6 +16,7 @@ func paidOrder(t *testing.T, s *shop) string {
 	t.Helper()
 	order := placeOrder(t, s, "S", 2)
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 	return order.ID
 }
 
@@ -110,11 +111,11 @@ func TestAdminOrders_ShowsWhatToPackAndWhatTheGatewaySaid(t *testing.T) {
 		t.Error("the order page does not show the raw notification")
 	}
 
-	// Read-only: an order records something that happened, and only an
-	// authenticated gateway notification may change one. A form here would be a way
-	// to record money that never arrived.
-	if strings.Contains(body, `<form method="post" action="/admin/orders`) {
-		t.Error("the order page has a form that could alter the order")
+	// Delivery controls must not create an alternative route to marking it paid.
+	for _, match := range regexp.MustCompile(`<form method="post" action="(/admin/orders[^\"]*)"`).FindAllStringSubmatch(body, -1) {
+		if match[1] != "/admin/orders/"+id+"/email/retry" && match[1] != "/admin/orders/"+id+"/fulfillment" {
+			t.Errorf("unexpected order mutation: %s", match[1])
+		}
 	}
 }
 

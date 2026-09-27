@@ -17,9 +17,12 @@ ORDER BY p.title, v.option1, v.option2, v.option3, v.sku;
 
 -- name: CreateOrder :one
 INSERT INTO orders (id, cart_id, customer_name, customer_email, customer_phone,
-                    shipping_address, total_cents, currency, status, gateway)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    shipping_address, total_cents, currency, status, gateway, cart_version, checkout_key)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id, created_at;
+
+-- name: GetCheckoutByKey :one
+SELECT * FROM orders WHERE cart_id = $1 AND checkout_key = $2;
 
 -- The snapshot: later catalog edits must never rewrite purchase history.
 --
@@ -48,6 +51,30 @@ SELECT * FROM orders WHERE cart_id = $1 ORDER BY created_at DESC LIMIT 1;
 -- lines are one click away.
 -- name: ListRecentOrders :many
 SELECT * FROM orders ORDER BY created_at DESC LIMIT $1;
+
+-- name: SearchOrders :many
+SELECT o.* FROM orders o
+WHERE (sqlc.arg(search)::text = ''
+       OR strpos(lower(o.id::text), lower(sqlc.arg(search))) > 0
+       OR strpos(lower(o.customer_email), lower(sqlc.arg(search))) > 0
+       OR strpos(lower(o.customer_name), lower(sqlc.arg(search))) > 0)
+  AND (sqlc.arg(filter)::text = ''
+       OR (sqlc.arg(filter) = 'oversold' AND o.oversold)
+       OR (sqlc.arg(filter) = 'email' AND EXISTS
+           (SELECT 1 FROM email_jobs e WHERE e.order_id = o.id AND e.sent_at IS NULL))
+       OR (sqlc.arg(filter) = 'unfulfilled' AND o.status = 'paid' AND o.fulfilled_at IS NULL
+           AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND i.kind = 'physical')))
+ORDER BY o.created_at DESC, o.id DESC
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
+
+-- Payment facts are never written by the administrator.
+-- name: UpdateOrderFulfillment :execrows
+UPDATE orders SET
+    fulfilled_at = CASE WHEN sqlc.arg(fulfilled)::bool THEN COALESCE(fulfilled_at, now()) ELSE NULL END,
+    tracking_reference = sqlc.arg(tracking_reference), internal_note = sqlc.arg(internal_note),
+    fulfillment_updated_at = now(), fulfillment_updated_by = sqlc.arg(actor)
+WHERE orders.id = sqlc.arg(id) AND orders.status = 'paid'
+  AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = orders.id AND i.kind = 'physical');
 
 -- name: ListOrderItems :many
 SELECT id, variant_id, title, variant_label, kind, unit_price_cents, quantity
@@ -80,13 +107,16 @@ UPDATE orders SET oversold = TRUE WHERE id = $1;
 -- name: DecrementVariantStock :execrows
 UPDATE product_variants SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1;
 
--- The basket has become an order, so empty it. The cart row itself stays, so the
--- shopper's cookie keeps working for their next visit.
--- `orders.id` is qualified deliberately: cart_items has an id column too, so a
--- bare `id` here relies on Postgres resolving the innermost scope. It does, and
--- sqlc refuses to guess — which is the better position of the two.
+-- Only the unchanged purchased version is consumed. UPDATE takes the same cart
+-- lock as every mutation, so a later edit cannot race the comparison and delete.
 -- name: ClearCartForOrder :exec
-DELETE FROM cart_items WHERE cart_id = (SELECT cart_id FROM orders WHERE orders.id = $1);
+WITH consumed AS (
+    UPDATE carts c SET version = c.version + 1, updated_at = now()
+    FROM orders o
+    WHERE o.id = $1 AND c.id = o.cart_id AND c.version = o.cart_version
+    RETURNING c.id
+)
+DELETE FROM cart_items WHERE cart_id IN (SELECT id FROM consumed);
 
 -- Never contradicts a payment: a late failure notification arriving after a
 -- genuine completion must not un-sell something already being packed.

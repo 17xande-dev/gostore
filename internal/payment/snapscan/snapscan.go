@@ -246,8 +246,8 @@ func (g *Gateway) Handover(r payment.Request) (payment.Handover, error) {
 	// The link additionally says where to put the shopper's browser afterwards.
 	link := url.Values{}
 	maps.Copy(link, q)
-	link.Set("s_url", g.cfg.SuccessURL)
-	link.Set("f_url", g.cfg.FailURL)
+	link.Set("s_url", payment.OrderReturnURL(g.cfg.SuccessURL, r.OrderID))
+	link.Set("f_url", payment.OrderReturnURL(g.cfg.FailURL, r.OrderID))
 	action := g.base + "/qr/" + g.cfg.SnapCode + "?" + link.Encode()
 
 	// The image is the same payment with a format suffix on the snap code — and

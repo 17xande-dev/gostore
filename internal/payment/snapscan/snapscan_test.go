@@ -74,10 +74,10 @@ func TestHandover_BuildsThePaymentURL(t *testing.T) {
 	if q.Get("strict") != "true" {
 		t.Errorf("strict = %q, want true", q.Get("strict"))
 	}
-	if q.Get("s_url") != "https://store.example/cart/checkout/success" {
+	if q.Get("s_url") != "https://store.example/cart/checkout/success?order="+testRequest().OrderID {
 		t.Errorf("s_url = %q", q.Get("s_url"))
 	}
-	if q.Get("f_url") != "https://store.example/cart/checkout/cancel" {
+	if q.Get("f_url") != "https://store.example/cart/checkout/cancel?order="+testRequest().OrderID {
 		t.Errorf("f_url = %q", q.Get("f_url"))
 	}
 	// No validation key configured, so no signature — an empty one would be

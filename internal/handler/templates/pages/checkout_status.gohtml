@@ -22,7 +22,7 @@
   <p class="muted">We have nothing to confirm for this basket yet.</p>
 {{else if .Paid}}
   <p><strong>Payment received</strong> for order {{.Order.Reference}}.
-  <a href="/cart/checkout/success">See your order</a>.</p>
+  <a href="/cart/checkout/success?order={{.Order.ID}}">See your order</a>.</p>
 {{else if .Failed}}
   <p><strong>That payment did not go through.</strong>
   <a href="/cart">Your basket is still here</a> if you would like to try again.</p>
@@ -35,7 +35,7 @@
     5 seconds, not 1: a shopper is unlocking a phone and typing a PIN, and the
     limiter this route sits behind allows 30 a minute.
   */}}
-  <p hx-get="/cart/checkout/status" hx-trigger="every 5s" hx-swap="outerHTML" class="muted">
+  <p hx-get="/cart/checkout/status?order={{.Order.ID}}" hx-trigger="every 5s" hx-swap="outerHTML" class="muted">
     Waiting for your payment…
   </p>
 {{end}}

@@ -54,6 +54,12 @@ Three things worth knowing before touching `sqlc.yaml`:
 
 ### Migrations
 
+**Current greenfield baseline:** `0001_init.sql` contains the complete schema,
+including checkout attempts, the email outbox and fulfillment tracking. There are
+no incremental upgrade migrations yet. Edit the baseline's table definitions while
+the project is greenfield, regenerate with `make sqlc`, and recreate the development
+database to pick up the new schema.
+
 The migrations are also sqlc's idea of the schema, so a migration and the generated code
 change together: add a column, run `make sqlc`.
 
@@ -72,7 +78,7 @@ ALTER TABLE products ADD COLUMN subtitle TEXT NOT NULL DEFAULT '';
 ALTER TABLE products DROP COLUMN subtitle;
 ```
 
-Four rules, each with teeth:
+Once there is deployed data to preserve, use these rules for subsequent changes:
 
 - **Never edit a migration that has been applied anywhere.** goose records versions, not
   checksums, so an edited file is silently skipped and the schema quietly diverges from
@@ -94,11 +100,9 @@ Four rules, each with teeth:
 Statements that cannot run inside a transaction — `CREATE INDEX CONCURRENTLY`, most
 notably — need `-- +goose NO TRANSACTION` at the top of the file.
 
-The first rule has been broken exactly once, deliberately: `0001_init.sql` was rewritten and
-four follow-on migrations folded into it, before the project was published and while its only
-database was a development one. If you are reading this in a released version, that window is
-closed — the rule is absolute now, and a database from before the rewrite is recreated with
-`make down ARGS=-v && make up && make seed`.
+For a disposable development database, `make down ARGS=-v && make up && make seed`
+recreates and reseeds the schema. This deletes the Compose database volume. Goose
+records applied versions, so simply restarting will not reapply an edited baseline.
 
 The files are ordinary goose migrations, so the `goose` CLI works against this directory
 unchanged when a migration needs to be inspected or applied by hand.
@@ -162,7 +166,10 @@ Recorded here so they are decided deliberately rather than by default:
 | Accent-insensitive search | `unaccent`, behind an `IMMUTABLE` wrapper so it can be indexed | When a catalog carries accented titles and "cafe" failing to find "café" starts costing sales |
 | Keyset pagination | a cursor on the ranking and title | When a catalog is deep enough that discarding rows to reach a late page is measurable |
 | Tuned trigram thresholds | `AfterConnect` on the pgx pool | When the defaults visibly over- or under-match; they are session settings, so they belong on the connection, not in a query |
-| Local object storage (dev and the tunnel deployment) | [versitygw](https://github.com/versity/versitygw) as the server, [rclone](https://rclone.org) for backups, `aws-cli` for bucket setup | **Decided, not yet done** (2026-09-23). MinIO's community edition was archived in February 2026, its images stopped receiving patches in October 2025, and `minio/minio` and `minio/mc` were deleted from Docker Hub on 2026-09-11. Until the migration, `compose.yaml` and `deploy/tunnel` pull the last builds from `quay.io/minio/*` — frozen, unpatched, and at risk of disappearing the same way. versitygw was chosen for Apache-2.0 licensing, several maintainers, publishing to both Docker Hub and GHCR, and serving public reads through a bucket policy at the same path-style URLs, so `BLOB_PUBLIC_BASE_URL` keeps its shape. `deploy/standard` is unaffected: it uses R2, and the `minio-go` client library is still maintained |
+| Storage defaults | Local directories for development, R2 for production | **Closed** (2026-09-27). Replaces the planned local S3-server migration. Development uses `.local/images` and `.local/downloads`; both production templates use separate public/private R2 buckets. No local object-storage service is required. |
+| Durable email delivery | Encrypted Postgres outbox and in-process worker | **Closed** (2026-09-27). AES-256-GCM uses the Go standard library and `EMAIL_QUEUE_KEY`. No broker or additional runtime dependency. Jobs commit with payment, retry after restart, and erase their payload after delivery. |
+| Scarce-stock reservations | Expiring reservations versus payment-time decrement | Keep payment-time decrement and oversell reporting until the shop requires exclusive stock holds. Reservations need a policy for late payment and expiry. |
+| Purchased digital-file membership | Purchase-time file snapshot versus ongoing access to the variant's current files | Current behavior is ongoing access. Change only when the product promise requires an immutable purchased edition; this also determines archival/deletion policy. |
 
 ## Build order
 

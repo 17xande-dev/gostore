@@ -212,23 +212,29 @@ func (g *Gateway) confirm(ctx context.Context, body []byte) error {
 		// A network failure is not a rejection: the notification may well be
 		// genuine. It is still not confirmed, so the order stays pending and
 		// PayFast's retry gets another chance.
-		return fmt.Errorf("%w: %w", ErrNotValidated, err)
+		return fmt.Errorf("%w: %w: %w", payment.ErrRetryable, ErrNotValidated, err)
 	}
 	defer res.Body.Close()
 
 	answer, err := io.ReadAll(io.LimitReader(res.Body, 1<<10))
 	if err != nil {
-		return fmt.Errorf("%w: read response: %w", ErrNotValidated, err)
+		return fmt.Errorf("%w: %w: read response: %w", payment.ErrRetryable, ErrNotValidated, err)
 	}
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: validation returned %d", ErrNotValidated, res.StatusCode)
+		return fmt.Errorf("%w: %w: validation returned %d", payment.ErrRetryable, ErrNotValidated, res.StatusCode)
 	}
 
 	// The response is the word VALID or INVALID, sometimes with trailing
 	// whitespace and sometimes with more text after it.
 	first, _, _ := strings.Cut(strings.TrimSpace(string(answer)), "\n")
-	if strings.TrimSpace(first) != "VALID" {
+	switch strings.TrimSpace(first) {
+	case "VALID":
+		return nil
+	case "INVALID":
 		return fmt.Errorf("%w: PayFast answered %q", ErrNotValidated, first)
+	default:
+		// A proxy error page can carry 200 too. Only an explicit INVALID is a
+		// rejection; an unrecognised answer has not finished verification.
+		return fmt.Errorf("%w: %w: unrecognised validation response", payment.ErrRetryable, ErrNotValidated)
 	}
-	return nil
 }

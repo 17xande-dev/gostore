@@ -65,14 +65,14 @@ func testRequest() payment.Request {
 func TestPayFast_SignatureMatchesKnownVector(t *testing.T) {
 	const (
 		wantString = "merchant_id=10000100&merchant_key=46f0cd694581a" +
-			"&return_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fsuccess" +
-			"&cancel_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fcancel" +
+			"&return_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fsuccess%3Forder%3D3f2504e0-4f89-41d3-9a0c-0305e82c3301" +
+			"&cancel_url=https%3A%2F%2Fstore.example%2Fcart%2Fcheckout%2Fcancel%3Forder%3D3f2504e0-4f89-41d3-9a0c-0305e82c3301" +
 			"&notify_url=https%3A%2F%2Fstore.example%2Fpayments%2Fpayfast%2Fcallback" +
 			"&name_first=Jane&name_last=Doe&email_address=jane%40example.com" +
 			"&m_payment_id=3f2504e0-4f89-41d3-9a0c-0305e82c3301" +
 			"&amount=299.00&item_name=Test+Store+order+3F2504E0" +
 			"&passphrase=jt7NOE43FZPn"
-		wantDigest = "32152117a7d193d4adf056aafc05a5eb"
+		wantDigest = "31a99e48c5772738e930f0744c9f671c"
 	)
 
 	g := testGateway(t, nil)

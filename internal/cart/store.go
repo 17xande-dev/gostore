@@ -129,6 +129,9 @@ func (s *Store) Add(ctx context.Context, token, variantID string, quantity int) 
 	}
 	defer tx.Rollback(ctx)
 	q := s.q.WithTx(tx)
+	if err := lock(ctx, q, token); err != nil {
+		return err
+	}
 
 	stock, err := availableStock(ctx, q, variantID)
 	if err != nil {
@@ -172,6 +175,9 @@ func (s *Store) SetQuantity(ctx context.Context, token, variantID string, quanti
 	}
 	defer tx.Rollback(ctx)
 	q := s.q.WithTx(tx)
+	if err := lock(ctx, q, token); err != nil {
+		return err
+	}
 
 	stock, err := availableStock(ctx, q, variantID)
 	if err != nil {
@@ -190,7 +196,16 @@ func (s *Store) SetQuantity(ctx context.Context, token, variantID string, quanti
 // the shopper's intent — "this should not be in my cart" — is satisfied either
 // way, and a double-click should not produce a failure page.
 func (s *Store) Remove(ctx context.Context, token, variantID string) error {
-	err := s.q.DeleteCartLine(ctx, gen.DeleteCartLineParams{CartID: token, VariantID: variantID})
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
+	if err := lock(ctx, q, token); err != nil {
+		return err
+	}
+	err = q.DeleteCartLine(ctx, gen.DeleteCartLineParams{CartID: token, VariantID: variantID})
 	if err != nil {
 		if isMalformedUUID(err) {
 			// A variant id that could never exist is already not in the cart.
@@ -198,15 +213,38 @@ func (s *Store) Remove(ctx context.Context, token, variantID string) error {
 		}
 		return fmt.Errorf("cart: remove: %w", err)
 	}
-	return s.touch(ctx, token)
+	if err := q.TouchCart(ctx, token); err != nil {
+		return err
+	}
+	return commit(ctx, tx)
 }
 
 // Clear empties a cart without deleting it.
 func (s *Store) Clear(ctx context.Context, token string) error {
-	if err := s.q.ClearCart(ctx, token); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
+	if err := lock(ctx, q, token); err != nil {
+		return err
+	}
+	if err := q.ClearCart(ctx, token); err != nil {
 		return fmt.Errorf("cart: clear: %w", err)
 	}
-	return s.touch(ctx, token)
+	if err := q.TouchCart(ctx, token); err != nil {
+		return err
+	}
+	return commit(ctx, tx)
+}
+
+func lock(ctx context.Context, q *gen.Queries, token string) error {
+	_, err := q.LockCart(ctx, token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }
 
 // DeleteOlderThan removes carts untouched for the given number of days, keeping
@@ -264,13 +302,6 @@ func upsertLine(ctx context.Context, q *gen.Queries, token, variantID string, qu
 		return fmt.Errorf("cart: write line: %w", err)
 	}
 	if err := q.TouchCart(ctx, token); err != nil {
-		return fmt.Errorf("cart: touch: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) touch(ctx context.Context, token string) error {
-	if err := s.q.TouchCart(ctx, token); err != nil {
 		return fmt.Errorf("cart: touch: %w", err)
 	}
 	return nil

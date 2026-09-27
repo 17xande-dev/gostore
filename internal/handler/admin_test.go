@@ -23,6 +23,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/mailer"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -175,6 +176,10 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	mail := mailer.NewFake()
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
+	queue, err := outbox.New(pool, strings.Repeat("ab", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := New(Deps{
 		Config:   cfg,
 		Log:      log,
@@ -185,6 +190,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 		Grants:   grants,
 		Gateways: registryOf(t, append([]payment.Gateway{gateway}, extraGateways...)...),
 		Mail:     mail,
+		Outbox:   queue,
 		Images:   images,
 		Files:    files,
 		Users:    users,

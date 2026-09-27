@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"crypto/rand"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/17xande-dev/gostore/internal/cart"
@@ -85,6 +87,7 @@ type successPageData struct {
 // checkoutForm is the shipping form's raw input, kept as typed so a rejected
 // submission comes back with what was actually entered.
 type checkoutForm struct {
+	Key     string
 	Name    string
 	Email   string
 	Phone   string
@@ -130,6 +133,18 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := h.tokenFromCookie(r)
+	key := r.PostFormValue("checkout_key")
+	if token != "" && key != "" {
+		previous, err := h.orders.CheckoutByKey(r.Context(), token, key)
+		if err == nil {
+			h.checkoutHandover(w, r, previous)
+			return
+		}
+		if !errors.Is(err, orders.ErrNotFound) {
+			h.serverError(w, r, err)
+			return
+		}
+	}
 	c := h.cartFor(r, token)
 	if !c.Purchasable() {
 		http.Redirect(w, r, "/cart", http.StatusSeeOther)
@@ -137,11 +152,18 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	form := checkoutForm{
+		Key:     key,
 		Name:    strings.TrimSpace(r.PostFormValue("name")),
 		Email:   strings.TrimSpace(r.PostFormValue("email")),
 		Phone:   strings.TrimSpace(r.PostFormValue("phone")),
 		Address: strings.TrimSpace(r.PostFormValue("address")),
 		Gateway: strings.TrimSpace(r.PostFormValue("gateway")),
+	}
+	if len(key) < 26 || len(key) > 64 || strings.IndexFunc(key, func(c rune) bool {
+		return !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9')
+	}) >= 0 {
+		h.badForm(w, r)
+		return
 	}
 
 	// Which provider the shopper picked, resolved before the order is written:
@@ -175,7 +197,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	// transaction — never from the figure the submitted page was showing, because
 	// that is the number that will be checked against what the gateway says was
 	// paid.
-	order, err := h.orders.CreateFromCart(r.Context(), token, customer, h.cfg.Currency, gateway.Name())
+	order, err := h.orders.Checkout(r.Context(), token, key, customer, h.cfg.Currency, gateway.Name())
 	if err != nil {
 		var unavailable *orders.UnavailableError
 		switch {
@@ -191,6 +213,20 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.checkoutHandover(w, r, order)
+}
+
+func (h *Handler) checkoutHandover(w http.ResponseWriter, r *http.Request, order orders.Order) {
+	if order.Paid() {
+		http.Redirect(w, r, "/cart/checkout/success?order="+url.QueryEscape(order.ID), http.StatusSeeOther)
+		return
+	}
+	gateway, err := h.gateways.Lookup(order.Gateway)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
+	customer := order.Customer
 	handover, err := gateway.Handover(payment.Request{
 		OrderID:     order.ID,
 		AmountCents: order.TotalCents,
@@ -206,7 +242,9 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 		// What is not harmless is a shopper seeing a blank page, so this reports the
 		// gateway's own complaint — a below-minimum total, most likely.
 		h.log.Error("build gateway hand-over", "order", order.ID, "gateway", gateway.Name(), "error", err)
-		h.renderCheckout(w, r, http.StatusUnprocessableEntity, h.cartFor(r, token), form, nil,
+		h.renderCheckout(w, r, http.StatusUnprocessableEntity, h.currentCart(r), checkoutForm{
+			Name: customer.Name, Email: customer.Email, Phone: customer.Phone, Address: customer.Address, Gateway: order.Gateway,
+		}, nil,
 			"This order cannot be sent for payment: "+err.Error())
 		return
 	}
@@ -229,7 +267,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// statusPageData is the poll's answer: the order this cart last placed, and
+// statusPageData is the poll's answer: the selected order belonging to this cart, and
 // whether the money has arrived.
 type statusPageData struct {
 	page
@@ -246,14 +284,14 @@ type statusPageData struct {
 // order quietly went paid. So it asks, every few seconds, whether it has.
 //
 // It grants nothing and proves nothing. The cart cookie identifies which order to
-// report on — the same authority the success page already runs on — and the only
+// authorise — the same authority the success page already runs on — and the only
 // thing that can have *made* the order paid is an authenticated gateway
 // notification. This is a read of a status, not a way to reach one.
 func (h *Handler) checkoutStatus(w http.ResponseWriter, r *http.Request) {
 	data := statusPageData{page: h.newPage(r, "Payment status")}
 
 	if token := h.tokenFromCookie(r); token != "" {
-		order, err := h.orders.LatestForCart(r.Context(), token)
+		order, err := h.checkoutOrder(r)
 		switch {
 		case err == nil:
 			data.Order = order
@@ -272,7 +310,7 @@ func (h *Handler) checkoutStatus(w http.ResponseWriter, r *http.Request) {
 	// gets the email, which is the ordinary failure mode here and an acceptable
 	// one.
 	if data.Paid && isHTMX(r) {
-		w.Header().Set("HX-Redirect", "/cart/checkout/success")
+		w.Header().Set("HX-Redirect", "/cart/checkout/success?order="+url.QueryEscape(data.Order.ID))
 	}
 	// htmx swaps the block; a browser asking for this URL directly gets a whole
 	// page, so the route is never a bare fragment in an address bar.
@@ -301,7 +339,7 @@ func (h *Handler) renderOutcome(w http.ResponseWriter, r *http.Request, name str
 	// enough: it names their own basket and the orders placed from it, and nothing
 	// else. A missing or stale cookie is not an error, just a generic page.
 	if token := h.tokenFromCookie(r); token != "" {
-		order, err := h.orders.LatestForCart(r.Context(), token)
+		order, err := h.checkoutOrder(r)
 		switch {
 		case err == nil:
 			data.Order = order
@@ -324,6 +362,9 @@ func (h *Handler) renderOutcome(w http.ResponseWriter, r *http.Request, name str
 }
 
 func (h *Handler) renderCheckout(w http.ResponseWriter, r *http.Request, status int, c cart.Cart, form checkoutForm, errs validate.FormErrors, problem string) {
+	if form.Key == "" {
+		form.Key = rand.Text()
+	}
 	if form.Gateway == "" {
 		form.Gateway = h.gateways.Default().Name()
 	}
@@ -335,4 +376,24 @@ func (h *Handler) renderCheckout(w http.ResponseWriter, r *http.Request, status 
 		Errors:   errs,
 		Error:    problem,
 	})
+}
+
+// An order id selects the checkout, never authorises it. The cart cookie must
+// still match. The no-id fallback keeps old gateway return URLs working.
+func (h *Handler) checkoutOrder(r *http.Request) (orders.Order, error) {
+	token := h.tokenFromCookie(r)
+	if token == "" {
+		return orders.Order{}, orders.ErrNotFound
+	}
+	if id := r.URL.Query().Get("order"); id != "" {
+		o, err := h.orders.Get(r.Context(), id)
+		if err != nil {
+			return orders.Order{}, err
+		}
+		if o.CartID != token {
+			return orders.Order{}, orders.ErrNotFound
+		}
+		return o, nil
+	}
+	return h.orders.LatestForCart(r.Context(), token)
 }

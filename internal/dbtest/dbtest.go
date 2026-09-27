@@ -29,9 +29,18 @@ import (
 // once already.
 var calls sync.Map // test name -> *atomic.Int64
 
-// Pool returns a pool whose search_path is a schema unique to this test, with
-// every migration already applied.
+// Pool returns a private schema with all embedded migrations applied.
 func Pool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := EmptyPool(t)
+	if err := db.Migrate(t.Context(), pool, slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
+}
+
+// EmptyPool provides an empty private schema for testing the migration runner.
+func EmptyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -60,7 +69,7 @@ func Pool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
 	}
 	// public is on the path as well as the test's own schema, because pg_trgm's
-	// operators live there: the migration installs the extension into public
+	// operators live there: the initial migration installs the extension into public
 	// explicitly, and an extension *name* is database-global, so only the first
 	// test schema to run would otherwise own it and every other one would fail
 	// with "operator does not exist: text <% text".
@@ -86,9 +95,6 @@ func Pool(t *testing.T) *pgxpool.Pool {
 		}
 	})
 
-	if err := db.Migrate(ctx, pool, slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	return pool
 }
 

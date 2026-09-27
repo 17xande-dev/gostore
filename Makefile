@@ -1,4 +1,6 @@
 COMPOSE ?= docker compose
+export LOCAL_UID := $(shell id -u)
+export LOCAL_GID := $(shell id -g)
 TEST_DATABASE_URL ?= postgres://gostore:gostore@localhost:5432/gostore?sslmode=disable
 
 # There are no admin credentials to set: the first administrator is claimed at
@@ -38,6 +40,8 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 	DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \
 	DOWNLOAD_SECRET_ACCESS_KEY="$(DOWNLOAD_SECRET_ACCESS_KEY)" \
 	DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)" \
+	DOWNLOAD_DIR="$(DOWNLOAD_DIR)" \
+	EMAIL_QUEUE_KEY="$(EMAIL_QUEUE_KEY)" \
 	IMAGE_DIR="$(IMAGE_DIR)" \
 	SMTP_HOST="$(SMTP_HOST)" \
 	SMTP_PORT="$(SMTP_PORT)" \
@@ -48,21 +52,20 @@ DEV_ENV = DATABASE_URL="$(TEST_DATABASE_URL)" \
 # under .local keeps uploaded photographs out of the working tree; mailpit is the
 # compose relay, which `make run` starts alongside postgres.
 IMAGE_DIR ?= .local/images
+DOWNLOAD_DIR ?= .local/downloads
+# Public development key; deployments must generate and back up their own.
+EMAIL_QUEUE_KEY ?= abababababababababababababababababababababababababababababababab
 SMTP_HOST ?= localhost
 SMTP_PORT ?= 1025
 SMTP_TLS ?= none
 EMAIL_FROM ?= orders@gostore.example
 
-# Purchased files live in the compose MinIO for both `make run` and `make seed`,
-# which run on the host and so reach it at the same address a browser does. The
-# compose *server* reaches it at minio:9000 and signs for localhost:9000 —
-# see DOWNLOAD_PUBLIC_ENDPOINT in compose.yaml — so all three agree on where a
-# seeded file actually is.
-DOWNLOAD_ENDPOINT ?= localhost:9000
-DOWNLOAD_BUCKET ?= gostore-downloads
-DOWNLOAD_ACCESS_KEY_ID ?= gostore
-DOWNLOAD_SECRET_ACCESS_KEY ?= gostore123
-DOWNLOAD_USE_TLS ?= false
+# Explicit overrides still allow a seed command to target private R2 storage.
+DOWNLOAD_ENDPOINT ?=
+DOWNLOAD_BUCKET ?=
+DOWNLOAD_ACCESS_KEY_ID ?=
+DOWNLOAD_SECRET_ACCESS_KEY ?=
+DOWNLOAD_USE_TLS ?= true
 
 SEED_FILE ?= testdata/products.json
 
@@ -92,15 +95,18 @@ TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
 # correctness — linux/amd64 is just what the servers it runs on are.
 PLATFORM ?= linux/amd64
 
-.PHONY: up down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
+.PHONY: up local-dirs down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
 	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish
 
 ## up: build and start the whole local stack
-up:
+up: local-dirs
 	$(COMPOSE) up --build -d
 	@echo "server   http://localhost:8080/healthz"
 	@echo "mailpit  http://localhost:8025"
-	@echo "minio    http://localhost:9001"
+	@echo "files    .local/images and .local/downloads"
+
+local-dirs:
+	mkdir -p .local/images .local/downloads
 
 ## down: stop the stack (add ARGS=-v to also delete data volumes)
 down:
@@ -113,37 +119,32 @@ logs:
 # Themed from ./theme with reloading on, matching the compose stack: edit a file
 # there and refresh, no restart. THEME_RELOAD=false for the read-once behaviour a
 # deployment has.
-run:
-	$(COMPOSE) up -d postgres mailpit minio
+run: local-dirs
+	$(COMPOSE) up -d postgres mailpit
 	@$(DEV_ENV) TEMPLATE_DIR=theme/templates STATIC_DIR=theme/static \
 		THEME_RELOAD="$(THEME_RELOAD)" go run .
 
 ## migrate: apply pending migrations without starting the server
 migrate:
-	$(COMPOSE) up -d postgres
+	$(COMPOSE) up -d --wait postgres
 	@$(DEV_ENV) go run . -migrate
 
+## migrate-status: show which migrations have been applied
+migrate-status:
+	@$(DEV_ENV) go run . -migrate-status
+
 ## seed: load a products JSON file (SEED_FILE=...) into the database
-# Depends on migrate, so seeding a database nobody has migrated yet reports a
-# missing migration rather than a missing table.
-seed: migrate
-	@$(COMPOSE) up -d minio minio-init
+seed: local-dirs migrate
 	@DATABASE_URL="$(TEST_DATABASE_URL)" \
 		DOWNLOAD_ENDPOINT="$(DOWNLOAD_ENDPOINT)" \
 		DOWNLOAD_BUCKET="$(DOWNLOAD_BUCKET)" \
 		DOWNLOAD_ACCESS_KEY_ID="$(DOWNLOAD_ACCESS_KEY_ID)" \
 		DOWNLOAD_SECRET_ACCESS_KEY="$(DOWNLOAD_SECRET_ACCESS_KEY)" \
 		DOWNLOAD_USE_TLS="$(DOWNLOAD_USE_TLS)" \
+		DOWNLOAD_DIR="$(DOWNLOAD_DIR)" \
 		go run ./cmd/seed -file "$(SEED_FILE)"
 
-## migrate-status: show which migrations have been applied
-migrate-status:
-	@$(DEV_ENV) go run . -migrate-status
-
 ## check-config: validate the full server configuration without starting anything
-# The migration targets deliberately need only DATABASE_URL, so this is what
-# catches a missing payment credential or an unreadable password hash — run it
-# in a deploy before -migrate, to fail before the schema moves rather than after.
 check-config:
 	@$(DEV_ENV) go run . -check-config
 
@@ -157,7 +158,7 @@ check-config:
 hashpw:
 	@read -rs -p "Admin password: " P; echo; printf %s "$$P" | go run ./cmd/hashpw
 
-## sqlc: regenerate internal/db/gen from the queries and the migrations
+## sqlc: regenerate internal/db/gen from the queries and migrations
 sqlc:
 	$(SQLC) generate
 

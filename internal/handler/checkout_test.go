@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,10 +40,11 @@ func (s *shop) stockOf(t *testing.T, sku string) int {
 
 func validCheckoutForm() url.Values {
 	return url.Values{
-		"name":    {"Jane Doe"},
-		"email":   {"jane@example.com"},
-		"phone":   {"+27 11 555 0100"},
-		"address": {"1 Example Road\nExampletown"},
+		"checkout_key": {rand.Text()},
+		"name":         {"Jane Doe"},
+		"email":        {"jane@example.com"},
+		"phone":        {"+27 11 555 0100"},
+		"address":      {"1 Example Road\nExampletown"},
 	}
 }
 

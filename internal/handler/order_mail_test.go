@@ -29,6 +29,7 @@ func TestOrderMail_ConfirmationOnPaidCallback(t *testing.T) {
 	}
 
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	sent := s.mail.To("jane@example.com")
 	if len(sent) != 1 {
@@ -85,6 +86,7 @@ func TestOrderMail_NotResentOnReplay(t *testing.T) {
 
 	for range 4 {
 		callback(t, s.srv, "fake", body)
+		s.handler.ProcessMail(t.Context())
 	}
 
 	if sent := s.mail.To("jane@example.com"); len(sent) != 1 {
@@ -99,6 +101,7 @@ func TestOrderMail_NothingSentForUnpaidOutcomes(t *testing.T) {
 			order := placeOrder(t, s, "S", 1)
 
 			callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1", status, order.TotalCents))
+			s.handler.ProcessMail(t.Context())
 
 			if sent := s.mail.Sent(); len(sent) != 0 {
 				t.Errorf("%d emails sent for a %s payment: %+v", len(sent), status, sent)
@@ -116,6 +119,7 @@ func TestOrderMail_NothingSentForARejectedNotification(t *testing.T) {
 
 	s.gateway.Reject = true
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	if sent := s.mail.Sent(); len(sent) != 0 {
 		t.Errorf("an unauthenticated notification produced email: %+v", sent)
@@ -131,6 +135,7 @@ func TestOrderMail_DeliveryFailureDoesNotLoseTheSale(t *testing.T) {
 
 	res := callback(t, s.srv, "fake",
 		payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	// Still 200 — the gateway must not retry because *email* failed. The payment
 	// is recorded and retrying would not help.
@@ -156,6 +161,7 @@ func TestOrderMail_OwnerNotification(t *testing.T) {
 	order := placeOrder(t, s, "S", 2)
 
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	// Two separate sends, not one message with two recipients: a receipt and a work
 	// order say different things, and one failing must not suppress the other.
@@ -200,6 +206,7 @@ func TestOrderMail_OwnerNotificationCarriesTheOversellWarning(t *testing.T) {
 	}
 
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	owner := s.mail.To(ownerAddress)
 	if len(owner) != 1 {
@@ -228,6 +235,7 @@ func TestOrderMail_NoOwnerNotificationWhenUnconfigured(t *testing.T) {
 	order := placeOrder(t, s, "S", 1)
 
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1", "paid", order.TotalCents))
+	s.handler.ProcessMail(t.Context())
 
 	if sent := s.mail.Sent(); len(sent) != 1 {
 		t.Errorf("%d emails with no notify address configured, want just the customer's: %+v", len(sent), sent)

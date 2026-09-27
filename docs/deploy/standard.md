@@ -1,7 +1,7 @@
 # Deploying: standard
 
 This guide takes you from an empty server to a running store: gostore and Postgres under
-Docker Compose, Caddy in front with a Let's Encrypt certificate, product images in
+Docker Compose, Caddy in front with a Let's Encrypt certificate, images and downloads in
 Cloudflare R2, and mail through any SMTP provider. It uses
 [`deploy/standard`](../../deploy/standard).
 
@@ -13,7 +13,7 @@ Cloudflare R2, and mail through any SMTP provider. It uses
 - **A Cloudflare account** for R2. The free tier covers a typical shop's images.
 - **An SMTP provider** — the host, port, username and password it gives you, and an
   address it lets you send from. The server refuses to start without mail, because a
-  digital download's link exists only in its confirmation email.
+  receipts and durable download links must reach customers.
 - **A published image.** Use a release from
   [GHCR](https://github.com/17xande-dev/gostore/pkgs/container/gostore), or your own; see
   [Publishing an image](README.md#publishing-an-image).
@@ -44,7 +44,7 @@ request would arrive from Cloudflare with the client's address in a header this
 deployment does not trust; the [tunnel deployment](tunnel.md) is the one built for
 Cloudflare in front.
 
-## 4. Create the R2 bucket
+## 4. Create the R2 buckets
 
 In the Cloudflare dashboard, under **R2 Object Storage**:
 
@@ -57,7 +57,13 @@ In the Cloudflare dashboard, under **R2 Object Storage**:
    Read & Write** permission applied to **only this bucket**. It shows an access key id, a
    secret access key and an endpoint of the form
    `https://<account-id>.r2.cloudflarestorage.com` — copy all three now; the secret is
-   shown once.
+    shown once.
+
+Create a second bucket, `gostore-downloads`, and leave public access **disabled**:
+no r2.dev access and no custom domain. Give it a separate Object Read & Write API
+token, used for `DOWNLOAD_ACCESS_KEY_ID` and `DOWNLOAD_SECRET_ACCESS_KEY`. The
+`DOWNLOAD_ENDPOINT` is the same account endpoint; `DOWNLOAD_BUCKET` must differ
+from the image bucket. Download URLs are signed for individual authorised clicks.
 
 ## 5. Copy the deployment to the server
 
@@ -81,10 +87,12 @@ Open `.env` (`sudo nano .env`). Each value is explained beside it; in short:
 | `ACME_EMAIL` | where Let's Encrypt writes about a certificate it cannot renew |
 | `STORE_NAME` | what shoppers see |
 | `POSTGRES_PASSWORD` | the output of `openssl rand -hex 32` |
+| `EMAIL_QUEUE_KEY` | another `openssl rand -hex 32`; retain with backups |
 | `PAYFAST_*` | leave the sandbox values for now; see [Going live](#going-live) |
 | `BLOB_ENDPOINT` | the R2 endpoint from step 4, **without** `https://` |
 | `BLOB_ACCESS_KEY_ID`, `BLOB_SECRET_ACCESS_KEY` | the token from step 4 |
 | `BLOB_PUBLIC_BASE_URL` | `https://images.example.com` |
+| `DOWNLOAD_ENDPOINT`, `DOWNLOAD_BUCKET`, `DOWNLOAD_ACCESS_KEY_ID`, `DOWNLOAD_SECRET_ACCESS_KEY` | the private bucket and its token from step 4 |
 | `SMTP_*`, `EMAIL_FROM` | from your mail provider |
 
 ## 7. Start it

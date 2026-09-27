@@ -53,10 +53,9 @@ are applied on the line that registers each route, not wrapped around a prefix, 
 same reason `RequireAdmin` is: a prefix wrapper is one refactor away from silently not
 covering a new route.
 
-**The callback's `429` is not a contradiction of the always-`200` rule.** `200` means
-*read and decided*, so a gateway does not retry a forgery. A throttled request has not
-been read, and a retry is exactly what should happen — hence the limiter sits in front of
-the handler and answers `429`, which PayFast reads and honours.
+The callback answers `429` when throttled and `503` when verification or persistence
+fails temporarily. Both invite a retry. `200` means processing completed or the
+notification was permanently rejected; it never acknowledges a failed payment write.
 
 Only the POST on `/admin/login` is limited. Limiting the GET would lock an operator out of
 the page carrying the message explaining why.

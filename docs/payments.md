@@ -141,11 +141,12 @@ server-to-server check proves the data is PayFast's but not that it was meant fo
 Then the handler does what only it can: find the order, check the amount against the order's
 own total, and stop a replay from decrementing stock twice.
 
-**The callback always answers `200`.** A gateway retries anything else, and a notification
-that fails validation is not "try again later" — it is forged or broken, and neither improves
-on the third attempt. Rejections are logged in full, naming the check that failed, and
-dropped. It is also outside the CSRF group by *not being in it* rather than by an exempt-path
-string that has to keep matching the route.
+**Completed processing and permanent rejections answer `200`.** Temporary verification
+failures (network errors or an unavailable provider API) and database failures answer
+`503` with `Retry-After: 30`. A signed notification is not acknowledged as processed
+until payment and its email jobs commit. Replayed payments do not decrement stock or
+enqueue mail twice. The callback is outside the CSRF group because providers cannot
+supply a browser token; each gateway authenticates its own notification.
 
 ### The PayFast signature, and why it is spelled out in code
 

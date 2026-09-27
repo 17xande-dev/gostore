@@ -7,7 +7,7 @@ list with defaults.
 
 `.env.example` is the tracked template: copy it to `.env` and edit the values
 for the environment you run. It contains published PayFast sandbox credentials
-and local Postgres/MinIO defaults, not private credentials. A real `.env` may
+and local Postgres, disk-storage and development encryption-key defaults, not private credentials. A real `.env` may
 contain passwords, API keys, and a database URL with a password. It is
 gitignored; also keep it readable only by its owner (`chmod 600 .env`). Do not
 commit real values to `.env.example`.
@@ -20,8 +20,8 @@ for a single server: anyone who can read that file is root on the box, and
 root can read a running container's environment regardless.
 
 **Any credential can instead arrive as a file**, for a deployment that wants
-more than that. For each of the twelve secrets the server takes —
-`DATABASE_URL`, `SETUP_TOKEN`, the payment keys, the mail and storage
+more than that. For each of the secrets the server takes —
+`DATABASE_URL`, `SETUP_TOKEN`, `EMAIL_QUEUE_KEY`, the payment keys, the mail and storage
 secrets; `secretKeys` in `internal/config` is the list — `KEY_FILE` names a
 file whose contents are the value. That keeps it out of the process
 environment, which `docker inspect` shows, and lets a deployment mount it as
@@ -61,6 +61,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
 | `SMTP_HOST` | **yes**¹ | — | Mail relay |
 | `EMAIL_FROM` | **yes**¹ | — | Sender address |
+| `EMAIL_QUEUE_KEY` | **yes** | — | 32 random bytes encoded as 64 hex characters; encrypts pending email payloads. Generate with `openssl rand -hex 32` and retain with backups |
 | `SMTP_PORT` | no | `587` | `465` with `SMTP_TLS=tls`, `1025` for mailpit |
 | `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
@@ -96,12 +97,9 @@ keys), or both — with both, the checkout asks the shopper which they would lik
 store with neither refuses to start, because the alternative is a shop that serves a
 catalog perfectly and fails at the one moment that matters.
 
-¹ **Mail is required**, and both must be set. This reverses an earlier position that a store
-with no mail server should still boot and drop receipts loudly. What changed is a fact rather
-than an opinion: a digital download's link lives in the confirmation email and **only its hash
-is stored**, so an unconfigured relay does not lose a receipt — it takes money for a file the
-buyer can then never reach, unrecoverably. The old argument was right about a shop selling
-parcels and wrong about one that *can* sell downloads, and any deployment might.
+¹ **Mail is required**, through SMTP or Graph. Receipts and download links are queued
+transactionally, encrypted with `EMAIL_QUEUE_KEY`, and retried by the in-process worker.
+See [Email](email.md) for recovery, key retention and at-least-once delivery semantics.
 
 ² The `BLOB_*` set is all-or-nothing for the same reason: `BLOB_ENDPOINT` with any of the
 others missing refuses to boot rather than failing at the first upload.
