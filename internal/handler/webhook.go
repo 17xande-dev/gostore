@@ -47,6 +47,16 @@ func (h *Handler) RegisterPayments(mux *http.ServeMux) {
 	mux.Handle("POST /payments/{gateway}/callback", h.limits.callback(http.HandlerFunc(h.paymentCallback)))
 }
 
+// RegisterMCP mounts the MCP endpoint, built by internal/mcpserver, at /mcp.
+//
+// On the outer mux with the payment callback, not in FirstPartyHandler: it
+// authenticates with a bearer token and carries no cookie, so there is nothing
+// for CSRF to protect and nosurf would only refuse every call. The limiter runs
+// before the token is checked, so it bounds guessing as well as a runaway agent.
+func (h *Handler) RegisterMCP(mux *http.ServeMux, endpoint http.Handler) {
+	mux.Handle("/mcp", h.limits.mcp(endpoint))
+}
+
 func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	defer func() {

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/db"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/handler"
+	"github.com/17xande-dev/gostore/internal/mcpserver"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
@@ -145,14 +147,16 @@ func run() error {
 		return err
 	}
 	cat := catalog.NewStore(pool)
+	orderStore := orders.NewStore(pool)
+	grants := downloads.NewStore(pool, cat)
 	h := handler.New(handler.Deps{
 		Config:   cfg,
 		Log:      log,
 		Tmpl:     tmpl,
 		Catalog:  cat,
 		Carts:    carts,
-		Orders:   orders.NewStore(pool),
-		Grants:   downloads.NewStore(pool, cat),
+		Orders:   orderStore,
+		Grants:   grants,
 		Gateways: gateways,
 		Mail:     mail,
 		Outbox:   queue,
@@ -169,9 +173,23 @@ func run() error {
 	startCartCleanup(ctx, carts, cfg.CartTTLDays, log)
 	startSessionCleanup(ctx, users, log)
 
+	// The MCP endpoint: the admin, for an AI client holding an API token. The same
+	// stores as the handler, and the same rules through internal/admin.
+	mcpSrv := mcpserver.New(mcpserver.Deps{
+		Log:     log,
+		Users:   users,
+		Catalog: cat,
+		Orders:  orderStore,
+		Grants:  grants,
+		Outbox:  queue,
+		Images:  images,
+		BaseURL: cfg.BaseURL,
+		Version: buildVersion(),
+	})
+
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, gateways, users, pool, log),
+		Handler:           routes(cfg, h, mcpSrv.Handler(), gateways, users, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -559,7 +577,7 @@ func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	return storage, nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, gateways payment.Registry, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, mcpEndpoint http.Handler, gateways payment.Registry, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
@@ -587,6 +605,10 @@ func routes(cfg config.Config, h *handler.Handler, gateways payment.Registry, us
 	// arrive from an email in whatever browser the person happens to be using, and
 	// nosurf would set a cookie on every one of them.
 	h.RegisterDownloads(mux)
+
+	// The MCP endpoint, outside CSRF for the same reason: its credential is a
+	// bearer token, not a cookie. See internal/mcpserver.
+	h.RegisterMCP(mux, mcpEndpoint)
 
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:
@@ -685,4 +707,23 @@ func newLogger(level, format string) *slog.Logger {
 	// JSON to stdout: the one log format every managed platform ingests without
 	// configuration.
 	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}
+
+// buildVersion is the version the binary was built from, as the Go toolchain
+// recorded it: the module version for a `go install`, the VCS revision for a
+// build from a checkout, "dev" when neither is known.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+			return s.Value[:7]
+		}
+	}
+	return "dev"
 }

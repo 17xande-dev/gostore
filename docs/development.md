@@ -132,6 +132,7 @@ question is the depth of the problem, not the size of the dependency.
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`17xande-dev/mailer`](https://github.com/17xande-dev/mailer) | Sending email, behind one `Sender` interface — the SMTP transport, the XOAUTH2 token dance for Exchange, and the fake the handler tests inject. Shared with another application, which is why it is a module rather than an `internal/` package. It pulls in [`wneessen/go-mail`](https://github.com/wneessen/go-mail) for MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
 | [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, MinIO |
+| [`modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) | The [MCP endpoint](mcp.md): the protocol's JSON-RPC, the Streamable HTTP transport, tool schemas inferred from Go structs. The official SDK, maintained by the MCP project with Google. The protocol is young and still moving — sessions, streaming and capability negotiation have changed between revisions — which is exactly the kind of problem not to hand-roll. Linked in with it: `google/jsonschema-go`, `segmentio/encoding`, `yosida95/uritemplate` and `golang.org/x/oauth2` (for types; no OAuth flow is used) |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:
 a router (`ServeMux` does method and wildcard patterns), a validation library (struct tags

@@ -89,6 +89,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `RATE_LIMIT_CALLBACK_PER_MINUTE` | no | `120` | Per client IP; `0` disables |
 | `RATE_LIMIT_STATUS_PER_MINUTE` | no | `30` | The QR hand-over page's payment-status poll, per IP |
 | `RATE_LIMIT_DOWNLOAD_PER_MINUTE` | no | `60` | Download links per IP; each click mints a signed URL |
+| `RATE_LIMIT_MCP_PER_MINUTE` | no | `120` | Calls to the [MCP endpoint](mcp.md) per IP, counted before the token is checked |
 | `CART_TTL_DAYS` | no | `60` | How long an untouched cart survives |
 
 ² **At least one payment gateway must be configured**, and both may be. Set

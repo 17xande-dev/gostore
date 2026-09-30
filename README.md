@@ -69,7 +69,8 @@ Other useful targets:
 | | |
 |---|---|
 | [Configuration](docs/configuration.md) | Every environment variable, `KEY_FILE` for secrets, and where configuration and secrets live |
-| [Admin and accounts](docs/admin.md) | The first administrator, roles, managing accounts |
+| [Admin and accounts](docs/admin.md) | The first administrator, roles, managing accounts, API tokens |
+| [MCP](docs/mcp.md) | Letting an AI assistant manage the store: connecting a client, the tools, the security model |
 | [Catalog](docs/catalog.md) | Products, variant options, categories, images, digital downloads, seeding |
 | [Storefront, cart and checkout](docs/storefront.md) | The index page, search and filtering, embedding the catalog, the cart, checkout |
 | [Payments](docs/payments.md) | PayFast and SnapScan: setting up, going live, how notifications are authenticated |

@@ -75,6 +75,7 @@ type limiters struct {
 	callback middleware.Middleware
 	status   middleware.Middleware
 	download middleware.Middleware
+	mcp      middleware.Middleware
 }
 
 // perMinute builds a limiter allowing n requests a minute, or a pass-through when
@@ -159,6 +160,9 @@ func New(d Deps) *Handler {
 		// the checkout's allowance and locking a shopper out of retrying.
 		status:   perMinute("payment status", cfg.RateLimits.StatusPerMinute, cfg.ClientIPSource, log, page),
 		download: perMinute("downloads", cfg.RateLimits.DownloadPerMinute, cfg.ClientIPSource, log, page),
+		// No page: an MCP client is a program, and 429 with Retry-After is what it
+		// can act on.
+		mcp: perMinute("mcp", cfg.RateLimits.MCPPerMinute, cfg.ClientIPSource, log, nil),
 	}
 	return h
 }

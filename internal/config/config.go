@@ -391,6 +391,11 @@ type RateLimits struct {
 	// recording's twenty files is ordinary use, and a limit that fires on it would
 	// be switched off rather than tuned.
 	DownloadPerMinute int
+	// MCPPerMinute guards the MCP endpoint, per client IP, before the bearer
+	// token is checked — so it bounds guessing as well as a runaway agent. An
+	// assistant working through a catalog makes a call every second or two;
+	// the allowance is about twice that.
+	MCPPerMinute int
 }
 
 // SMTP is the mail relay's configuration. Username and Password may be empty, for
@@ -487,6 +492,7 @@ func Load() (Config, error) {
 			CallbackPerMinute: 120,
 			StatusPerMinute:   30,
 			DownloadPerMinute: 60,
+			MCPPerMinute:      120,
 		},
 		OrderNotifyEmail: strings.TrimSpace(os.Getenv("ORDER_NOTIFY_EMAIL")),
 		EmailQueueKey:    strings.TrimSpace(sec.get("EMAIL_QUEUE_KEY")),
@@ -712,6 +718,7 @@ func Load() (Config, error) {
 		{"RATE_LIMIT_CALLBACK_PER_MINUTE", &c.RateLimits.CallbackPerMinute},
 		{"RATE_LIMIT_STATUS_PER_MINUTE", &c.RateLimits.StatusPerMinute},
 		{"RATE_LIMIT_DOWNLOAD_PER_MINUTE", &c.RateLimits.DownloadPerMinute},
+		{"RATE_LIMIT_MCP_PER_MINUTE", &c.RateLimits.MCPPerMinute},
 	} {
 		if v, ok := os.LookupEnv(l.key); ok {
 			n, err := strconv.Atoi(v)
