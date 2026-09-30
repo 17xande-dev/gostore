@@ -196,7 +196,7 @@ psql:
 # Builds exactly what `publish` would push, without pushing it — for checking
 # a Dockerfile change or running the real image locally.
 image:
-	docker build --platform $(PLATFORM) -t $(IMAGE):$(TAG) .
+	docker build --platform $(PLATFORM) --label org.opencontainers.image.source=https://github.com/17xande-dev/gostore -t $(IMAGE):$(TAG) .
 
 # check-clean: fail if the working tree has uncommitted changes. A published
 # image has to be reproducible from source, and an image built from a dirty
