@@ -37,6 +37,16 @@ correct.
 The costs, stated plainly: one indexed lookup per admin request, and a session that outlives
 a `DELETE FROM admin_sessions` does not exist. Both are the price of being able to end one.
 
+**API tokens are sessions for programs.** `/admin/account/tokens` (the *API tokens* link in
+the header) makes a bearer token for the [MCP endpoint](mcp.md): the same 32 random bytes and
+stored `sha256`, prefixed `gst_` so a leaked one is recognisable, shown once, and named for
+where it will be used. It lives 30, 90 or 365 days — there is no never. A token carries no role
+of its own: it is its account acting, the account's current role decides every request, and a
+password change, role change or disable deletes the account's tokens in the same transaction
+as its sessions. A disabled account, or one that must change its password, gets no programmatic
+access. Every role may make tokens, and only ever its own; another administrator's are ended
+by the account changes above.
+
 If nobody can sign in at all — every owner disabled, or the only password lost — `make hashpw`
 prints a hash to set by hand. See [`cmd/hashpw`](../cmd/hashpw/main.go) for the `UPDATE`, and for
 the `DELETE FROM admin_sessions` that has to go with it.

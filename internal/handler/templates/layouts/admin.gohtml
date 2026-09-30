@@ -33,6 +33,7 @@
       {{template "csrf" .CSRFToken}}
       {{/* Who you are signed in as, and the way to your own password. */}}
       <a class="quiet" href="/admin/password">{{.User.Display}}</a>
+      <a class="quiet" href="/admin/account/tokens">API tokens</a>
       <button type="submit">Sign out</button>
     </form>
   </div>

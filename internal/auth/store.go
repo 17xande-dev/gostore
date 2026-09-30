@@ -225,7 +225,8 @@ func (s *Store) CountEnabledOwners(ctx context.Context) (int, error) {
 //
 // The two halves must not be separable. A password changed without dropping the
 // sessions it authorised leaves whoever prompted the change still signed in,
-// which is the one thing changing a password after a scare is meant to fix.
+// which is the one thing changing a password after a scare is meant to fix. The
+// account's API tokens go with them, for the same reason.
 //
 // mustChange is set when an administrator resets somebody else's password and
 // left false when somebody sets their own.
@@ -250,8 +251,8 @@ func (s *Store) SetPassword(ctx context.Context, id, passwordHash string, mustCh
 	if rows == 0 {
 		return ErrNotFound
 	}
-	if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
-		return translate(fmt.Errorf("auth: end sessions: %w", err))
+	if err := revokeAccess(ctx, q, id); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -263,9 +264,10 @@ func (s *Store) SetPassword(ctx context.Context, id, passwordHash string, mustCh
 // SetDisabled switches an account on or off, refusing to disable the last
 // enabled owner.
 //
-// Disabling also ends the account's live sessions, in the same transaction, so
-// somebody switched off mid-session stops on their next request rather than
-// whenever their cookie happens to expire. Enabling has no sessions to drop.
+// Disabling also ends the account's live sessions and API tokens, in the same
+// transaction, so somebody switched off mid-session stops on their next request
+// rather than whenever their cookie happens to expire. Enabling has nothing to
+// drop.
 //
 // Disabling an already-disabled account is a no-op that reports success: a
 // double-submitted form is not a refusal worth explaining.
@@ -289,8 +291,8 @@ func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool) error
 		return s.refusal(ctx, q, id)
 	}
 	if disabled {
-		if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
-			return translate(fmt.Errorf("auth: end sessions: %w", err))
+		if err := revokeAccess(ctx, q, id); err != nil {
+			return err
 		}
 	}
 
@@ -302,7 +304,7 @@ func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool) error
 
 // SetRole changes an account's role, refusing to demote the last enabled owner.
 //
-// It ends the account's sessions too. A role is read from the session's user on
+// It ends the account's sessions and API tokens too. A role is read from the user on
 // every request, so this is not strictly required for the new role to take
 // effect — but a demotion is a privilege change, and making the person sign in
 // again is the honest way to mark one.
@@ -342,8 +344,8 @@ func (s *Store) SetRole(ctx context.Context, id string, role Role) error {
 	// device — including, if they are editing themselves, the session they are
 	// doing it from.
 	if Role(before.Role) != role {
-		if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
-			return translate(fmt.Errorf("auth: end sessions: %w", err))
+		if err := revokeAccess(ctx, q, id); err != nil {
+			return err
 		}
 	}
 

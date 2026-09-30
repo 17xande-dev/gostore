@@ -326,6 +326,11 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	// Inside the session check rather than outside it, so the allowance is spent
 	// by signed-in administrators rather than by anyone who can reach the door.
 	admin("POST "+passwordPath, auth.PermRead, rateLimited(h.limits.login, h.adminPasswordChange))
+	// Your own API tokens: PermRead, because every role may make them — a token
+	// can only do what its account's role can. See admin_tokens.go.
+	admin("GET /admin/account/tokens", auth.PermRead, h.adminTokenList)
+	admin("POST /admin/account/tokens", auth.PermRead, h.adminTokenCreate)
+	admin("POST /admin/account/tokens/{id}/revoke", auth.PermRead, h.adminTokenRevoke)
 }
 
 // rateLimited puts a limiter in front of one handler, in the shape the route

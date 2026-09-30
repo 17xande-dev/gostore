@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+type AdminAPIToken struct {
+	ID         string
+	UserID     string
+	Name       string
+	TokenHash  []byte
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	ExpiresAt  time.Time
+}
+
 type AdminSession struct {
 	TokenHash []byte
 	UserID    string

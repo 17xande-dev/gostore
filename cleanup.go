@@ -70,7 +70,7 @@ func startCartCleanup(ctx context.Context, carts *cart.Store, ttlDays int, log *
 // cache than a day of them.
 const sessionCleanupInterval = time.Hour
 
-// startSessionCleanup deletes expired admin sessions, on boot and then hourly,
+// startSessionCleanup deletes expired admin sessions and API tokens, on boot and then hourly,
 // until ctx is cancelled.
 //
 // This is housekeeping and not a security control, which is worth being explicit
@@ -93,6 +93,15 @@ func startSessionCleanup(ctx context.Context, users *auth.Store, log *slog.Logge
 		}
 		if removed > 0 {
 			log.Info("admin session cleanup removed expired sessions", "sessions", removed)
+		}
+		// API tokens are the same shape and the same housekeeping.
+		tokens, err := users.DeleteExpiredAPITokens(sweepCtx)
+		if err != nil {
+			log.Error("admin api token cleanup failed", "error", err)
+			return
+		}
+		if tokens > 0 {
+			log.Info("admin session cleanup removed expired api tokens", "tokens", tokens)
 		}
 	}
 

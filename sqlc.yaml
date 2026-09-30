@@ -33,6 +33,7 @@ sql:
           # the mapping between a row and a model reads as the same word twice.
           sku: "SKU"
           image_url: "ImageURL"
+          admin_api_token: "AdminAPIToken"
 
         overrides:
           # UUIDs stay `string` across the whole codebase. pgx parses a string
