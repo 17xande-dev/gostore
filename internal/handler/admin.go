@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/17xande-dev/gostore/internal/admin"
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
@@ -487,10 +488,6 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	for field, msg := range validate.Product(p) {
-		errs.Add(field, msg)
-	}
 	if errs.Any() {
 		h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, cats, true, errs))
 		return
@@ -498,9 +495,7 @@ func (h *Handler) adminProductCreate(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.cat.Create(r.Context(), p)
 	if err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs := validate.FormErrors{}
-			errs.Add(conflict.Field, "Already used by another product.")
+		if errs, ok := admin.ProductWriteErrors(err); ok {
 			h.render(w, r, http.StatusUnprocessableEntity, "admin_product_form", h.productForm(r, p, cats, true, errs))
 			return
 		}
@@ -542,40 +537,27 @@ func (h *Handler) adminProductUpdate(w http.ResponseWriter, r *http.Request) {
 	// Nothing here has to defend the image any more: UpdateProduct does not write
 	// either image column, so the form cannot touch the picture whatever it submits.
 	// That replaced a read-then-preserve dance in this function.
-	for field, msg := range validate.Product(p) {
-		errs.Add(field, msg)
-	}
 	if errs.Any() {
 		h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, cats, errs)
 		return
 	}
 
 	if _, err := h.cat.Update(r.Context(), p); err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs := validate.FormErrors{}
-			errs.Add(conflict.Field, "Already used by another product.")
-			h.renderProductForm(w, r, http.StatusUnprocessableEntity, p, cats, errs)
-			return
-		}
-		// The kind is frozen. The form usually renders it as text rather than a
-		// select in this state, so reaching here means either a hand-crafted
-		// request or a page rendered before the product was ordered — both of which
-		// want the same explanation on the same form.
-		if locked, ok := errors.AsType[*catalog.KindLockedError](err); ok {
-			errs := validate.FormErrors{}
-			if locked.Ordered {
-				errs.Add("kind", "This product has been ordered, so its kind is fixed. "+
-					"Deactivate it and create a new one instead.")
-			} else {
-				errs.Add("kind", fmt.Sprintf("Remove the %d attached file(s) first. Switching to a "+
-					"physical product would leave them in storage with nothing listing them.", locked.Files))
+		if errs, ok := admin.ProductWriteErrors(err); ok {
+			status := http.StatusUnprocessableEntity
+			// The kind is frozen. The form usually renders it as text rather than a
+			// select in this state, so reaching here means either a hand-crafted
+			// request or a page rendered before the product was ordered — both of
+			// which want the same explanation on the same form. The submitted kind
+			// is refused, so the form must show the stored one — otherwise the page
+			// argues with itself.
+			if _, locked := errors.AsType[*catalog.KindLockedError](err); locked {
+				status = http.StatusConflict
+				if stored, err := h.cat.Get(r.Context(), p.ID); err == nil {
+					p.Kind = stored.Kind
+				}
 			}
-			// The submitted kind is refused, so the form must show the stored one —
-			// otherwise the page argues with itself.
-			if stored, err := h.cat.Get(r.Context(), p.ID); err == nil {
-				p.Kind = stored.Kind
-			}
-			h.renderProductForm(w, r, http.StatusConflict, p, cats, errs)
+			h.renderProductForm(w, r, status, p, cats, errs)
 			return
 		}
 		h.storeError(w, r, err)
@@ -603,7 +585,7 @@ func (h *Handler) adminProductDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		errs := validate.FormErrors{}
-		errs.Add("delete", "This product has been ordered and cannot be deleted. Deactivate it instead.")
+		errs.Add("delete", admin.ProductInUse)
 		h.render(w, r, http.StatusConflict, "admin_product_form", h.productForm(r, p, cats, false, errs))
 	default:
 		h.storeError(w, r, err)
@@ -624,8 +606,7 @@ func (h *Handler) adminVariantCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.cat.CreateVariant(r.Context(), v); err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs.Add(conflict.Field, conflictMessage(conflict.Field))
+		if errs, ok := admin.VariantWriteErrors(err); ok {
 			h.renderVariantErrors(w, r, http.StatusUnprocessableEntity, productID, form, "", errs)
 			return
 		}
@@ -649,8 +630,7 @@ func (h *Handler) adminVariantUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.cat.UpdateVariant(r.Context(), v); err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs.Add(conflict.Field, conflictMessage(conflict.Field))
+		if errs, ok := admin.VariantWriteErrors(err); ok {
 			h.renderVariantErrors(w, r, http.StatusUnprocessableEntity, productID, form, variantID, errs)
 			return
 		}
@@ -668,46 +648,37 @@ func (h *Handler) adminVariantDelete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/products/"+productID+"/edit", http.StatusSeeOther)
 	case errors.Is(err, catalog.ErrInUse):
 		errs := validate.FormErrors{}
-		errs.Add("sku", "This variant has been ordered and cannot be deleted. Deactivate it instead.")
+		errs.Add("sku", admin.VariantInUse)
 		h.renderVariantErrors(w, r, http.StatusConflict, productID, variantForm{Active: true}, variantID, errs)
 	default:
 		h.storeError(w, r, err)
 	}
 }
 
-// parseProduct reads the product form. A blank slug is derived from the title,
-// because a slug is a detail of the URL, not a decision the operator has to
-// make on every product.
-//
-// known is the taxonomy the form was rendered from; the submitted category ids
-// are resolved against it, so an id that names nothing is a message on the form
-// rather than a foreign key violation with no field attached.
+// parseProduct reads the product form and runs it through admin.PrepareProduct,
+// which derives a blank slug, resolves the submitted category ids against known —
+// the taxonomy the form was rendered from — and validates the result.
 func (h *Handler) parseProduct(w http.ResponseWriter, r *http.Request, known []catalog.Category) (catalog.Product, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
 		h.badForm(w, r)
 		return catalog.Product{}, nil, false
 	}
 	p := catalog.Product{
-		Slug:        strings.TrimSpace(r.PostFormValue("slug")),
-		Title:       strings.TrimSpace(r.PostFormValue("title")),
-		Description: strings.TrimSpace(r.PostFormValue("description")),
+		Slug:        r.PostFormValue("slug"),
+		Title:       r.PostFormValue("title"),
+		Description: r.PostFormValue("description"),
 		// No image_url: the form does not offer one, and reading it here would be a
 		// way to set it by hand-crafting a request. Images arrive by upload only.
 		Active:      r.PostFormValue("active") != "",
-		Kind:        catalog.Kind(strings.TrimSpace(r.PostFormValue("kind"))),
-		Option1Name: strings.TrimSpace(r.PostFormValue("option1_name")),
-		Option2Name: strings.TrimSpace(r.PostFormValue("option2_name")),
-		Option3Name: strings.TrimSpace(r.PostFormValue("option3_name")),
+		Kind:        catalog.Kind(r.PostFormValue("kind")),
+		Option1Name: r.PostFormValue("option1_name"),
+		Option2Name: r.PostFormValue("option2_name"),
+		Option3Name: r.PostFormValue("option3_name"),
 	}
-	if p.Slug == "" {
-		p.Slug = catalog.Slugify(p.Title)
-	}
-
 	// A repeated field rather than one comma-separated value, because that is what
 	// a checkbox list submits natively — no JavaScript, and no parsing of a format
 	// somebody has to get right.
-	chosen, errs := validate.ProductCategories(r.PostForm["category"], known)
-	p.Categories = chosen
+	p, errs := admin.PrepareProduct(p, r.PostForm["category"], known)
 	return p, errs, true
 }
 
@@ -761,7 +732,8 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.
 		v.StockQty = stock
 	}
 
-	for field, msg := range validate.Variant(v) {
+	v, verrs := admin.PrepareVariant(v)
+	for field, msg := range verrs {
 		errs.Add(field, msg)
 	}
 	return v, form, errs, true
@@ -866,13 +838,6 @@ func (h *Handler) renderVariantErrors(w http.ResponseWriter, r *http.Request, st
 	page.VariantErrorID = variantID
 	h.attachFiles(w, r, &page)
 	h.render(w, r, status, "admin_product_form", page)
-}
-
-func conflictMessage(field string) string {
-	if field == "options" {
-		return "Another variant of this product already has those options."
-	}
-	return "Already used by another variant."
 }
 
 // render writes a page, and turns a template that will not execute into a 500.

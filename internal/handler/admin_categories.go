@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/admin"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/validate"
 )
@@ -68,8 +68,7 @@ func (h *Handler) adminCategoryCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.cat.CreateCategory(r.Context(), c); err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs.Add(conflict.Field, "Already used by another category.")
+		if errs, ok := admin.CategoryWriteErrors(err); ok {
 			h.render(w, r, http.StatusUnprocessableEntity, "admin_category_form", h.categoryForm(r, c, position, true, errs))
 			return
 		}
@@ -102,8 +101,7 @@ func (h *Handler) adminCategoryUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.cat.UpdateCategory(r.Context(), c); err != nil {
-		if conflict, ok := errors.AsType[*catalog.ConflictError](err); ok {
-			errs.Add(conflict.Field, "Already used by another category.")
+		if errs, ok := admin.CategoryWriteErrors(err); ok {
 			h.render(w, r, http.StatusUnprocessableEntity, "admin_category_form", h.categoryForm(r, c, position, false, errs))
 			return
 		}
@@ -126,19 +124,11 @@ func (h *Handler) adminCategoryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	notice := "Category deleted. It was not used by any product."
-	if unlinked == 1 {
-		notice = "Category deleted, and removed from 1 product. The product itself is untouched."
-	} else if unlinked > 1 {
-		notice = "Category deleted, and removed from " + strconv.FormatInt(unlinked, 10) +
-			" products. The products themselves are untouched."
-	}
-	h.renderCategoryList(w, r, http.StatusOK, notice, nil)
+	h.renderCategoryList(w, r, http.StatusOK, admin.CategoryDeleted(unlinked), nil)
 }
 
-// parseCategory reads the category form. A blank slug is derived from the name,
-// on the same grounds as a product's: the slug is a detail of the URL rather than
-// a decision worth making twice.
+// parseCategory reads the category form and runs it through
+// admin.PrepareCategory, which derives a blank slug from the name.
 func (h *Handler) parseCategory(w http.ResponseWriter, r *http.Request) (catalog.Category, string, validate.FormErrors, bool) {
 	if err := r.ParseForm(); err != nil {
 		h.badForm(w, r)
@@ -146,11 +136,8 @@ func (h *Handler) parseCategory(w http.ResponseWriter, r *http.Request) (catalog
 	}
 
 	c := catalog.Category{
-		Slug: strings.TrimSpace(r.PostFormValue("slug")),
-		Name: strings.TrimSpace(r.PostFormValue("name")),
-	}
-	if c.Slug == "" {
-		c.Slug = catalog.Slugify(c.Name)
+		Slug: r.PostFormValue("slug"),
+		Name: r.PostFormValue("name"),
 	}
 
 	position := strings.TrimSpace(r.PostFormValue("position"))
@@ -164,7 +151,8 @@ func (h *Handler) parseCategory(w http.ResponseWriter, r *http.Request) (catalog
 		c.Position = n
 	}
 
-	for field, msg := range validate.Category(c) {
+	c, cerrs := admin.PrepareCategory(c)
+	for field, msg := range cerrs {
 		errs.Add(field, msg)
 	}
 	return c, position, errs, true

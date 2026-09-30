@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/admin"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
@@ -49,13 +50,7 @@ func (h *Handler) adminOrderList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(search) > 200 {
-		h.badForm(w, r)
-		return
-	}
-	switch filter {
-	case "", "oversold", "email", "unfulfilled":
-	default:
+	if admin.CheckOrderSearch(search, filter, number) != nil {
 		h.badForm(w, r)
 		return
 	}
@@ -88,7 +83,7 @@ func (h *Handler) adminOrderFulfillment(w http.ResponseWriter, r *http.Request) 
 	}
 	state := r.PostFormValue("fulfilled")
 	tracking, note := strings.TrimSpace(r.PostFormValue("tracking")), strings.TrimSpace(r.PostFormValue("note"))
-	if (state != "0" && state != "1") || len(tracking) > 200 || len(note) > 4000 {
+	if (state != "0" && state != "1") || admin.CheckFulfillment(tracking, note) != nil {
 		h.badForm(w, r)
 		return
 	}
@@ -111,40 +106,17 @@ func (h *Handler) adminOrderFulfillment(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) adminOrderShow(w http.ResponseWriter, r *http.Request) {
-	order, err := h.orders.Get(r.Context(), r.PathValue("id"))
+	d, err := admin.LoadOrderDetail(r.Context(), h.orders, h.grants, h.outbox, r.PathValue("id"))
 	if err != nil {
 		h.orderError(w, r, err)
 		return
 	}
-	// Read unconditionally rather than only for an order with digital lines: the
-	// kind lives on order_items, so deciding here would mean scanning them for the
-	// same answer this query already gives, and the query is a no-op for the
-	// common case.
-	grants, err := h.grants.ForOrder(r.Context(), order.ID)
-	if err != nil {
-		h.serverError(w, r, err)
-		return
-	}
-	var emails []outbox.Status
-	var pending bool
-	if h.outbox != nil {
-		emails, err = h.outbox.ForOrder(r.Context(), order.ID)
-		if err != nil {
-			h.serverError(w, r, err)
-			return
-		}
-		for _, email := range emails {
-			if email.SentAt == nil {
-				pending = true
-			}
-		}
-	}
 	h.render(w, r, http.StatusOK, "admin_order", orderPage{
-		page:          h.newPage(r, "Order "+order.Reference()),
-		Order:         order,
-		Entitlements:  grants,
-		Emails:        emails,
-		PendingEmails: pending,
+		page:          h.newPage(r, "Order "+d.Order.Reference()),
+		Order:         d.Order,
+		Entitlements:  d.Entitlements,
+		Emails:        d.Emails,
+		PendingEmails: d.PendingEmails,
 	})
 }
 
