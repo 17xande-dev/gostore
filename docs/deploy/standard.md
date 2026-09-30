@@ -62,7 +62,7 @@ In the Cloudflare dashboard, under **R2 Object Storage**:
 Create a second bucket, `gostore-downloads`, and leave public access **disabled**:
 no r2.dev access and no custom domain. Give it a separate Object Read & Write API
 token, used for `DOWNLOAD_ACCESS_KEY_ID` and `DOWNLOAD_SECRET_ACCESS_KEY`. The
-`DOWNLOAD_ENDPOINT` is the same account endpoint; `DOWNLOAD_BUCKET` must differ
+`DOWNLOAD_ENDPOINT` is the same account endpoint, again without `https://`; `DOWNLOAD_BUCKET` must differ
 from the image bucket. Download URLs are signed for individual authorised clicks.
 
 ## 5. Copy the deployment to the server
