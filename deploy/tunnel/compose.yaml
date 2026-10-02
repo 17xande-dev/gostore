@@ -27,6 +27,12 @@ services:
       BASE_URL: https://${DOMAIN:?set DOMAIN in .env}
       CLIENT_IP_SOURCE: cloudflare
       PAYFAST_SANDBOX: ${PAYFAST_SANDBOX:?set PAYFAST_SANDBOX in .env to true or false}
+    # Optional theme, read-only. Always mounted so that turning a theme on is
+    # two lines in .env (TEMPLATE_DIR / STATIC_DIR) and no edit here. Nothing
+    # reads it until those are set; if ./theme does not exist Docker creates it
+    # empty. See docs/theming.md.
+    volumes:
+      - ./theme:/theme:ro
     depends_on:
       postgres:
         condition: service_healthy

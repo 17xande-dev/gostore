@@ -192,6 +192,39 @@ Four things to know before writing one:
   every other page, because none of their data carries `.Search` or `.Facets`. Render each
   page you have touched before shipping the theme.
 
+## Using a theme in a deployment
+
+`deploy/standard` and `deploy/tunnel` both mount a `theme/` directory next to
+`compose.yaml` into the server at `/theme`, read-only. The server runs in a container, so
+`TEMPLATE_DIR` and `STATIC_DIR` are paths **inside it**: a host path such as `./theme/static`
+is looked for in the container, does not exist there, and the server refuses to start with
+`stat ./theme/static: no such file or directory`.
+
+```sh
+cd /opt/gostore
+sudo git clone https://github.com/you/your-theme.git theme    # or: mkdir theme
+```
+
+Then in `.env`:
+
+```sh
+TEMPLATE_DIR=/theme/templates
+STATIC_DIR=/theme/static
+```
+
+and `sudo docker compose up -d`. Leave `THEME_RELOAD` unset.
+
+- **The mount is always there.** With neither variable set, nothing reads it, and if `theme/`
+  does not exist Docker creates it empty, so a store with no theme needs no extra step.
+- **Set the two variables only when the directories exist.** Both are validated at startup;
+  a `TEMPLATE_DIR` or `STATIC_DIR` that is set but missing refuses to boot. They are
+  independent, so a theme with only `static/` sets only `STATIC_DIR`.
+- **The server must be able to read it.** It runs as an unprivileged user, so the files need
+  to be world-readable, which a `git clone` gives you by default.
+- **Changing a file means a restart**, since reloading is off:
+  `sudo docker compose restart server`. A theme that no longer parses refuses the boot
+  rather than serving a broken page.
+
 ## Reloading, and not reloading
 
 `THEME_RELOAD=true` re-reads both directories on **every request**. It is for writing a

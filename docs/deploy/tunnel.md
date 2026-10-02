@@ -91,6 +91,14 @@ Open `.env` (`sudo nano .env`). Each value is explained beside it; in short:
 | `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` | from step 3 |
 | `EMAIL_FROM` | the mailbox the app sends as |
 
+### Optional: a theme
+
+To restyle the store, put a [theme](../theming.md) in a `theme/` directory next to
+`compose.yaml` (`sudo git clone <your-theme-repo> theme`) and uncomment `TEMPLATE_DIR` and
+`STATIC_DIR` in `.env`. Use the `/theme/...` paths the file gives, not host paths: the server
+runs in a container and only sees the mounted directory. See
+[Using a theme in a deployment](../theming.md#using-a-theme-in-a-deployment).
+
 ## 7. Start it
 
 ```sh

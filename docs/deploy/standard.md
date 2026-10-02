@@ -95,6 +95,14 @@ Open `.env` (`sudo nano .env`). Each value is explained beside it; in short:
 | `DOWNLOAD_ENDPOINT`, `DOWNLOAD_BUCKET`, `DOWNLOAD_ACCESS_KEY_ID`, `DOWNLOAD_SECRET_ACCESS_KEY` | the private bucket and its token from step 4 |
 | `SMTP_*`, `EMAIL_FROM` | from your mail provider |
 
+### Optional: a theme
+
+To restyle the store, put a [theme](../theming.md) in a `theme/` directory next to
+`compose.yaml` (`sudo git clone <your-theme-repo> theme`) and uncomment `TEMPLATE_DIR` and
+`STATIC_DIR` in `.env`. Use the `/theme/...` paths the file gives, not host paths: the server
+runs in a container and only sees the mounted directory. See
+[Using a theme in a deployment](../theming.md#using-a-theme-in-a-deployment).
+
 ## 7. Start it
 
 ```sh

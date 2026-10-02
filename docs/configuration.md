@@ -53,7 +53,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
 | `FONT_ORIGINS` | no | — | Origins a web font may be loaded from. Widens the CSP's `font-src` **and** `style-src`. See [Web fonts](theming.md#web-fonts) |
 | `FONT_CSS_URL` | no | — | A hosted font service's stylesheet, linked from the default layout. Its origin must be in `FONT_ORIGINS` |
-| `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults |
+| `TEMPLATE_DIR` | no | — | Directory of templates that override the embedded defaults. In a container, a path inside it — the deploy stacks mount `./theme` at `/theme`; see [Theming](theming.md#using-a-theme-in-a-deployment) |
 | `STATIC_DIR` | no | — | Directory of assets that override the bundled ones (logo, placeholder, CSS) |
 | `THEME_RELOAD` | no | `false` | Re-read those two directories on every request, so a theme edit needs a refresh and not a restart. Development only |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error` |
