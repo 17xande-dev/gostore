@@ -7,3 +7,6 @@ deploy/*/backups/
 
 # `make run` writes uploaded images here; see IMAGE_DIR in the Makefile.
 .local/
+
+.codex
+
