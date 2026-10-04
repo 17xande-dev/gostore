@@ -70,15 +70,6 @@ type userEditPage struct {
 	LastOwner bool
 }
 
-type passwordPage struct {
-	page
-	Errors validate.FormErrors
-
-	// Forced is set when this page was reached by being bounced to it, so it can
-	// say why rather than looking like a page the browser wandered onto.
-	Forced bool
-}
-
 // userNotices are the outcomes the account pages can report, by code. A fixed
 // map, so the only strings that can be rendered are these.
 var userNotices = map[string]string{
@@ -278,7 +269,7 @@ func (h *Handler) adminUserDisabled(w http.ResponseWriter, r *http.Request) {
 // adminUserPasswordReset sets somebody else's password.
 //
 // Never your own, even though you are allowed to change your own password on
-// /admin/password: a reset here does not ask for the current password, so
+// your profile settings page: a reset here does not ask for the current password, so
 // allowing it against yourself would make an unattended screen enough to take an
 // account over for good. The route that does ask is the one you use on yourself.
 func (h *Handler) adminUserPasswordReset(w http.ResponseWriter, r *http.Request) {
@@ -318,17 +309,6 @@ func (h *Handler) adminUserPasswordReset(w http.ResponseWriter, r *http.Request)
 	http.Redirect(w, r, "/admin/users/"+user.ID+"/edit?notice=password_reset", http.StatusSeeOther)
 }
 
-// adminPasswordForm is your own password, and the one admin page every role can
-// reach — including an account that has been bounced here and can reach nothing
-// else.
-func (h *Handler) adminPasswordForm(w http.ResponseWriter, r *http.Request) {
-	user, _ := middleware.AdminUser(r)
-	h.render(w, r, http.StatusOK, "admin_password", passwordPage{
-		page:   h.newPage(r, "Your password"),
-		Forced: user.MustChangePassword,
-	})
-}
-
 // adminPasswordChange sets your own password.
 //
 // It asks for the current one. A CSRF token proves the request came from our
@@ -358,7 +338,7 @@ func (h *Handler) adminPasswordChange(w http.ResponseWriter, r *http.Request) {
 	}
 	validate.Password(errs, password, r.PostFormValue("password_confirm"))
 	if errs.Any() {
-		h.renderPassword(w, r, http.StatusUnprocessableEntity, user, errs)
+		h.renderAccount(w, r, http.StatusUnprocessableEntity, accountPage{PasswordErrors: errs})
 		return
 	}
 
@@ -369,7 +349,7 @@ func (h *Handler) adminPasswordChange(w http.ResponseWriter, r *http.Request) {
 	case !ok:
 		h.logger(r).Warn("wrong current password on a password change", "user", user.ID)
 		errs.Add("current_password", "That is not your current password.")
-		h.renderPassword(w, r, http.StatusUnprocessableEntity, user, errs)
+		h.renderAccount(w, r, http.StatusUnprocessableEntity, accountPage{PasswordErrors: errs})
 		return
 	}
 
@@ -471,13 +451,5 @@ func (h *Handler) renderUserEdit(w http.ResponseWriter, r *http.Request, status 
 		Errors:    errs,
 		Self:      h.isSelf(r, user),
 		LastOwner: user.Role == auth.RoleOwner && !user.Disabled && owners <= 1,
-	})
-}
-
-func (h *Handler) renderPassword(w http.ResponseWriter, r *http.Request, status int, user auth.User, errs validate.FormErrors) {
-	h.render(w, r, status, "admin_password", passwordPage{
-		page:   h.newPage(r, "Your password"),
-		Errors: errs,
-		Forced: user.MustChangePassword,
 	})
 }

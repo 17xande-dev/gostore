@@ -143,6 +143,148 @@ body {
   }
 }
 
+/* --- Your account in the header --------------------------------------------
+   The admin header and the storefront share one account menu
+   (partials/account.gohtml): an icon, a tooltip, and a dropdown. */
+
+.profile-icon {
+  display: block;
+  width: 1.375rem;
+  height: 1.375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+
+.account-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  color: var(--ink-soft);
+  border: 1px solid var(--rule);
+
+  &:hover {
+    color: var(--ink);
+    background: var(--paper-sunk);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+}
+
+/* A tooltip from the element's own data-tooltip, on hover and on keyboard focus.
+   CSS rather than a title attribute: a title waits a second, ignores focus, and
+   cannot be styled. Below the element and right-aligned, because these sit at
+   the header's right edge and a centred one would run off a phone screen. */
+[data-tooltip] {
+  position: relative;
+
+  &::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    inset-block-start: calc(100% + var(--gap-xs));
+    inset-inline-end: 0;
+    z-index: 10;
+    padding: var(--gap-xs) var(--gap-sm);
+    border-radius: var(--radius);
+    background: var(--ink);
+    color: var(--paper);
+    font-size: var(--text-small);
+    font-weight: 400;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms ease-in;
+  }
+
+  &:hover::after,
+  &:focus-visible::after {
+    opacity: 1;
+  }
+}
+
+/* The account menu: a <details>, so it opens without script. Its tooltip is for
+   the closed state only — once open, the menu says the rest. */
+.account-menu {
+  position: relative;
+  font-size: var(--text-small);
+
+  > summary {
+    list-style: none;
+    cursor: pointer;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+  }
+
+  &[open] > summary::after {
+    display: none;
+  }
+
+  > .menu {
+    position: absolute;
+    inset-block-start: calc(100% + var(--gap-xs));
+    inset-inline-end: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    padding: var(--gap-xs);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--paper);
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.08);
+
+    > .who {
+      margin: 0;
+      padding: var(--gap-sm);
+      border-block-end: 1px solid var(--rule);
+      margin-block-end: var(--gap-xs);
+      color: var(--ink);
+      overflow-wrap: anywhere;
+
+      small {
+        color: var(--ink-soft);
+      }
+    }
+
+    > form {
+      margin: 0;
+    }
+
+    /* The links and the sign-out button look alike: they are all just places
+       this menu goes. The button keeps its own semantics — it is a POST. */
+    > a,
+    > form > button {
+      display: block;
+      width: 100%;
+      padding: var(--gap-sm);
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 400;
+      text-align: start;
+      text-decoration: none;
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible {
+        background: var(--paper-sunk);
+        text-decoration: none;
+      }
+    }
+  }
+}
+
 main {
   flex: 1;
   padding-block: var(--gap-lg) var(--gap-xl);

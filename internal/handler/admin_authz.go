@@ -57,14 +57,11 @@ func (h *Handler) AdminProtectedRoutes() []AdminRoute {
 	return out
 }
 
-// passwordPath is the one protected page an administrator who must change their
-// password may still reach. Signing out is the other, and it is not behind a
-// session at all.
-//
-// The page itself arrives with the rest of the account management; until then
-// nothing sets must_change_password, so the bounce below has nowhere to send
-// anybody and nobody to send.
-const passwordPath = "/admin/password"
+// accountPath is your own profile settings — the password form, and API tokens
+// for the roles that may hold them. It is the one protected page an
+// administrator who must change their password may still reach. Signing out is
+// the other, and it is not behind a session at all.
+const accountPath = "/admin/account"
 
 // requirePerm is the authorisation half of the admin routes, applied inside
 // RequireAdmin's authentication.
@@ -110,18 +107,18 @@ var errNoAdminUser = errors.New("handler: an admin route is registered without R
 // decorative. The exception is the change form itself, which they would
 // otherwise be redirected to from.
 func (h *Handler) passwordIsCurrent(w http.ResponseWriter, r *http.Request, user auth.User) bool {
-	if !user.MustChangePassword || r.URL.Path == passwordPath {
+	if !user.MustChangePassword || r.URL.Path == accountPath {
 		return true
 	}
 
 	// htmx would swap the redirect's target into a fragment of the page it is
 	// refusing to serve, so it is told to navigate instead.
 	if isHTMX(r) {
-		w.Header().Set("HX-Redirect", passwordPath)
+		w.Header().Set("HX-Redirect", accountPath)
 		w.WriteHeader(http.StatusNoContent)
 		return false
 	}
-	http.Redirect(w, r, passwordPath, http.StatusSeeOther)
+	http.Redirect(w, r, accountPath, http.StatusSeeOther)
 	return false
 }
 

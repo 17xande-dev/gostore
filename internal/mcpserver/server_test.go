@@ -20,6 +20,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/jackc/pgx/v5/pgxpool"
+	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -34,6 +35,13 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	return newFixtureWith(t, nil)
+}
+
+// newFixtureWith serves the endpoint behind a different verifier, nil meaning the
+// real one.
+func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *fixture {
 	t.Helper()
 	pool := dbtest.Pool(t)
 	cat := catalog.NewStore(pool)
@@ -57,7 +65,11 @@ func newFixture(t *testing.T) *fixture {
 		Version: "test",
 	})
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", f.server.Handler())
+	if verify == nil {
+		mux.Handle("/mcp", f.server.Handler())
+	} else {
+		mux.Handle("/mcp", f.server.handler(verify(f.server)))
+	}
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -210,10 +222,43 @@ var minimalArgs = map[string]map[string]any{
 	"restore_entitlement": {"order_id": "00000000-0000-0000-0000-000000000000", "entitlement_id": "00000000-0000-0000-0000-000000000000"},
 }
 
+// Only administrators may hold a token. One made for a lesser role before that
+// was the rule — the fixture issues it straight from the store, which is how such
+// a token would exist — is refused outright, not merely limited to reads.
+func TestEndpoint_RefusesATokenWhoseRoleMayNotHoldOne(t *testing.T) {
+	f := newFixture(t)
+	f.account(t, "owner@example.com", auth.RoleOwner)
+	for _, role := range []auth.Role{auth.RoleManager, auth.RoleViewer} {
+		_, token := f.account(t, string(role)+"@example.com", role)
+		req, _ := http.NewRequest(http.MethodPost, f.srv.URL+"/mcp",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s token: status %d, want 401", role, res.StatusCode)
+		}
+	}
+	// And an admin's works, so the refusal above is about the role.
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
+	if msg := call(t, f.connect(t, token), "list_categories", map[string]any{}, nil); msg != "" {
+		t.Errorf("admin list_categories: %s", msg)
+	}
+}
+
 // Every tool names a permission, and a role without it is refused before the
 // tool does anything — the MCP twin of the admin route sweep.
+//
+// Behind the verifier without its role check: no role that may hold a token
+// lacks a write permission today, so this is the check that still has to hold
+// the day one does.
 func TestTools_EveryWriteRefusesAViewer(t *testing.T) {
-	f := newFixture(t)
+	f := newFixtureWith(t, func(s *Server) mcpauth.TokenVerifier { return s.lookup })
 	f.account(t, "owner@example.com", auth.RoleOwner)
 	_, token := f.account(t, "viewer@example.com", auth.RoleViewer)
 	s := f.connect(t, token)
@@ -251,7 +296,7 @@ func TestTools_EveryWriteRefusesAViewer(t *testing.T) {
 
 func TestTools_CatalogRoundTrip(t *testing.T) {
 	f := newFixture(t)
-	_, token := f.account(t, "manager@example.com", auth.RoleManager)
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
 	s := f.connect(t, token)
 
 	var cat Category

@@ -11,7 +11,8 @@ HTML admin applies.
 
 ## Connecting a client
 
-**Make a token.** In the admin, open **API tokens** in the header (`/admin/account/tokens`),
+**Make a token.** Tokens are for `owner` and `admin` accounts. In the admin, open the profile
+icon at the right of the header, then **Profile settings** (`/admin/account`); in **API tokens**,
 name the token for where it will be used — "Claude Code, work laptop" — pick how long it lives,
 and create it. It is shown once; copy it then.
 
@@ -22,7 +23,7 @@ claude mcp add --transport http gostore https://shop.example.com/mcp \
   --header "Authorization: Bearer gst_…"
 ```
 
-The token page prints this command with your store's address and the token filled in.
+The profile page prints this command with your store's address and the token filled in.
 
 **Any other client** needs three things: the Streamable HTTP transport, the URL
 `https://<your store>/mcp`, and the header `Authorization: Bearer gst_…`. Clients that only
@@ -52,8 +53,10 @@ TRK123".
 | `retry_order_email` | orders.write | Sends an order's undelivered emails again |
 | `revoke_entitlement` / `restore_entitlement` | orders.write | Stops, or restores, a buyer's download link |
 
-"Needs" is the permission from [Roles](admin.md#roles): a `viewer`'s token can use the first five
-and nothing else; a `manager`'s, all of them. Tools are annotated read-only or destructive, so a
+"Needs" is the permission from [Roles](admin.md#roles). Only `owner` and `admin` accounts may
+hold a token, and both hold every permission, so today a token can call every tool; the
+per-tool check stays so that a role added later with tokens but fewer permissions is limited
+by it. Tools are annotated read-only or destructive, so a
 client that asks before destructive actions will ask before a delete.
 
 Prices go in and come out as decimal strings in the store's currency — `"149.99"` — never as
@@ -75,9 +78,10 @@ floating-point numbers.
 - **A token is its account acting.** It carries no role or scope of its own; the account's role
   at the moment of each call decides what it may do. Changing that account's password or role,
   or disabling it, revokes every token it holds at once, in the same transaction as its browser
-  sessions. A disabled account, or one that must change its password, gets no access at all.
+  sessions. A disabled account, or one that must change its password, gets no access at all —
+nor does a `manager` or `viewer` holding a token made before only administrators could.
 - **Tokens expire** — after 30, 90 or 365 days; there is no "never" — and can be revoked
-  individually from the token page. Only the token's `sha256` is stored, as for sessions, so a
+  individually from your profile settings. Only the token's `sha256` is stored, as for sessions, so a
   database backup holds no usable token. Each starts `gst_`, so a leaked one is recognisable to
   a person or a secret scanner.
 - **Every call authenticates afresh.** The endpoint is stateless: there is no MCP session to
@@ -90,5 +94,6 @@ floating-point numbers.
 - **No CSRF, on purpose.** The endpoint takes no cookies, so a browser cannot be tricked into
   calling it with your credentials; the bearer token is the whole credential.
 
-What an assistant does with the store is still what you asked it to do. Give it a `viewer`
-token when reading is all it needs, and revoke tokens you are no longer using.
+What an assistant does with the store is still what you asked it to do: a token can change
+anything its administrator can. Give each client its own token, and revoke tokens you are no
+longer using.

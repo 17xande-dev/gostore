@@ -67,6 +67,7 @@ func TestAdminRoutes_RolesGetTheirPermissions(t *testing.T) {
 		{auth.PermCatalogWrite, http.MethodPost, "/admin/products", url.Values{"title": {"A Product"}}},
 		{auth.PermCatalogWrite, http.MethodGet, "/admin/products/new", nil},
 		{auth.PermUsersWrite, http.MethodGet, "/admin/users", nil},
+		{auth.PermAPITokens, http.MethodPost, "/admin/account/tokens", url.Values{"name": {"laptop"}, "days": {"30"}}},
 		{
 			auth.PermOrdersWrite, http.MethodPost,
 			"/admin/orders/3f2504e0-4f89-41d3-9a0c-0305e82c3301/entitlements/9f2504e0-4f89-41d3-9a0c-0305e82c3301/revoke",
@@ -129,6 +130,7 @@ func TestAdminRoutes_UnprotectedRoutesArePinned(t *testing.T) {
 		"POST /admin/logout",
 		"GET /admin/setup",
 		"POST /admin/setup",
+		"GET /admin/account/menu",
 	}
 	var got []string
 	for _, m := range regexp.MustCompile(`mux\.Handle(?:Func)?\("([^"]+)"`).FindAllStringSubmatch(body, -1) {
@@ -171,11 +173,11 @@ func TestAdminRoutes_MustChangePasswordBouncesEverything(t *testing.T) {
 	// Every route, not a sample: a forced change that let through the pages
 	// nobody thought of is decorative. The exception is the change form itself,
 	// which is where they are being sent.
-	var sawPasswordPage bool
+	var sawAccountPage bool
 	for _, route := range s.handler.AdminProtectedRoutes() {
 		path := route.TestPath()
-		if path == passwordPath {
-			sawPasswordPage = true
+		if path == accountPath {
+			sawAccountPage = true
 			res, _ := get(t, s.srv, path)
 			if route.Method == http.MethodGet && res.StatusCode != http.StatusOK {
 				t.Errorf("GET %s while a change is forced = %d, want 200", path, res.StatusCode)
@@ -188,14 +190,14 @@ func TestAdminRoutes_MustChangePasswordBouncesEverything(t *testing.T) {
 		} else {
 			res, _ = post(t, s.srv, path, url.Values{"title": {"Sneaky"}})
 		}
-		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != passwordPath {
+		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != accountPath {
 			t.Errorf("%s %s = %d %q, want 303 to %s",
-				route.Method, path, res.StatusCode, res.Header.Get("Location"), passwordPath)
+				route.Method, path, res.StatusCode, res.Header.Get("Location"), accountPath)
 		}
 	}
 
-	if !sawPasswordPage {
-		t.Errorf("no route at %s, so the bounce above sends everybody to a 404", passwordPath)
+	if !sawAccountPage {
+		t.Errorf("no route at %s, so the bounce above sends everybody to a 404", accountPath)
 	}
 
 	// And signing out still works, or an account in this state could only be

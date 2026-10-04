@@ -257,6 +257,12 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	// limiter because it too verifies a secret.
 	mux.HandleFunc("GET /admin/setup", h.adminSetupForm)
 	mux.Handle("POST /admin/setup", h.limits.login(http.HandlerFunc(h.adminSetupClaim)))
+	// The storefront header's account menu. Outside the closure because it
+	// serves anybody: a visitor with no session gets an empty 204, not a
+	// redirect to the login form — RequireAdmin's htmx answer is a full-page
+	// refresh, which on a storefront page would loop. It reveals nothing but
+	// who you are, to you.
+	mux.Handle("GET /admin/account/menu", middleware.AttachAdmin(h.users, h.log)(http.HandlerFunc(h.accountMenu)))
 
 	// Registering twice would otherwise record every route twice; the mux would
 	// panic first, but a handler mounted on two muxes in a test would not.
@@ -322,19 +328,24 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/users/{id}/role", auth.PermUsersWrite, h.adminUserRole)
 	admin("POST /admin/users/{id}/disabled", auth.PermUsersWrite, h.adminUserDisabled)
 	admin("POST /admin/users/{id}/password", auth.PermUsersWrite, h.adminUserPasswordReset)
-	// Your own password: PermRead, because every role has one, and written as
-	// passwordPath because requirePerm exempts exactly this path from the
-	// forced-change bounce. Two strings that had to match would eventually not.
-	admin("GET "+passwordPath, auth.PermRead, h.adminPasswordForm)
+	// Your profile settings: PermRead, because every role has a password, and
+	// written as accountPath because requirePerm exempts exactly this path from
+	// the forced-change bounce. Two strings that had to match would eventually
+	// not. The POST is the password change.
+	admin("GET "+accountPath, auth.PermRead, h.adminAccount)
 	// Rate limited for the same reason the login POST is: it verifies a secret.
 	// Inside the session check rather than outside it, so the allowance is spent
 	// by signed-in administrators rather than by anyone who can reach the door.
-	admin("POST "+passwordPath, auth.PermRead, rateLimited(h.limits.login, h.adminPasswordChange))
-	// Your own API tokens: PermRead, because every role may make them — a token
-	// can only do what its account's role can. See admin_tokens.go.
-	admin("GET /admin/account/tokens", auth.PermRead, h.adminTokenList)
-	admin("POST /admin/account/tokens", auth.PermRead, h.adminTokenCreate)
-	admin("POST /admin/account/tokens/{id}/revoke", auth.PermRead, h.adminTokenRevoke)
+	admin("POST "+accountPath, auth.PermRead, rateLimited(h.limits.login, h.adminPasswordChange))
+	// Your own API tokens, a section of the same page: administrators only. See
+	// admin_tokens.go.
+	// The GET is where a reload after creating a token lands, and where the
+	// tokens used to have a page of their own.
+	admin("GET /admin/account/tokens", auth.PermRead, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, accountPath+"#api-tokens", http.StatusSeeOther)
+	})
+	admin("POST /admin/account/tokens", auth.PermAPITokens, h.adminTokenCreate)
+	admin("POST /admin/account/tokens/{id}/revoke", auth.PermAPITokens, h.adminTokenRevoke)
 }
 
 // rateLimited puts a limiter in front of one handler, in the shape the route

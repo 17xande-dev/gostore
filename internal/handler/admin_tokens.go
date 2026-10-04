@@ -14,9 +14,10 @@ import (
 )
 
 // Your own API tokens — the bearer credentials an MCP client, or any program,
-// uses to act as you. Every role may make them, because a token can do exactly
-// what its account's role can and nothing more; a viewer's token is a way to let
-// an assistant read the store, which is worth having on its own.
+// uses to act as you. They live on your profile settings page, and only for the
+// roles holding auth.PermAPITokens: owners and admins. A token is a credential
+// that outlives the browser, kept in some program's config, and the accounts
+// that run the store are the ones worth that exposure.
 //
 // Only ever your own. Another administrator's tokens are not listed or revocable
 // from here: disabling that account, changing its role or resetting its password
@@ -30,32 +31,9 @@ var tokenLifetimes = []int{30, 90, 365}
 
 const defaultTokenDays = 90
 
-type tokensPage struct {
-	page
-	Tokens    []auth.APIToken
-	Lifetimes []int
-	Form      tokenForm
-	Errors    validate.FormErrors
-	// Created is the token just made, shown this once. Empty on every other
-	// render — the store has only its hash.
-	Created     string
-	CreatedName string
-	Notice      string
-	// Endpoint is the MCP URL, for the connection instructions beside the token.
-	Endpoint string
-}
-
 type tokenForm struct {
 	Name string
 	Days int
-}
-
-func (h *Handler) adminTokenList(w http.ResponseWriter, r *http.Request) {
-	notice := ""
-	if r.URL.Query().Get("revoked") == "1" {
-		notice = "Token revoked. Anything still using it is refused from its next request."
-	}
-	h.renderTokens(w, r, http.StatusOK, tokenForm{Days: defaultTokenDays}, nil, "", "", notice)
 }
 
 func (h *Handler) adminTokenCreate(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +58,7 @@ func (h *Handler) adminTokenCreate(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, auth.ErrInvalidTokenName) {
 		errs := validate.FormErrors{}
 		errs.Add("name", "Give the token a name of up to 100 characters — say where it will be used.")
-		h.renderTokens(w, r, http.StatusUnprocessableEntity, form, errs, "", "", "")
+		h.renderAccount(w, r, http.StatusUnprocessableEntity, accountPage{TokenForm: form, TokenErrors: errs})
 		return
 	}
 	if err != nil {
@@ -90,7 +68,7 @@ func (h *Handler) adminTokenCreate(w http.ResponseWriter, r *http.Request) {
 	h.logger(r).Info("issued an api token", "user", user.ID, "token", rec.ID, "expires", rec.ExpiresAt)
 	// Rendered rather than redirected: the token exists only in this response,
 	// and a redirect would have to carry it in a URL to show it at all.
-	h.renderTokens(w, r, http.StatusOK, tokenForm{Days: defaultTokenDays}, nil, token, rec.Name, "")
+	h.renderAccount(w, r, http.StatusOK, accountPage{Created: token, CreatedName: rec.Name})
 }
 
 func (h *Handler) adminTokenRevoke(w http.ResponseWriter, r *http.Request) {
@@ -109,34 +87,5 @@ func (h *Handler) adminTokenRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger(r).Info("revoked an api token", "user", user.ID, "token", r.PathValue("id"))
-	http.Redirect(w, r, "/admin/account/tokens?revoked=1", http.StatusSeeOther)
-}
-
-func (h *Handler) renderTokens(w http.ResponseWriter, r *http.Request, status int, form tokenForm, errs validate.FormErrors, created, createdName, notice string) {
-	user, ok := middleware.AdminUser(r)
-	if !ok {
-		h.serverError(w, r, errNoAdminUser)
-		return
-	}
-	tokens, err := h.users.APITokens(r.Context(), user.ID)
-	if err != nil {
-		h.serverError(w, r, err)
-		return
-	}
-	if created != "" {
-		// A page holding a live credential must not be kept by the browser's cache
-		// or anything between it and here.
-		w.Header().Set("Cache-Control", "no-store")
-	}
-	h.render(w, r, status, "admin_tokens", tokensPage{
-		page:        h.newPage(r, "API tokens"),
-		Tokens:      tokens,
-		Lifetimes:   tokenLifetimes,
-		Form:        form,
-		Errors:      errs,
-		Created:     created,
-		CreatedName: createdName,
-		Notice:      notice,
-		Endpoint:    h.cfg.BaseURL + "/mcp",
-	})
+	http.Redirect(w, r, accountPath+"?notice=token_revoked#api-tokens", http.StatusSeeOther)
 }

@@ -35,6 +35,10 @@ func TestRoleCan(t *testing.T) {
 		{RoleManager, PermCatalogWrite, true},
 		{RoleViewer, PermCatalogWrite, false},
 		{RoleViewer, PermRead, true},
+		{RoleOwner, PermAPITokens, true},
+		{RoleAdmin, PermAPITokens, true},
+		{RoleManager, PermAPITokens, false},
+		{RoleViewer, PermAPITokens, false},
 		// A role the CHECK constraint would have rejected, and a permission
 		// nothing defines: both hold nothing rather than everything.
 		{Role("root"), PermRead, false},

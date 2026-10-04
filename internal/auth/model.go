@@ -78,12 +78,19 @@ const (
 	// PermUsersWrite is the accounts pages — creating administrators,
 	// disabling them, changing roles and resetting passwords.
 	PermUsersWrite Permission = "users.write"
+	// PermAPITokens is holding API tokens: making and revoking your own, and
+	// using one at the MCP endpoint at all. Administrators only. A token is a
+	// long-lived credential that lives outside the browser — in a config file,
+	// on a laptop, in an assistant's settings — and that exposure is worth
+	// taking on for the accounts that run the store, not for every login that
+	// can read it.
+	PermAPITokens Permission = "api.tokens"
 )
 
 // Permissions is every permission there is, so that a caller handed one as a
 // string — a template asking Can, say — can tell a typo from a real name
 // instead of quietly getting "no".
-var Permissions = []Permission{PermRead, PermCatalogWrite, PermOrdersWrite, PermUsersWrite}
+var Permissions = []Permission{PermRead, PermCatalogWrite, PermOrdersWrite, PermUsersWrite, PermAPITokens}
 
 // Valid reports whether p is one of them.
 func (p Permission) Valid() bool {
@@ -99,9 +106,11 @@ func (p Permission) Valid() bool {
 var permissions = map[Role]map[Permission]bool{
 	RoleOwner: {
 		PermRead: true, PermCatalogWrite: true, PermOrdersWrite: true, PermUsersWrite: true,
+		PermAPITokens: true,
 	},
 	RoleAdmin: {
 		PermRead: true, PermCatalogWrite: true, PermOrdersWrite: true, PermUsersWrite: true,
+		PermAPITokens: true,
 	},
 	RoleManager: {
 		PermRead: true, PermCatalogWrite: true, PermOrdersWrite: true,

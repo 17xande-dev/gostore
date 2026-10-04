@@ -91,6 +91,13 @@ func (s *Server) Tools() []ToolPerm {
 // Handler is the /mcp endpoint: the bearer-token check in front of the
 // Streamable HTTP transport.
 func (s *Server) Handler() http.Handler {
+	return s.handler(s.verify)
+}
+
+// handler is the endpoint behind a given verifier. Separate from Handler only so
+// a test can put a token the role check would refuse in front of the tools, to
+// prove each tool's own permission check still holds on its own.
+func (s *Server) handler(verify mcpauth.TokenVerifier) http.Handler {
 	transport := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return s.srv },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
@@ -98,7 +105,7 @@ func (s *Server) Handler() http.Handler {
 	// The SDK's middleware, rather than one of ours, because it is the only way
 	// the identity reaches a tool handler: it stores what the verifier returns
 	// under its own context key and copies it into each request's Extra.
-	return mcpauth.RequireBearerToken(s.verify, nil)(transport)
+	return mcpauth.RequireBearerToken(verify, nil)(transport)
 }
 
 // userKey is where the verified account travels in TokenInfo.Extra.
@@ -112,7 +119,26 @@ const userKey = "gostore.user"
 // database outage sends somebody off to make a new one for nothing. The 500's
 // message is ours: the SDK writes a verifier's error text into the response,
 // and a database error is not something to hand a caller.
-func (s *Server) verify(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
+//
+// A token whose account's role does not hold auth.PermAPITokens is refused like
+// any other unusable one. Demoting an account deletes its tokens, so this is
+// for the ones made before only administrators could make them — and for any
+// that the deletion somehow missed, which should then fail closed.
+func (s *Server) verify(ctx context.Context, token string, r *http.Request) (*mcpauth.TokenInfo, error) {
+	info, err := s.lookup(ctx, token, r)
+	if err != nil {
+		return nil, err
+	}
+	if user := info.Extra[userKey].(auth.User); !user.Can(auth.PermAPITokens) {
+		s.d.Log.Warn("mcp: refused a token whose role may not hold one", "user", user.ID, "role", user.Role)
+		return nil, mcpauth.ErrInvalidToken
+	}
+	return info, nil
+}
+
+// lookup is verify without the role check: the token, its account, and the
+// bookkeeping.
+func (s *Server) lookup(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
 	rec, user, err := s.d.Users.APITokenUser(ctx, token)
 	switch {
 	case errors.Is(err, auth.ErrNotFound):

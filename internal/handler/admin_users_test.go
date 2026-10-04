@@ -342,8 +342,8 @@ func TestAdminUsers_RefusesChangesToYourOwnAccount(t *testing.T) {
 			t.Errorf("your own account page offers %s", absent)
 		}
 	}
-	if !strings.Contains(body, "/admin/password") {
-		t.Error("your own account page does not point at the password form")
+	if !strings.Contains(body, "/admin/account") {
+		t.Error("your own account page does not point at your profile settings")
 	}
 }
 
@@ -456,7 +456,7 @@ func TestAdminPassword_ChangeYourOwn(t *testing.T) {
 
 	// The current password is asked for, and a wrong one is refused even though
 	// the session is authenticated and the CSRF token is good.
-	res, body := post(t, s.srv, "/admin/password", url.Values{
+	res, body := post(t, s.srv, "/admin/account", url.Values{
 		"current_password": {"not my password"},
 		"password":         {newPassword},
 		"password_confirm": {newPassword},
@@ -471,7 +471,7 @@ func TestAdminPassword_ChangeYourOwn(t *testing.T) {
 		t.Error("the rejected form carries the new password back into the page")
 	}
 
-	res, body = post(t, s.srv, "/admin/password", url.Values{
+	res, body = post(t, s.srv, "/admin/account", url.Values{
 		"current_password": {testPassword},
 		"password":         {newPassword},
 		"password_confirm": {newPassword},
@@ -525,20 +525,20 @@ func TestAdminPassword_ForcedChangeAfterAReset(t *testing.T) {
 
 	// Nothing else opens until they have chosen one.
 	res, _ = get(t, s.srv, "/admin/products")
-	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != passwordPath {
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != accountPath {
 		t.Fatalf("GET /admin/products = %d %q, want a bounce to %s",
-			res.StatusCode, res.Header.Get("Location"), passwordPath)
+			res.StatusCode, res.Header.Get("Location"), accountPath)
 	}
-	res, body := get(t, s.srv, passwordPath)
+	res, body := get(t, s.srv, accountPath)
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s = %d", passwordPath, res.StatusCode)
+		t.Fatalf("GET %s = %d", accountPath, res.StatusCode)
 	}
 	if !strings.Contains(body, "set by another administrator") {
 		t.Error("the forced change form does not say why it is being shown")
 	}
 
 	const chosen = "a password of their own choosing"
-	res, body = post(t, s.srv, "/admin/password", url.Values{
+	res, body = post(t, s.srv, "/admin/account", url.Values{
 		"current_password": {newPassword},
 		"password":         {chosen},
 		"password_confirm": {chosen},

@@ -1,10 +1,11 @@
 {{/*
   The admin chrome, for every file under templates/admin/. It carries the nav and
-  the sign-out form, which is the reason it exists as a second layout rather than a
-  flag on the first: the sign-in page is served by the public layout, so there is
-  no sign-out link in scope for it to render by mistake. That used to be a
-  convention held up by every admin page remembering to call "adminnav"; it is now
-  structural.
+  the account menu with its sign-out form, which is the reason it exists as a
+  second layout rather than a flag on the first: the public layout renders no
+  account menu of its own — the storefront's is fetched, and only a signed-in
+  browser gets one — so the sign-in page has nothing to show by mistake. That used
+  to be a convention held up by every admin page remembering to call "adminnav";
+  it is now structural.
 
   It offers "content" and nothing else. A block the admin never fills is a block
   nobody maintains.
@@ -29,13 +30,13 @@
       {{if .Can "users.write"}}<a href="/admin/users">Users</a>{{end}}
       <a href="/products">Storefront</a>
     </nav>
-    <form method="post" action="/admin/logout">
-      {{template "csrf" .CSRFToken}}
-      {{/* Who you are signed in as, and the way to your own password. */}}
-      <a class="quiet" href="/admin/password">{{.User.Display}}</a>
-      <a class="quiet" href="/admin/account/tokens">API tokens</a>
-      <button type="submit">Sign out</button>
-    </form>
+    {{/*
+      Your account: profile settings (password, and API tokens for the roles
+      that may hold them) and signing out, behind one icon so the header does
+      not grow with a long name.
+    */}}
+    {{template "account_menu_open" .}}
+    {{template "account_menu_close" .}}
   </div>
 </header>
 <main>

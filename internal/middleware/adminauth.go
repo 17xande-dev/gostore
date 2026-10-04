@@ -26,7 +26,8 @@ type userKey struct{}
 // AdminUser returns the administrator this request is authenticated as.
 //
 // The second return is false for a request that did not come through
-// RequireAdmin, which is a programming error at every call site that reads it —
+// RequireAdmin (or an anonymous one through AttachAdmin), which behind
+// RequireAdmin is a programming error at every call site that reads it —
 // so the value is worth checking rather than assuming, and the zero User holds no
 // permissions if somebody does not.
 func AdminUser(r *http.Request) (auth.User, bool) {
@@ -61,26 +62,14 @@ func withAdminUser(r *http.Request, u auth.User) *http.Request {
 func RequireAdmin(users *auth.Store, log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie(auth.CookieName)
-			if err == nil {
-				_, user, err := users.Session(r.Context(), cookie.Value)
-				switch {
-				case err == nil && !user.Disabled:
-					next.ServeHTTP(w, withAdminUser(r, user))
-					return
-				case err == nil:
-					// Belt and braces: disabling an account deletes its sessions
-					// in the same transaction, so a live session for a disabled
-					// account should not exist. If one does, it does not work.
-					log.Warn("session for a disabled account", "user", user.ID, "path", r.URL.Path)
-				case errors.Is(err, auth.ErrNotFound):
-					// Expired, revoked, or never issued. Routine, and not worth a
-					// log line per request from a browser holding a stale cookie.
-				default:
-					log.Error("cannot read the admin session", "path", r.URL.Path, "error", err)
-					http.Error(w, "internal server error", http.StatusInternalServerError)
-					return
-				}
+			user, ok, err := sessionUser(users, log, r)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if ok {
+				next.ServeHTTP(w, withAdminUser(r, user))
+				return
 			}
 
 			if r.Header.Get("HX-Request") == "true" {
@@ -90,6 +79,55 @@ func RequireAdmin(users *auth.Store, log *slog.Logger) Middleware {
 			}
 			http.Redirect(w, r, loginURL(r), http.StatusSeeOther)
 		})
+	}
+}
+
+// AttachAdmin is RequireAdmin for a route that serves anybody: a live session's
+// account goes into the context, and a request without one carries on
+// anonymously, AdminUser reporting false. The storefront's account menu is the
+// case — it asks who is signed in, and "nobody" is an answer, not a refusal.
+//
+// A store error is still a 500, for RequireAdmin's reason.
+func AttachAdmin(users *auth.Store, log *slog.Logger) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok, err := sessionUser(users, log, r)
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if ok {
+				r = withAdminUser(r, user)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// sessionUser is the account behind the request's session cookie, if it has a
+// live one. The error is the store failing, already logged.
+func sessionUser(users *auth.Store, log *slog.Logger, r *http.Request) (auth.User, bool, error) {
+	cookie, err := r.Cookie(auth.CookieName)
+	if err != nil {
+		return auth.User{}, false, nil
+	}
+	_, user, err := users.Session(r.Context(), cookie.Value)
+	switch {
+	case err == nil && !user.Disabled:
+		return user, true, nil
+	case err == nil:
+		// Belt and braces: disabling an account deletes its sessions in the
+		// same transaction, so a live session for a disabled account should
+		// not exist. If one does, it does not work.
+		log.Warn("session for a disabled account", "user", user.ID, "path", r.URL.Path)
+		return auth.User{}, false, nil
+	case errors.Is(err, auth.ErrNotFound):
+		// Expired, revoked, or never issued. Routine, and not worth a log line
+		// per request from a browser holding a stale cookie.
+		return auth.User{}, false, nil
+	default:
+		log.Error("cannot read the admin session", "path", r.URL.Path, "error", err)
+		return auth.User{}, false, err
 	}
 }
 

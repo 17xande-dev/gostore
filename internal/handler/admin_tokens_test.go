@@ -33,7 +33,7 @@ func TestAdminTokens_CreateShowsTheTokenOnceAndItAuthenticates(t *testing.T) {
 	}
 
 	// Listed afterwards, but never shown again.
-	res, body = get(t, s.srv, "/admin/account/tokens")
+	res, body = get(t, s.srv, accountPath)
 	if res.StatusCode != http.StatusOK || !strings.Contains(body, "laptop") {
 		t.Fatalf("list = %d, missing the token's name", res.StatusCode)
 	}
@@ -81,14 +81,72 @@ func TestAdminTokens_RevokeOnlyYourOwn(t *testing.T) {
 	}
 }
 
-// Every role may make tokens — a token only ever does what its role can.
-func TestAdminTokens_AViewerMayMakeOne(t *testing.T) {
-	s := newStore(t)
-	mustAccount(t, s, "viewer@example.com", "correct horse battery", auth.RoleViewer)
-	signInAs(t, s.srv, "viewer@example.com", "correct horse battery")
+// Tokens are for administrators: a manager or a viewer is refused the routes and
+// is not offered the section, while still reaching the rest of their profile.
+func TestAdminTokens_OnlyAdministratorsMayHoldThem(t *testing.T) {
+	for _, role := range []auth.Role{auth.RoleManager, auth.RoleViewer} {
+		t.Run(string(role), func(t *testing.T) {
+			s := newStore(t)
+			email := string(role) + "@example.com"
+			me := mustAccount(t, s, email, "correct horse battery", role)
+			signInAs(t, s.srv, email, "correct horse battery")
 
-	res, body := post(t, s.srv, "/admin/account/tokens", url.Values{"name": {"read-only"}, "days": {"30"}})
-	if res.StatusCode != http.StatusOK || shownToken.FindString(body) == "" {
-		t.Fatalf("viewer create = %d", res.StatusCode)
+			res, _ := post(t, s.srv, "/admin/account/tokens", url.Values{"name": {"read-only"}, "days": {"30"}})
+			if res.StatusCode != http.StatusForbidden {
+				t.Errorf("create = %d, want 403", res.StatusCode)
+			}
+			left, err := s.users.APITokens(t.Context(), me.ID)
+			if err != nil || len(left) != 0 {
+				t.Errorf("tokens after a refused create = %v, %v", left, err)
+			}
+
+			res, body := get(t, s.srv, accountPath)
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("profile settings = %d", res.StatusCode)
+			}
+			if strings.Contains(body, "/admin/account/tokens") {
+				t.Error("the profile page offers API tokens to a role that cannot hold them")
+			}
+			if !strings.Contains(body, "current_password") {
+				t.Error("the profile page lost the password form")
+			}
+		})
+	}
+}
+
+func TestAdminTokens_ShownOnAnAdministratorsProfile(t *testing.T) {
+	s := setupShop(t)
+	res, body := get(t, s.srv, accountPath)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("profile settings = %d", res.StatusCode)
+	}
+	for _, want := range []string{`action="/admin/account/tokens"`, `action="/admin/account"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the owner's profile page has no %s", want)
+		}
+	}
+}
+
+// The storefront's account menu: the admin links for a signed-in browser, and
+// nothing at all — a 204 htmx leaves unswapped — for anybody else.
+func TestAccountMenu(t *testing.T) {
+	s := newStore(t)
+	res, body := get(t, s.srv, "/admin/account/menu")
+	if res.StatusCode != http.StatusNoContent || body != "" {
+		t.Errorf("anonymous menu = %d %q, want an empty 204", res.StatusCode, body)
+	}
+
+	s = setupShop(t)
+	res, body = get(t, s.srv, "/admin/account/menu")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("signed-in menu = %d", res.StatusCode)
+	}
+	for _, want := range []string{`href="/admin/products"`, `href="/admin/account"`, `action="/admin/logout"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the menu has no %s", want)
+		}
+	}
+	if got := res.Header.Get("Cache-Control"); got != "private, no-store" {
+		t.Errorf("Cache-Control = %q; a menu naming who is signed in must not be cached", got)
 	}
 }

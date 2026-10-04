@@ -37,15 +37,18 @@ correct.
 The costs, stated plainly: one indexed lookup per admin request, and a session that outlives
 a `DELETE FROM admin_sessions` does not exist. Both are the price of being able to end one.
 
-**API tokens are sessions for programs.** `/admin/account/tokens` (the *API tokens* link in
-the header) makes a bearer token for the [MCP endpoint](mcp.md): the same 32 random bytes and
+**API tokens are sessions for programs.** The *API tokens* section of your profile settings
+(`/admin/account`, under the profile icon in the header) makes a bearer token for the [MCP endpoint](mcp.md): the same 32 random bytes and
 stored `sha256`, prefixed `gst_` so a leaked one is recognisable, shown once, and named for
 where it will be used. It lives 30, 90 or 365 days — there is no never. A token carries no role
 of its own: it is its account acting, the account's current role decides every request, and a
 password change, role change or disable deletes the account's tokens in the same transaction
 as its sessions. A disabled account, or one that must change its password, gets no programmatic
-access. Every role may make tokens, and only ever its own; another administrator's are ended
-by the account changes above.
+access. Only `owner` and `admin` may hold tokens (the `api.tokens` permission): a token is a
+long-lived credential kept outside the browser, and that exposure is for the accounts that run
+the store. A `manager` or `viewer` is not offered the section, is refused the routes, and any
+token such an account still holds from before this rule is refused at the MCP endpoint. Each
+account manages only its own; another administrator's are ended by the account changes above.
 
 If nobody can sign in at all — every owner disabled, or the only password lost — `make hashpw`
 prints a hash to set by hand. See [`cmd/hashpw`](../cmd/hashpw/main.go) for the `UPDATE`, and for
@@ -76,12 +79,12 @@ Four roles, following Stripe's dashboard split reduced to the surface this store
 access to the catalog and the orders comes with having a session at all, so the table is
 really about who may write:
 
-| Role | Catalog | Orders & entitlements | Accounts | |
-|---|---|---|---|---|
-| `owner` | write | write | write | Cannot be disabled or demoted while it is the last enabled owner |
-| `admin` | write | write | write | |
-| `manager` | write | write | — | The shop-runner role |
-| `viewer` | read | read | — | Looks, changes nothing |
+| Role | Catalog | Orders & entitlements | Accounts | API tokens | |
+|---|---|---|---|---|---|
+| `owner` | write | write | write | yes | Cannot be disabled or demoted while it is the last enabled owner |
+| `admin` | write | write | write | yes | |
+| `manager` | write | write | — | — | The shop-runner role |
+| `viewer` | read | read | — | — | Looks, changes nothing |
 
 `owner` and `admin` are identical in capability. `owner` exists to be the account the
 last-account guard protects, which makes "who can never be locked out" a visible fact about
@@ -124,6 +127,11 @@ it will:
 - **A password somebody else chose is temporary.** Creating an account, or resetting its
   password, sets `must_change_password`; every route except the change form itself then
   bounces there until a new one is chosen.
+- **Your own account is under the profile icon** at the right of the header — profile
+  settings (`/admin/account`) and signing out. The storefront shows the same menu, with a link
+  into the admin, to a browser signed in to the admin; it is fetched after the page loads, so
+  storefront pages stay the same for every visitor and the admin cookie (scoped to `/admin`)
+  never has to reach them.
 - **Changing your own password asks for the current one.** A CSRF token proves the request
   came from our form, not that the person at the keyboard owns the account. It ends every
   session including the one doing it, and lands on the login form.

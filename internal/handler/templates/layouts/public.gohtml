@@ -36,6 +36,14 @@
       <a href="/products">Shop</a>
       <a href="/cart">Cart</a>
       {{block "nav_extra" .}}{{end}}
+      {{/*
+        The account menu, for a browser signed in to the admin: fetched rather than
+        rendered, so this page is the same for everybody and stays cacheable, and
+        the admin session — whose cookie is scoped to /admin — is never needed
+        here. A visitor with no session gets an empty 204 and sees nothing.
+      */}}
+      <span class="account-slot" hx-get="/admin/account/menu" hx-trigger="load"
+            hx-swap="outerHTML"></span>
     </nav>
   </div>
 </header>

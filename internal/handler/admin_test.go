@@ -790,7 +790,7 @@ func csrfToken(t *testing.T, srv *httptest.Server) string {
 	res, body := get(t, srv, "/admin/login")
 	if res.StatusCode != http.StatusOK {
 		if res, body = get(t, srv, "/admin/setup"); res.StatusCode != http.StatusOK {
-			_, body = get(t, srv, passwordPath)
+			_, body = get(t, srv, accountPath)
 		}
 	}
 
