@@ -120,7 +120,7 @@ logs:
 # there and refresh, no restart. THEME_RELOAD=false for the read-once behaviour a
 # deployment has.
 run: local-dirs
-	$(COMPOSE) up -d postgres mailpit
+	$(COMPOSE) up -d --wait postgres mailpit
 	@$(DEV_ENV) TEMPLATE_DIR=theme/templates STATIC_DIR=theme/static \
 		THEME_RELOAD="$(THEME_RELOAD)" go run .
 

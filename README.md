@@ -43,6 +43,29 @@ are applied automatically on boot. It also mounts [`theme/`](theme) into the ser
 reloading on, so a stylesheet or template dropped in there takes effect on the next page
 refresh — see [Theming](docs/theming.md#theming).
 
+### Run the Go dev server on your host
+
+Use this instead of `make up` when you want `go run` on the host (for example, for a
+debugger). Docker Compose still provides Postgres and Mailpit; no `.env` or manual
+database setup is needed on a clean checkout:
+
+```sh
+make run                         # starts Postgres + Mailpit, migrates, serves :8080
+make seed                        # optional: load the demo catalog
+```
+
+Wait for the migration messages and `http://localhost:8080/healthz` to respond. On a
+fresh database, copy the `setup_token` printed by the server, open
+`http://localhost:8080/admin`, and use it to create the first administrator. Mail sent
+locally is captured at [http://localhost:8025](http://localhost:8025). Stop the server
+with Ctrl-C; `make down` stops the Compose services. Use `make down ARGS=-v` only when
+you want to delete the local database and start over.
+
+If startup reports a database connection or authentication error, check whether another
+Postgres is occupying port 5432 and inspect `docker compose logs postgres`. To discard a
+broken local database and recreate it, run `make down ARGS=-v` followed by `make run`;
+this deletes all local database data.
+
 Production templates use **Cloudflare R2**: a public image bucket and a separate
 private download bucket. They also require `EMAIL_QUEUE_KEY` (`openssl rand -hex 32`)
 to encrypt pending email jobs. Keep this key with your backups. The development
@@ -80,8 +103,8 @@ Other useful targets:
 | [Operations](docs/operations.md) | When something goes wrong, and logging |
 | [Deploying](docs/deploy/README.md) | Two ready-made Compose deployments, backups, and running it anywhere else |
 | [Developing gostore](docs/development.md) | The store layer, migrations, dependencies, and the build order |
+| [Deprecations](docs/deprecations.md) | What is kept only for compatibility, to remove at the next major version |
 
 ## Licence
 
 [MIT](LICENSE).
-| [Deprecations](docs/deprecations.md) | What is kept only for compatibility, to remove at the next major version |
