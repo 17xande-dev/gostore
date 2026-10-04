@@ -14,11 +14,11 @@ import (
 
 // The tools. Deliberately absent, each for a reason:
 //
-//   - Image and downloadable-file uploads. Bytes do not belong in JSON-RPC
-//     arguments, a digital file can be gigabytes, and "fetch it from this URL"
-//     would make the store a request-forger and break the rule that an image is
-//     always bytes the store holds. get_product returns the admin page to upload
-//     at instead.
+//   - Bytes in a tool call. An image goes through create_image_upload's URL
+//     instead (see upload.go), and the store never fetches one from a URL it is
+//     given, which would make it a request-forger.
+//   - Downloadable-file uploads. A digital file can be gigabytes, which is the
+//     web admin's job; get_product returns the admin page to upload at.
 //   - Administrator accounts. Passwords, roles and the rules against acting on
 //     yourself are not something to hand an assistant: an agent that can create
 //     an owner is an escalation path.
@@ -45,7 +45,7 @@ func (s *Server) registerTools() {
 	add(s, auth.PermRead, &mcp.Tool{Name: "list_products", Annotations: readOnly("List products"),
 		Description: "Every product with its variants, active or not, ordered by title."}, s.listProducts)
 	add(s, auth.PermRead, &mcp.Tool{Name: "get_product", Annotations: readOnly("Get a product"),
-		Description: "One product by id: variants, categories, image URL, attached files, and the admin page for uploading an image or files."}, s.getProduct)
+		Description: "One product by id: variants, categories, image URL, attached files, and the admin page for uploading downloadable files."}, s.getProduct)
 	add(s, auth.PermRead, &mcp.Tool{Name: "list_categories", Annotations: readOnly("List categories"),
 		Description: "Every category, in display order."}, s.listCategories)
 	add(s, auth.PermRead, &mcp.Tool{Name: "search_orders", Annotations: readOnly("Search orders"),
@@ -59,6 +59,8 @@ func (s *Server) registerTools() {
 		Description: "Changes the fields given and leaves the rest. category_ids, when given, replaces the product's categories. The kind cannot change once the product has been ordered."}, s.updateProduct)
 	add(s, auth.PermCatalogWrite, &mcp.Tool{Name: "delete_product", Annotations: editing("Delete a product"),
 		Description: "Deletes a product that has never been ordered. An ordered one is refused: deactivate it with update_product instead."}, s.deleteProduct)
+	add(s, auth.PermCatalogWrite, &mcp.Tool{Name: "create_image_upload", Annotations: additive("Create an image upload URL"),
+		Description: "Returns a single-use URL, valid for 15 minutes, that sets a product's image: send the image file's raw bytes to it as the body of a PUT (or POST), e.g. `curl --fail -T photo.jpg <upload_url>`. JPEG, PNG, GIF or WebP, up to 5 MB. A new image replaces the old one. The response to the upload is JSON with the new image_url, or an error."}, s.createImageUpload)
 	add(s, auth.PermCatalogWrite, &mcp.Tool{Name: "create_variant", Annotations: additive("Create a variant"),
 		Description: "Adds a purchasable variant to a product: a SKU, its option values in the order of the product's option names, a price and stock."}, s.createVariant)
 	add(s, auth.PermCatalogWrite, &mcp.Tool{Name: "update_variant", Annotations: editing("Update a variant"),
@@ -119,7 +121,7 @@ type Product struct {
 	Categories  []Category `json:"categories,omitempty"`
 	ImageURL    string     `json:"image_url,omitempty"`
 	Files       []File     `json:"files,omitempty"`
-	AdminURL    string     `json:"admin_url" jsonschema:"where to upload an image or files in the web admin"`
+	AdminURL    string     `json:"admin_url" jsonschema:"the product's page in the web admin, where downloadable files are uploaded"`
 }
 
 func categoryOut(c catalog.Category) Category {
@@ -148,7 +150,7 @@ func (s *Server) productOut(p catalog.Product) Product {
 		out.Categories = append(out.Categories, categoryOut(c))
 	}
 	if p.ImageKey != "" {
-		out.ImageURL = s.d.Images.URL(p.ImageKey)
+		out.ImageURL = s.imageURL(p.ImageKey)
 	}
 	for _, f := range p.Files {
 		out.Files = append(out.Files, File{ID: f.ID, Title: f.Title, Filename: f.OriginalFilename, SizeBytes: f.SizeBytes})

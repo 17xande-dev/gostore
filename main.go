@@ -189,7 +189,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, mcpSrv.Handler(), gateways, users, pool, log),
+		Handler:           routes(cfg, h, mcpSrv, gateways, users, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -577,7 +577,7 @@ func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	return storage, nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, mcpEndpoint http.Handler, gateways payment.Registry, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, mcpSrv *mcpserver.Server, gateways payment.Registry, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
@@ -608,7 +608,7 @@ func routes(cfg config.Config, h *handler.Handler, mcpEndpoint http.Handler, gat
 
 	// The MCP endpoint, outside CSRF for the same reason: its credential is a
 	// bearer token, not a cookie. See internal/mcpserver.
-	h.RegisterMCP(mux, mcpEndpoint)
+	h.RegisterMCP(mux, mcpSrv.Handler(), mcpserver.UploadPath, mcpSrv.UploadHandler())
 
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:

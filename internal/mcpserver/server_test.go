@@ -32,6 +32,7 @@ type fixture struct {
 	catalog *catalog.Store
 	orders  *orders.Store
 	carts   *cart.Store
+	images  *blob.Fake
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -52,6 +53,7 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 	f := &fixture{
 		pool: pool, users: auth.NewStore(pool), catalog: cat,
 		orders: orders.NewStore(pool), carts: cart.NewStore(pool),
+		images: blob.NewFake(),
 	}
 	f.server = New(Deps{
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -60,7 +62,7 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 		Orders:  f.orders,
 		Grants:  downloads.NewStore(pool, cat),
 		Outbox:  queue,
-		Images:  blob.NewFake(),
+		Images:  f.images,
 		BaseURL: "https://shop.test",
 		Version: "test",
 	})
@@ -70,6 +72,8 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 	} else {
 		mux.Handle("/mcp", f.server.handler(verify(f.server)))
 	}
+	mux.Handle("PUT "+UploadPath+"{token}", f.server.UploadHandler())
+	mux.Handle("POST "+UploadPath+"{token}", f.server.UploadHandler())
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -213,6 +217,7 @@ var minimalArgs = map[string]map[string]any{
 	"create_variant":      {"product_id": "00000000-0000-0000-0000-000000000000", "sku": "X", "price": "1"},
 	"update_variant":      {"product_id": "00000000-0000-0000-0000-000000000000", "id": "00000000-0000-0000-0000-000000000000"},
 	"delete_variant":      {"product_id": "00000000-0000-0000-0000-000000000000", "id": "00000000-0000-0000-0000-000000000000"},
+	"create_image_upload": {"product_id": "00000000-0000-0000-0000-000000000000"},
 	"create_category":     {"name": "Mugs"},
 	"update_category":     {"id": "00000000-0000-0000-0000-000000000000"},
 	"delete_category":     {"id": "00000000-0000-0000-0000-000000000000"},

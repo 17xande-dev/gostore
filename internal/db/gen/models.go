@@ -18,6 +18,14 @@ type AdminAPIToken struct {
 	ExpiresAt  time.Time
 }
 
+type AdminImageUpload struct {
+	TokenHash  []byte
+	APITokenID string
+	ProductID  string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
 type AdminSession struct {
 	TokenHash []byte
 	UserID    string

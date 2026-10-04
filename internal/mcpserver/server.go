@@ -74,8 +74,9 @@ func New(d Deps) *Server {
 			Instructions: "Tools for administering this gostore shop: its products, variants, " +
 				"categories and orders. You act as the administrator whose API token you hold, " +
 				"with exactly that account's role. Prices are decimal strings in the store's " +
-				"currency, like \"149.99\". Images and downloadable files are uploaded in the " +
-				"web admin, not here.",
+				"currency, like \"149.99\". To set a product's image, call create_image_upload " +
+				"and send the file to the URL it returns over HTTP (e.g. curl -T). Downloadable " +
+				"files are uploaded in the web admin, not here.",
 		}),
 	}
 	s.registerTools()
@@ -189,7 +190,7 @@ func add[In, Out any](s *Server, perm auth.Permission, t *mcp.Tool, fn toolFunc[
 			s.d.Log.Warn("mcp: tool refused for role", "tool", t.Name, "user", caller.ID, "role", caller.Role, "needs", perm)
 			return nil, zero, fmt.Errorf("your role (%s) cannot do this: it needs %s", caller.Role.Label(), perm)
 		}
-		out, err := fn(ctx, caller, in)
+		out, err := fn(withToken(ctx, rec), caller, in)
 		if err != nil {
 			return nil, zero, s.toolError(t.Name, caller, err)
 		}

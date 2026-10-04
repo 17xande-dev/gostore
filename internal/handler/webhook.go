@@ -53,8 +53,15 @@ func (h *Handler) RegisterPayments(mux *http.ServeMux) {
 // authenticates with a bearer token and carries no cookie, so there is nothing
 // for CSRF to protect and nosurf would only refuse every call. The limiter runs
 // before the token is checked, so it bounds guessing as well as a runaway agent.
-func (h *Handler) RegisterMCP(mux *http.ServeMux, endpoint http.Handler) {
+//
+// uploads receives the bytes for the image upload URLs the endpoint issues, at
+// uploadPath followed by the URL's token — the path is the MCP server's to say,
+// since it builds the URLs. Behind the same limiter, which runs before the
+// upload is looked up, for the same reason.
+func (h *Handler) RegisterMCP(mux *http.ServeMux, endpoint http.Handler, uploadPath string, uploads http.Handler) {
 	mux.Handle("/mcp", h.limits.mcp(endpoint))
+	mux.Handle("PUT "+uploadPath+"{token}", h.limits.mcp(uploads))
+	mux.Handle("POST "+uploadPath+"{token}", h.limits.mcp(uploads))
 }
 
 func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {

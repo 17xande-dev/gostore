@@ -46,7 +46,7 @@ in it, and a bucket per client with bounded memory is where the decisions are.
 | `POST /cart/checkout` | 20/min | Order-row spam, loose enough that double-clicking never trips it |
 | `POST /payments/{gw}/callback` | 120/min | **The reason the limiter exists**: unauthenticated, and every accepted request makes the store POST to the gateway — an amplifier |
 | `GET /cart/checkout/status` | 30/min | The QR hand-over page's poll. Cheap per request, but an open page asks all afternoon |
-| `/mcp` | 120/min | The [MCP endpoint](mcp.md). Applied before the bearer token is checked, so it bounds guessing as well as a runaway agent |
+| `/mcp`, `/mcp/images/…` | 120/min | The [MCP endpoint](mcp.md) and its image upload URLs, one allowance between them. Applied before the bearer token or upload URL is checked, so it bounds guessing as well as a runaway agent |
 
 The burst is a third of the allowance (minimum 2), so `10/min` means three attempts
 immediately and then one every six seconds. A refusal is `429` with `Retry-After`. Limits

@@ -34,6 +34,7 @@ sql:
           sku: "SKU"
           image_url: "ImageURL"
           admin_api_token: "AdminAPIToken"
+          api_token_id: "APITokenID"
 
         overrides:
           # UUIDs stay `string` across the whole codebase. pgx parses a string

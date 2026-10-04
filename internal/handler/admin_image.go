@@ -1,36 +1,21 @@
 package handler
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/17xande-dev/gostore/internal/admin"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/validate"
 )
 
-// Product image uploads.
-//
-// The order of operations is the only interesting thing here, and it is chosen so
-// that no failure leaves a product pointing at nothing:
-//
-//  1. Read and *prove* the upload is an image — sniffed magic bytes, not the
-//     filename and not the browser's Content-Type.
-//  2. Put the new object under a fresh key.
-//  3. Point the product at it.
-//  4. Only then delete the object it used to own.
-//
-// A failure at 2 or 3 leaves the old image in place and working. A failure at 4
-// leaves an orphaned object, which costs a few kilobytes and is logged. The
-// opposite order — delete first — would turn any later failure into a product with
-// a broken image, which is the one outcome worth designing against.
-//
-// A fresh key per upload is also what makes this work behind a CDN: replacing an
-// image produces a new URL, so the new photograph is visible immediately, with no
-// cache purge that this store has no credentials to perform.
+// Product image uploads from the admin's form. The rules — what counts as an
+// image, and the order of storing the new one and deleting the old — are
+// admin.ReplaceProductImage's, shared with the MCP endpoint's upload URL; this
+// file is the form, and the messages a person reads when it refuses.
 
 // maxImageBytes caps the request body. The multipart reader gets a limit too, but
 // this one is applied to the connection so an oversized upload is refused while it
@@ -73,17 +58,15 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 		h.serverError(w, r, err)
 		return
 	}
-	if int64(len(body)) > maxImageBytes {
+	_, err = admin.ReplaceProductImage(r.Context(), h.cat, h.blob, h.log, p, body)
+	switch {
+	case errors.Is(err, admin.ErrImageTooLarge):
 		h.imageProblem(w, r, p.ID, "That image is larger than "+humanBytes(maxImageBytes)+".")
 		return
-	}
-	if len(body) == 0 {
+	case errors.Is(err, admin.ErrImageEmpty):
 		h.imageProblem(w, r, p.ID, "That file is empty.")
 		return
-	}
-
-	contentType, ext, err := blob.Validate(body)
-	if err != nil {
+	case errors.Is(err, blob.ErrUnsupportedType):
 		// The filename is echoed because with several files selected it is the only
 		// way to tell which one was refused.
 		h.log.Warn("refused an image upload", "product", p.ID,
@@ -91,41 +74,16 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 		h.imageProblem(w, r, p.ID, "That file is not an image the store can serve. Accepted: "+
 			strings.Join(blob.SupportedTypes(), ", ")+".")
 		return
-	}
-
-	key, err := blob.ImageKey(p.ID, ext)
-	if err != nil {
-		h.serverError(w, r, err)
+	case errors.Is(err, blob.ErrNotConfigured):
+		h.imageProblem(w, r, p.ID, "Image uploads are not configured on this deployment. "+
+			"Set the BLOB_* variables, or paste an image URL instead.")
 		return
-	}
-
-	if _, err := h.blob.Put(r.Context(), key, bytes.NewReader(body), int64(len(body)), contentType); err != nil {
-		if errors.Is(err, blob.ErrNotConfigured) {
-			h.imageProblem(w, r, p.ID, "Image uploads are not configured on this deployment. "+
-				"Set the BLOB_* variables, or paste an image URL instead.")
-			return
-		}
+	case err != nil:
 		// A storage fault is a server fault, and the operator gets a page that says
 		// so rather than a form implying they did something wrong.
 		h.serverError(w, r, err)
 		return
 	}
-
-	previous := p.ImageKey
-	if _, err := h.cat.SetImage(r.Context(), p.ID, key); err != nil {
-		// The object is stored but nothing references it. Logged as an orphan rather
-		// than deleted, because a delete here could just as easily fail and the
-		// operator's next attempt should not be racing this one.
-		h.log.Error("uploaded an image but failed to record it", "product", p.ID, "key", key, "error", err)
-		h.serverError(w, r, err)
-		return
-	}
-
-	// Last, and only now that the product points at the new object.
-	h.deleteObject(r, previous, p.ID)
-
-	h.log.Info("product image uploaded", "product", p.ID, "key", key,
-		"bytes", len(body), "content_type", contentType)
 	http.Redirect(w, r, "/admin/products/"+p.ID+"/edit", http.StatusSeeOther)
 }
 
@@ -145,23 +103,9 @@ func (h *Handler) adminProductImageDelete(w http.ResponseWriter, r *http.Request
 		h.storeError(w, r, err)
 		return
 	}
-	h.deleteObject(r, p.ImageKey, p.ID)
+	admin.DeleteImageObject(r.Context(), h.blob, h.log, p.ImageKey, p.ID)
 
 	http.Redirect(w, r, "/admin/products/"+p.ID+"/edit", http.StatusSeeOther)
-}
-
-// deleteObject removes an object this store owned, if there was one. It never
-// fails the request: by the time it is called the database already says the object
-// is not referenced, so the worst case is an orphan, and that is a logged
-// housekeeping problem rather than something to show an operator mid-task.
-func (h *Handler) deleteObject(r *http.Request, key, productID string) {
-	if key == "" {
-		return
-	}
-	if err := h.blob.Delete(r.Context(), key); err != nil {
-		h.log.Error("failed to delete a replaced product image; it is now an orphaned object",
-			"product", productID, "key", key, "error", err)
-	}
 }
 
 // imageProblem re-renders the edit page with a message about the upload. It is a
