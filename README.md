@@ -84,3 +84,4 @@ Other useful targets:
 ## Licence
 
 [MIT](LICENSE).
+| [Deprecations](docs/deprecations.md) | What is kept only for compatibility, to remove at the next major version |

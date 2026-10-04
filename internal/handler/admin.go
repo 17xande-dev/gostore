@@ -339,11 +339,6 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST "+accountPath, auth.PermRead, rateLimited(h.limits.login, h.adminPasswordChange))
 	// Your own API tokens, a section of the same page: administrators only. See
 	// admin_tokens.go.
-	// The GET is where a reload after creating a token lands, and where the
-	// tokens used to have a page of their own.
-	admin("GET /admin/account/tokens", auth.PermRead, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, accountPath+"#api-tokens", http.StatusSeeOther)
-	})
 	admin("POST /admin/account/tokens", auth.PermAPITokens, h.adminTokenCreate)
 	admin("POST /admin/account/tokens/{id}/revoke", auth.PermAPITokens, h.adminTokenRevoke)
 }
