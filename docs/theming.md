@@ -192,6 +192,26 @@ Four things to know before writing one:
   every other page, because none of their data carries `.Search` or `.Facets`. Render each
   page you have touched before shipping the theme.
 
+### Keeping a copied file current
+
+A copied file stops receiving upstream changes, and a feature that lives in it is missing
+from your store until you carry it across — quietly, with nothing failing. When you
+upgrade, diff each override against its default. The ones that have needed it so far:
+
+- **`layouts/public.gohtml` — the account menu.** A browser signed in to the admin gets a
+  profile icon in the storefront header, fetched into a placeholder that must sit inside
+  the layout's `<nav>`:
+
+  ```html
+  <span class="account-slot" hx-get="/admin/account/menu" hx-trigger="load"
+        hx-swap="outerHTML"></span>
+  ```
+
+  Its styles are the "Your account in the header" block of the default `styles.css`, which
+  a copied stylesheet needs as well; without them the icon renders unstyled.
+- **`pages/checkout.gohtml` — the submission key.** See
+  [Checkout](storefront.md#checkout): the form must carry `checkout_key`.
+
 ## Using a theme in a deployment
 
 `deploy/standard` and `deploy/tunnel` both mount a `theme/` directory next to

@@ -12,7 +12,7 @@ Cloudflare R2, and mail through any SMTP provider. It uses
 - **A domain**, and a hostname on it for the store (say `shop.example.com`).
 - **A Cloudflare account** for R2. The free tier covers a typical shop's images.
 - **An SMTP provider** — the host, port, username and password it gives you, and an
-  address it lets you send from. The server refuses to start without mail, because a
+  address it lets you send from. The server refuses to start without mail, because
   receipts and durable download links must reach customers.
 - **A published image.** Use a release from
   [GHCR](https://github.com/17xande-dev/gostore/pkgs/container/gostore), or your own; see
