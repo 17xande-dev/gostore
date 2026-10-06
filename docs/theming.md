@@ -184,7 +184,10 @@ Four things to know before writing one:
   `.StoreName`, `.Currency` and `.CSRFToken`, plus its own — `.Products`, `.Product`,
   `.Cart`, `.Order`. The functions available are `money` (cents → a displayed amount),
   `asset` (a bundled or overridden file → its hashed URL), `image` (a product's image key →
-  where it is served from) and `linebreaks`.
+  where it is served from), `linebreaks` (newlines → `<br>`, for an address) and
+  `paragraphs` (blank lines → paragraphs and newlines → `<br>`, for a product description).
+  Both escape the text first. A theme that overrides `pages/product.gohtml` should render the
+  description with `{{paragraphs .Description}}`, or it runs together into one paragraph.
 - **A field or a template name that does not exist is a `500` on that page**, not a refused
   boot: Go checks both when a template *runs*, not when it is parsed. This is the reason
   `nav_extra` is filled by the catalog's own file rather than called from the layout —

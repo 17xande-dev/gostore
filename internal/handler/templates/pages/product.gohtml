@@ -99,7 +99,9 @@
   <div class="info">
     {{$prod := .}}
     <h1>{{.Title}}</h1>
-    {{with .Description}}<p>{{.}}</p>{{end}}
+    {{/* Blank lines in the admin's description become paragraphs, and single
+         newlines line breaks; see paragraphs in templates.go. */}}
+    {{with .Description}}{{paragraphs .}}{{end}}
 
     {{/*
       One variant with no options is a product with nothing to choose — a book,

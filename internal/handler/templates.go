@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	texttemplate "text/template"
@@ -376,8 +377,35 @@ func funcs(images blob.Storage) template.FuncMap {
 		// linebreaks renders multi-line text — an address, typed into a textarea —
 		// as HTML.
 		"linebreaks": linebreaks,
+		// paragraphs renders prose typed into a textarea — a product description —
+		// as HTML paragraphs.
+		"paragraphs": paragraphs,
 	}
 }
+
+// paragraphs escapes text and renders it as <p> elements: a blank line between
+// two blocks of text separates paragraphs, and a single newline within one is a
+// line break. linebreaks alone would turn a blank line into two <br>s, which
+// looks like a paragraph and is not one. Safe as template.HTML for the same
+// reason linebreaks is: each block is escaped before any tag is added.
+func paragraphs(s string) template.HTML {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	var b strings.Builder
+	for _, block := range blankLine.Split(s, -1) {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		b.WriteString("<p>")
+		b.WriteString(string(linebreaks(block)))
+		b.WriteString("</p>")
+	}
+	return template.HTML(b.String())
+}
+
+// blankLine is a paragraph break: a newline, then a line holding nothing but
+// whitespace, then another newline.
+var blankLine = regexp.MustCompile(`\n[ \t]*\n`)
 
 // linebreaks escapes text and then turns its newlines into <br>, in that order.
 // Escaping first is what makes returning template.HTML safe here: the only markup
