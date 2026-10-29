@@ -470,3 +470,45 @@ func cartCookieFrom(t *testing.T, res *http.Response) *http.Cookie {
 	t.Fatalf("no %s cookie in the response", CartCookieName)
 	return nil
 }
+
+// A cookie can outlive its cart row (the cleanup sweep removes expired carts).
+// Editing then used to fall through to a 500; the shopper should be told the
+// cart expired, as they are when the cookie is missing altogether.
+func TestCart_EditingAnExpiredCartSaysSo(t *testing.T) {
+	srv, _, variants := shopper(t)
+	stale := &http.Cookie{Name: CartCookieName, Value: "a-token-that-names-no-cart"}
+
+	t.Run("update", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			srv.URL+"/cart/items/"+variants["S"].ID, strings.NewReader(url.Values{
+				"quantity":   {"2"},
+				"csrf_token": {csrfToken(t, srv)},
+			}.Encode()))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", srv.URL)
+		req.AddCookie(stale)
+		res, body := do(t, srv, req)
+		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") {
+			t.Errorf("update = %d %s, want 409 and the expiry message", res.StatusCode, body)
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete,
+			srv.URL+"/cart/items/"+variants["S"].ID, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("HX-Request", "true")
+		req.Header.Set("X-CSRF-Token", csrfToken(t, srv))
+		req.Header.Set("Origin", srv.URL)
+		req.AddCookie(stale)
+		res, body := do(t, srv, req)
+		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") {
+			t.Errorf("delete = %d %s, want 409 and the expiry message", res.StatusCode, body)
+		}
+	})
+}

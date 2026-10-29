@@ -136,6 +136,11 @@ func (h *Handler) cartDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.cart.Remove(r.Context(), token, r.PathValue("variantID")); err != nil {
+		if errors.Is(err, cart.ErrNotFound) {
+			// The cookie outlived the cart row (swept after expiry).
+			h.cartProblem(w, r, "Your cart has expired.")
+			return
+		}
 		h.serverError(w, r, err)
 		return
 	}
@@ -176,6 +181,8 @@ func (h *Handler) cartAddFailed(w http.ResponseWriter, r *http.Request, err erro
 func (h *Handler) cartUpdateFailed(w http.ResponseWriter, r *http.Request, token string, err error) {
 	var out *cart.OutOfStockError
 	switch {
+	case errors.Is(err, cart.ErrNotFound):
+		h.cartProblem(w, r, "Your cart has expired.")
 	case errors.As(err, &out):
 		h.renderCart(w, r, http.StatusConflict, h.cartFor(r, token), "",
 			"Only "+strconv.Itoa(out.Available)+" of that option left.")
