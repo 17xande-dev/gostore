@@ -435,25 +435,37 @@ func TestTools_FulfilmentRecordsTheTokensAccount(t *testing.T) {
 	}
 }
 
-func TestTools_UpdateVariantWithoutStockLeavesConcurrentSalesAlone(t *testing.T) {
-	// update_variant reads the variant and writes it back. Stock is only ever
-	// written as a change from what it read, so an omitted stock_qty is no change
-	// at all, whatever sold in between.
-	f := newFixture(t)
-	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
-	s := f.connect(t, token)
-
+// mcpVariant creates a stocked variant for the stock tests below.
+func mcpVariant(t *testing.T, f *fixture, stock int) (catalog.Product, catalog.Variant) {
+	t.Helper()
 	p, err := f.catalog.Create(t.Context(), catalog.Product{Slug: "mug", Title: "Mug", Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err := f.catalog.CreateVariant(t.Context(), catalog.Variant{ProductID: p.ID, SKU: "MUG", PriceCents: 1000, StockQty: 5, Active: true})
+	v, err := f.catalog.CreateVariant(t.Context(), catalog.Variant{ProductID: p.ID, SKU: "MUG", PriceCents: 1000, StockQty: stock, Active: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(t.Context(), `UPDATE product_variants SET stock_qty = 2 WHERE id = $1`, v.ID); err != nil {
+	return p, v
+}
+
+func setStock(t *testing.T, f *fixture, id string, stock int) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(), `UPDATE product_variants SET stock_qty = $2 WHERE id = $1`, id, stock); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// These tests change stock out of band BEFORE the tool call, so they pin what the
+// tool does with the stock it reads (omitted: no change; supplied: the submitted
+// value). They cannot put a sale between the tool's own read and write; that
+// window is closed by the relative UPDATE, which the catalog store tests cover.
+func TestTools_UpdateVariantWithoutStockLeavesStockAlone(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
+	s := f.connect(t, token)
+	p, v := mcpVariant(t, f, 5)
+	setStock(t, f, v.ID, 2)
 
 	var out Variant
 	if msg := call(t, s, "update_variant", map[string]any{"product_id": p.ID, "id": v.ID, "price": "12"}, &out); msg != "" {
@@ -461,5 +473,43 @@ func TestTools_UpdateVariantWithoutStockLeavesConcurrentSalesAlone(t *testing.T)
 	}
 	if out.StockQty != 2 {
 		t.Errorf("stock = %d, want 2", out.StockQty)
+	}
+}
+
+func TestTools_UpdateVariantSetsStock(t *testing.T) {
+	// Without this, moving the read of the current stock below the merge makes
+	// every stock change a silent no-op and nothing else notices.
+	f := newFixture(t)
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
+	s := f.connect(t, token)
+	p, v := mcpVariant(t, f, 5)
+	setStock(t, f, v.ID, 2)
+
+	var out Variant
+	if msg := call(t, s, "update_variant", map[string]any{"product_id": p.ID, "id": v.ID, "stock_qty": 4}, &out); msg != "" {
+		t.Fatalf("update_variant: %s", msg)
+	}
+	if out.StockQty != 4 {
+		t.Errorf("returned stock = %d, want 4", out.StockQty)
+	}
+	got, err := f.catalog.Variants(t.Context(), p.ID)
+	if err != nil || got[0].StockQty != 4 {
+		t.Errorf("stored = %+v, %v; want stock 4", got, err)
+	}
+}
+
+func TestTools_UpdateVariantRefusesOutOfRangeStock(t *testing.T) {
+	f := newFixture(t)
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
+	s := f.connect(t, token)
+	p, v := mcpVariant(t, f, 5)
+
+	msg := call(t, s, "update_variant", map[string]any{"product_id": p.ID, "id": v.ID, "stock_qty": 3000000000}, nil)
+	if !strings.Contains(msg, "stock_qty") {
+		t.Errorf("message = %q, want a stock_qty refusal", msg)
+	}
+	got, _ := f.catalog.Variants(t.Context(), p.ID)
+	if got[0].StockQty != 5 {
+		t.Errorf("stock = %d, want it untouched", got[0].StockQty)
 	}
 }

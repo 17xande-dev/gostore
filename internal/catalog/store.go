@@ -823,6 +823,8 @@ func translate(err error) error {
 		switch pgErr.Code {
 		case "22P02": // invalid input syntax, i.e. not a UUID
 			return ErrNotFound
+		case "22003": // numeric out of range: stock plus the edit overflowed
+			return ErrStockChanged
 		case "23514": // check violation: stock_qty >= 0
 			if strings.Contains(pgErr.ConstraintName, "stock") {
 				return ErrStockChanged

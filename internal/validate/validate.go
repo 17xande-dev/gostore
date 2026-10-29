@@ -5,6 +5,7 @@ package validate
 
 import (
 	"fmt"
+	"math"
 	"net/mail"
 	"slices"
 	"strings"
@@ -197,8 +198,16 @@ func Variant(v catalog.Variant) FormErrors {
 	if v.StockQty < 0 {
 		e.Add("stock_qty", "Cannot be negative.")
 	}
+	if v.StockQty > MaxStock {
+		e.Add("stock_qty", fmt.Sprintf("Cannot be more than %d.", MaxStock))
+	}
 	return e
 }
+
+// MaxStock is the largest stock count a variant can hold: the column is a 32-bit
+// integer, and a larger number would reach the driver as a 500 instead of a
+// field error.
+const MaxStock = math.MaxInt32
 
 // Customer validates the checkout form.
 //

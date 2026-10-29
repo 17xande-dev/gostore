@@ -733,6 +733,8 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request, isEdit bo
 			return catalog.Variant{}, variantForm{}, nil, 0, false
 		}
 	}
+	// A number the column cannot hold is a mistake in a field, not a broken form.
+	stockWasTooBig := stockWas > validate.MaxStock
 
 	form := variantForm{
 		SKU:      strings.TrimSpace(r.PostFormValue("sku")),
@@ -764,6 +766,10 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request, isEdit bo
 		errs.Add("stock_qty", "Enter a whole number of items, 0 or more.")
 	} else {
 		v.StockQty = stock
+	}
+
+	if stockWasTooBig {
+		errs.Add("stock_qty", fmt.Sprintf("Cannot be more than %d.", validate.MaxStock))
 	}
 
 	v, verrs := admin.PrepareVariant(v)

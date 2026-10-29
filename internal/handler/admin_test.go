@@ -930,3 +930,29 @@ func TestAdminVariants_StockChangedIsAFieldError(t *testing.T) {
 		t.Errorf("stock = %d, want it untouched at 1", got[0].StockQty)
 	}
 }
+
+func TestAdminVariants_OutOfRangeStockIsAFieldError(t *testing.T) {
+	// Both reached the driver before and came back as a 500: a stock_was the
+	// integer column cannot take in the sum, and a stock_qty pgx cannot encode.
+	s := newStore(t)
+	signIn(t, s.srv)
+	p, v := stockVariant(t, s, 5)
+
+	for name, f := range map[string]url.Values{
+		"huge stock_was": {"stock_qty": {"0"}, "stock_was": {"9223372036854775807"}},
+		"huge stock_qty": {"stock_qty": {"3000000000"}, "stock_was": {"5"}},
+	} {
+		f.Set("sku", "TEE-M")
+		f.Set("option1", "M")
+		f.Set("price", "299.00")
+		f.Set("active", "1")
+		res, body := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, f)
+		if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, "Cannot be more than") {
+			t.Errorf("%s = %d, want a 422 with a field error: %s", name, res.StatusCode, body)
+		}
+	}
+	got, _ := s.catalog.Variants(t.Context(), p.ID)
+	if got[0].StockQty != 5 {
+		t.Errorf("stock = %d, want it untouched", got[0].StockQty)
+	}
+}
