@@ -242,3 +242,38 @@ func TestOrderMail_NoOwnerNotificationWhenUnconfigured(t *testing.T) {
 		t.Errorf("%d emails with no notify address configured, want just the customer's: %+v", len(sent), sent)
 	}
 }
+
+// The owner's notification names the payment reference the callback carried. The
+// order is read before the payment is recorded, so a stale copy would print an
+// empty reference on a first payment, or an older unpaid attempt's reference.
+func TestOrderMail_OwnerNotificationCarriesThePaymentReference(t *testing.T) {
+	t.Run("first payment", func(t *testing.T) {
+		s := newNotifyingShop(t)
+		order := placeOrder(t, s, "S", 1)
+
+		callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "REF-PAID", "paid", order.TotalCents))
+		s.handler.ProcessMail(t.Context())
+
+		owner := s.mail.To(ownerAddress)
+		if len(owner) != 1 || !strings.Contains(owner[0].Text, "reference REF-PAID") {
+			t.Errorf("owner notification lacks the callback's reference: %+v", owner)
+		}
+	})
+
+	t.Run("after an earlier unpaid notification", func(t *testing.T) {
+		s := newNotifyingShop(t)
+		order := placeOrder(t, s, "S", 1)
+
+		callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "REF-OLD", "failed", order.TotalCents))
+		callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "REF-NEW", "paid", order.TotalCents))
+		s.handler.ProcessMail(t.Context())
+
+		owner := s.mail.To(ownerAddress)
+		if len(owner) != 1 {
+			t.Fatalf("%d owner notifications, want 1", len(owner))
+		}
+		if !strings.Contains(owner[0].Text, "reference REF-NEW") || strings.Contains(owner[0].Text, "REF-OLD") {
+			t.Errorf("owner notification has the wrong reference:\n%s", owner[0].Text)
+		}
+	})
+}

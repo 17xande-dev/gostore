@@ -180,7 +180,12 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 		return nil
 	}
 
-	result, err := h.orders.MarkPaidWithMail(r.Context(), order.ID, p, h.prepareOrderEmails(order))
+	// The emails describe the order as it is once this payment is recorded; the
+	// copy read above predates it, so its GatewayRef is empty or an older
+	// unpaid notification's.
+	paid := order
+	paid.GatewayRef = cb.Ref
+	result, err := h.orders.MarkPaidWithMail(r.Context(), order.ID, p, h.prepareOrderEmails(paid))
 	if err != nil {
 		// The money is taken and this store failed to record it. Nothing here can
 		// fix that, so it is logged at the level someone is paged for; the gateway's
@@ -198,7 +203,7 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	if len(result.Oversold) > 0 {
 		// The money is in, so the order stands. Somebody has to reconcile the
 		// stock by hand; the owner's notification email carries this, and the
-		// admin order view grows a flag for it in the hardening phase.
+		// admin order view flags it (OVERSOLD in /admin/orders).
 		log.Error("order paid but stock could not be decremented — oversold",
 			"items", result.Oversold)
 	}
