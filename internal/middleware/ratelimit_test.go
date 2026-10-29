@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -230,5 +231,112 @@ func TestRateLimit_ZeroBurstStillAllowsSomething(t *testing.T) {
 	h.ServeHTTP(w, requestFrom("203.0.113.7"))
 	if w.Code != http.StatusOK || served.Load() != 1 {
 		t.Errorf("a zero burst refused the first request: %d, served %d", w.Code, served.Load())
+	}
+}
+
+// newTestLimiter builds a limiter with a tiny allowance so one request per client
+// is all it ever gets in the test's frozen time.
+func newTestLimiter(burst, maxB int, ttl time.Duration) *ipLimiter {
+	return &ipLimiter{
+		limit:    rate.Every(time.Hour),
+		burst:    burst,
+		ttl:      ttl,
+		buckets:  map[string]*bucket{},
+		lastKeep: time.Unix(0, 0),
+		max:      maxB,
+	}
+}
+
+func TestRateLimit_IPv6KeyedBySlash64(t *testing.T) {
+	// Anyone with an IPv6 prefix owns 2^64 addresses; keyed on the full address
+	// each would get a fresh bucket and the limiter would limit nothing.
+	l := newTestLimiter(3, 0, time.Hour)
+	now := time.Unix(1000, 0)
+	allowed := 0
+	for i := range 1000 {
+		if l.allow("2001:db8:1:2::"+strconv.FormatInt(int64(i+1), 16), now) {
+			allowed++
+		}
+	}
+	if allowed != 3 {
+		t.Errorf("%d of 1000 addresses in one /64 allowed, want the burst of 3", allowed)
+	}
+	if got := l.size(); got != 1 {
+		t.Errorf("%d buckets for one /64, want 1", got)
+	}
+
+	if !l.allow("2001:db8:1:3::1", now) {
+		t.Error("a different /64 shared the first one's bucket")
+	}
+	if got := l.size(); got != 2 {
+		t.Errorf("%d buckets for two /64s, want 2", got)
+	}
+}
+
+func TestRateLimit_MappedIPv4SharesItsBucket(t *testing.T) {
+	l := newTestLimiter(1, 0, time.Hour)
+	now := time.Unix(1000, 0)
+	if !l.allow("1.2.3.4", now) {
+		t.Fatal("first request refused")
+	}
+	if l.allow("::ffff:1.2.3.4", now) {
+		t.Error("::ffff:1.2.3.4 got its own bucket instead of sharing 1.2.3.4's")
+	}
+	if got := l.size(); got != 1 {
+		t.Errorf("%d buckets, want 1", got)
+	}
+	// Garbage still keys as itself, and does not collide with real clients.
+	if !l.allow("not-an-ip", now) || l.size() != 2 {
+		t.Error("an unparseable address was not keyed by its raw string")
+	}
+}
+
+func TestRateLimit_CapRefusesNewClientsAndFailsClosed(t *testing.T) {
+	var logged strings.Builder
+	l := newTestLimiter(1, 5, time.Hour)
+	l.name = "test"
+	l.log = slog.New(slog.NewTextHandler(&logged, nil))
+	now := time.Unix(1000, 0)
+
+	for i := range 5 {
+		if !l.allow("203.0.113."+strconv.Itoa(i), now) {
+			t.Fatalf("client %d refused before the cap", i)
+		}
+	}
+	// A new key at the cap is refused, repeatedly, without the map growing.
+	for range 3 {
+		if l.allow("198.51.100.1", now) {
+			t.Fatal("a new client was admitted at the cap")
+		}
+	}
+	if got := l.size(); got != 5 {
+		t.Errorf("%d buckets, want it held at the cap of 5", got)
+	}
+	// Existing clients are still served by their own bucket: their one token is
+	// spent, so they are throttled normally, but a client with allowance left is
+	// not locked out by the cap.
+	l2 := newTestLimiter(2, 5, time.Hour)
+	for i := range 5 {
+		l2.allow("203.0.113."+strconv.Itoa(i), now)
+	}
+	if !l2.allow("203.0.113.0", now) {
+		t.Error("an existing client was refused at the cap")
+	}
+	if l2.allow("198.51.100.1", now) {
+		t.Error("a new client was admitted at the cap")
+	}
+
+	// One log line per sweep window, not one per refused request.
+	if n := strings.Count(logged.String(), "rate limiter full"); n != 1 {
+		t.Errorf("cap logged %d times for 3 refusals, want 1", n)
+	}
+
+	// Once the buckets have expired the sweep makes room and new keys are admitted.
+	later := now.Add(2 * time.Hour)
+	if !l.allow("198.51.100.1", later) {
+		t.Error("a new client was still refused after every bucket expired")
+	}
+	if got := l.size(); got != 1 {
+		t.Errorf("%d buckets after expiry, want 1", got)
 	}
 }

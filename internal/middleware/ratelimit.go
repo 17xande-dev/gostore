@@ -3,6 +3,7 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -69,6 +70,34 @@ type RateLimitConfig struct {
 // limiterTTL is the default idle lifetime of a bucket.
 const limiterTTL = 10 * time.Minute
 
+// maxBuckets is the most buckets one limiter holds. Keying by /64 stops a single
+// prefix minting buckets, but an attacker can still cycle through prefixes (or
+// IPv4 addresses), and the lazy sweep only runs once per TTL. The cap is what
+// makes the map's size a bound rather than a hope.
+const maxBuckets = 10_000
+
+// limiterKey is the identity a client is throttled under.
+//
+// IPv4 is keyed by the full address. IPv6 is keyed by its /64, because that is
+// the smallest block an ISP hands a single subscriber: a household or an
+// attacker with one prefix holds 2^64 addresses, and keying on the full address
+// gives each of them a fresh bucket — a limiter anyone with IPv6 can walk
+// around. An IPv4-mapped address (::ffff:a.b.c.d) is unmapped first so it
+// shares its bucket with the plain IPv4 form. Anything unparseable keeps its
+// raw string, as before.
+func limiterKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	// Drop any zone: fe80::1%eth0 and fe80::1%eth1 are one client to us.
+	return netip.PrefixFrom(addr.WithZone(""), 64).Masked().String()
+}
+
 // RateLimit limits requests per client IP.
 //
 // source decides where the client's address comes from; see ClientIP. It matters
@@ -92,6 +121,9 @@ func RateLimit(cfg RateLimitConfig, source ClientIPSource, log *slog.Logger) Mid
 		ttl:      cfg.TTL,
 		buckets:  make(map[string]*bucket),
 		lastKeep: time.Now(),
+		max:      maxBuckets,
+		name:     cfg.Name,
+		log:      log,
 	}
 	retryAfter := strconv.Itoa(max(1, int(cfg.Every.Seconds())))
 
@@ -131,6 +163,15 @@ type ipLimiter struct {
 	// through an ordinary request — rather than on a ticker, so there is no
 	// goroutine to start, own, and shut down for a map that is usually tiny.
 	lastKeep time.Time
+
+	// max caps len(buckets); zero means maxBuckets. A field rather than only the
+	// constant so a test can lower it instead of creating ten thousand entries.
+	max int
+	// capLogged is when the cap last logged, so a flood is one line per TTL
+	// window rather than one per request.
+	capLogged time.Time
+	name      string
+	log       *slog.Logger
 }
 
 type bucket struct {
@@ -139,6 +180,8 @@ type bucket struct {
 }
 
 func (l *ipLimiter) allow(ip string, now time.Time) bool {
+	ip = limiterKey(ip)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -149,6 +192,25 @@ func (l *ipLimiter) allow(ip string, now time.Time) bool {
 
 	b, ok := l.buckets[ip]
 	if !ok {
+		limit := l.max
+		if limit <= 0 {
+			limit = maxBuckets
+		}
+		if len(l.buckets) >= limit {
+			// Make room the cheap way first: idle buckets cost nothing to forget.
+			l.evict(now)
+			l.lastKeep = now
+		}
+		if len(l.buckets) >= limit {
+			// Still full of live clients. Refuse the newcomer: failing open would
+			// let a flood of fresh addresses switch the limiter off, and existing
+			// clients, who are already in the map, are unaffected.
+			if l.log != nil && (l.capLogged.IsZero() || now.Sub(l.capLogged) >= l.ttl) {
+				l.capLogged = now
+				l.log.Warn("rate limiter full; refusing new clients", "limiter", l.name, "buckets", len(l.buckets))
+			}
+			return false
+		}
 		b = &bucket{limiter: rate.NewLimiter(l.limit, l.burst)}
 		l.buckets[ip] = b
 	}

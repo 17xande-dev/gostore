@@ -46,6 +46,7 @@ in it, and a bucket per client with bounded memory is where the decisions are.
 | `POST /cart/checkout` | 20/min | Order-row spam, loose enough that double-clicking never trips it |
 | `POST /payments/{gw}/callback` | 120/min | **The reason the limiter exists**: unauthenticated, and every accepted request makes the store POST to the gateway — an amplifier |
 | `GET /cart/checkout/status` | 30/min | The QR hand-over page's poll. Cheap per request, but an open page asks all afternoon |
+| `GET /downloads/{token}/{fileID}`, `GET /cart/checkout/downloads/…` | 60/min | Each click mints a signed storage URL. Generous, because working through a recording's twenty files is ordinary use and a limit that fires on it would be switched off rather than tuned |
 | `/mcp`, `/mcp/images/…` | 120/min | The [MCP endpoint](mcp.md) and its image upload URLs, one allowance between them. Applied before the bearer token or upload URL is checked, so it bounds guessing as well as a runaway agent |
 
 The burst is a third of the allowance (minimum 2), so `10/min` means three attempts
@@ -61,9 +62,18 @@ notification was permanently rejected; it never acknowledges a failed payment wr
 Only the POST on `/admin/login` is limited. Limiting the GET would lock an operator out of
 the page carrying the message explaining why.
 
+A client is keyed by its IPv4 address, or by its IPv6 `/64` (the block one subscriber is
+handed, so one prefix is one client rather than 2^64 of them). An IPv4-mapped IPv6 address
+counts as the IPv4 address it wraps.
+
 Idle buckets are evicted on a lazy sweep during an ordinary request, so there is no
-goroutine to own and shut down for a map that is usually tiny, and the map cannot grow
-without bound as an attacker cycles addresses.
+goroutine to own and shut down for a map that is usually tiny. Each limiter also holds at
+most 10 000 buckets, which is what makes the claim that the map cannot grow without bound
+as an attacker cycles addresses true. A request from a new client arriving at the cap
+triggers an immediate sweep; if the map is still full of live clients the newcomer is
+refused with the usual `429`. It fails closed, never open, so flooding the limiter with
+fresh addresses cannot switch it off; clients already in the map are unaffected. The cap
+being hit is logged at most once per sweep window.
 
 **Catalog search is deliberately not limited**, and it is worth being explicit since it is the
 one read that costs more than a primary-key lookup: every surface above is a `POST`, and
