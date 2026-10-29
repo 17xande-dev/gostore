@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gostore
 # makes `IMAGE_DIR` and `DOWNLOAD_DIR` work in a container at all.
 RUN mkdir -p /images /downloads && chown -R 65532:65532 /images /downloads
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/gostore /gostore
 # 65532 is distroless's nonroot uid.
 COPY --from=build --chown=65532:65532 /images /images
