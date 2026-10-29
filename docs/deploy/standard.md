@@ -86,7 +86,7 @@ Open `.env` (`sudo nano .env`). Each value is explained beside it; in short:
 | `DOMAIN` | `shop.example.com` |
 | `ACME_EMAIL` | where Let's Encrypt writes about a certificate it cannot renew |
 | `STORE_NAME` | what shoppers see |
-| `POSTGRES_PASSWORD` | the output of `openssl rand -hex 32` |
+| `POSTGRES_PASSWORD` | the output of `openssl rand -hex 32` — hex goes into the connection URL as is; any other password must be URL-encoded first, or the server cannot connect at startup |
 | `EMAIL_QUEUE_KEY` | another `openssl rand -hex 32`; retain with backups |
 | `PAYFAST_*` | leave the sandbox values for now; see [Going live](#going-live) |
 | `BLOB_ENDPOINT` | the R2 endpoint from step 4, **without** `https://` |

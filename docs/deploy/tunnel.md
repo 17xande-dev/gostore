@@ -85,7 +85,7 @@ Open `.env` (`sudo nano .env`). Each value is explained beside it; in short:
 | `TUNNEL_TOKEN` | the token from step 4 |
 | `DOMAIN` | the store hostname from step 4 |
 | `STORE_NAME` | what shoppers see |
-| `POSTGRES_PASSWORD`, `EMAIL_QUEUE_KEY` | the output of `openssl rand -hex 32`, once for each |
+| `POSTGRES_PASSWORD`, `EMAIL_QUEUE_KEY` | the output of `openssl rand -hex 32`, once for each — hex goes into the connection URL as is; any other database password must be URL-encoded first, or the server cannot connect at startup |
 | `BLOB_*`, `DOWNLOAD_*` | the separate public/private R2 buckets and their tokens |
 | `PAYFAST_*` | leave the sandbox values for now; see [Going live](#going-live) |
 | `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` | from step 3 |
