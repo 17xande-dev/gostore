@@ -70,7 +70,7 @@ Idle buckets are evicted on a lazy sweep during an ordinary request, so there is
 goroutine to own and shut down for a map that is usually tiny. Each limiter also holds at
 most 10 000 buckets, which is what makes the claim that the map cannot grow without bound
 as an attacker cycles addresses true. A request from a new client arriving at the cap
-triggers an immediate sweep; if the map is still full of live clients the newcomer is
+triggers a sweep (at most one every five seconds, so a flood of newcomers cannot keep the lock busy scanning); if the map is still full of live clients the newcomer is
 refused with the usual `429`. It fails closed, never open, so flooding the limiter with
 fresh addresses cannot switch it off; clients already in the map are unaffected. The cap
 being hit is logged at most once per sweep window.
