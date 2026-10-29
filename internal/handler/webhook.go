@@ -203,7 +203,7 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	if len(result.Oversold) > 0 {
 		// The money is in, so the order stands. Somebody has to reconcile the
 		// stock by hand; the owner's notification email carries this, and the
-		// admin order view flags it (OVERSOLD in /admin/orders).
+		// admin order list and detail flag it.
 		log.Error("order paid but stock could not be decremented — oversold",
 			"items", result.Oversold)
 	}

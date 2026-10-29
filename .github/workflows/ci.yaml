@@ -40,16 +40,19 @@ jobs:
       - run: make sqlc-install
       - run: make sqlc-check
 
-      # Formatting and known-vulnerability checks. govulncheck fails the build only
-      # for vulnerabilities whose code is actually reachable from this module.
+      # Cheap and deterministic, so it runs early.
       - run: make fmt-check
-      - run: make vulncheck-install
-      - run: make vulncheck
 
       - run: go vet ./...
       - run: go build ./...
       # Database-backed tests apply migrations to fresh schemas and exercise real SQL.
       - run: go test -race ./...
+
+      # Last on purpose: a newly published CVE in a dependency must not hide the
+      # vet, build and test results. govulncheck fails only for vulnerabilities
+      # whose code is actually reachable from this module.
+      - run: make vulncheck-install
+      - run: make vulncheck
 
   docker:
     runs-on: ubuntu-latest

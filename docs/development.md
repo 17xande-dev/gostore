@@ -4,6 +4,8 @@
 
 ```sh
 make test          # TEST_DATABASE_URL defaults to the compose database
+make fmt-check     # fail if a tracked Go file is not gofmt-clean (CI runs this)
+make vulncheck     # govulncheck; needs `make vulncheck-install` once (CI runs this)
 go test ./...      # database-backed tests skip when TEST_DATABASE_URL is unset
 ```
 
@@ -147,6 +149,9 @@ Separate from the table above, because nothing here links into the binary:
 | Tool | For |
 |---|---|
 | [`sqlc`](https://sqlc.dev) | Generates the stores' row structs and scan code from the SQL |
+| [`govulncheck`](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) | Reports known vulnerabilities in code the build can actually reach; `make vulncheck`, run by CI after the tests |
+
+govulncheck is pinned in the Makefile for the same reason as sqlc (`make vulncheck-install`).
 
 sqlc is pinned in the **Makefile**, not as a `go tool` directive in `go.mod`. That is a
 deliberate trade: `go tool` would pin the version alongside the code, but it also puts about

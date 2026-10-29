@@ -96,7 +96,8 @@ GIT_SHA := $(shell git rev-parse --short HEAD)
 TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
 
 # The binary is CGO_ENABLED=0 (see Dockerfile), so unlike a cgo build (go-sqlite3,
-# say) it has no architecture the image is pinned to for correctness — linux/amd64 is just what the servers it runs on are.
+# say) it has no architecture the image is pinned to for correctness —
+# linux/amd64 is just what the servers it runs on are.
 PLATFORM ?= linux/amd64
 
 .PHONY: up local-dirs down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
@@ -189,8 +190,8 @@ vulncheck:
 # What CI runs. Scoped to tracked files so untracked scratch under .local/ cannot
 # fail a build.
 fmt-check:
-	@bad="$$(gofmt -l $$(git ls-files '*.go'))"; \
-	if [ -n "$$bad" ]; then echo "not gofmt-clean:"; echo "$$bad"; exit 1; fi
+	@bad="$$(gofmt -l $$(git ls-files '*.go') 2>&1)"; rc=$$?; \
+	if [ $$rc -ne 0 ] || [ -n "$$bad" ]; then echo "not gofmt-clean (or not parseable):"; echo "$$bad"; exit 1; fi
 
 build:
 	go build ./...
