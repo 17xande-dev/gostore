@@ -254,9 +254,10 @@ func TestStore_UnavailableItemsStayVisible(t *testing.T) {
 	// The shop withdraws the variant and empties its stock after it is in the
 	// cart. The line must not disappear — a vanishing line reads as a bug, or
 	// worse, as a silent change to the total.
+	teeWas := f.tee.StockQty
 	f.tee.Active = false
 	f.tee.StockQty = 0
-	if _, err := f.cat.UpdateVariant(ctx, f.tee); err != nil {
+	if _, err := f.cat.UpdateVariant(ctx, f.tee, teeWas); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 
@@ -293,7 +294,7 @@ func TestStore_PricesAreLive(t *testing.T) {
 	}
 
 	f.tee.PriceCents = 34900
-	if _, err := f.cat.UpdateVariant(ctx, f.tee); err != nil {
+	if _, err := f.cat.UpdateVariant(ctx, f.tee, f.tee.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 

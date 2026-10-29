@@ -163,7 +163,7 @@ func TestAdminOrders_SnapshotSurvivesACatalogEdit(t *testing.T) {
 	v := s.variants["S"]
 	v.PriceCents = 99900
 	v.Option1 = "RENAMED"
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 	p, err := s.catalog.GetBySlug(t.Context(), "tee")

@@ -304,7 +304,7 @@ func TestCart_ShowsWithdrawnItemsAsUnavailable(t *testing.T) {
 	// The shop withdraws it after it is in the cart.
 	v := variants["S"]
 	v.Active = false
-	if _, err := store.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := store.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 

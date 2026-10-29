@@ -434,3 +434,32 @@ func TestTools_FulfilmentRecordsTheTokensAccount(t *testing.T) {
 		t.Fatalf("search_orders: %q %+v", msg, list)
 	}
 }
+
+func TestTools_UpdateVariantWithoutStockLeavesConcurrentSalesAlone(t *testing.T) {
+	// update_variant reads the variant and writes it back. Stock is only ever
+	// written as a change from what it read, so an omitted stock_qty is no change
+	// at all, whatever sold in between.
+	f := newFixture(t)
+	_, token := f.account(t, "admin@example.com", auth.RoleAdmin)
+	s := f.connect(t, token)
+
+	p, err := f.catalog.Create(t.Context(), catalog.Product{Slug: "mug", Title: "Mug", Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.catalog.CreateVariant(t.Context(), catalog.Variant{ProductID: p.ID, SKU: "MUG", PriceCents: 1000, StockQty: 5, Active: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(t.Context(), `UPDATE product_variants SET stock_qty = 2 WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var out Variant
+	if msg := call(t, s, "update_variant", map[string]any{"product_id": p.ID, "id": v.ID, "price": "12"}, &out); msg != "" {
+		t.Fatalf("update_variant: %s", msg)
+	}
+	if out.StockQty != 2 {
+		t.Errorf("stock = %d, want 2", out.StockQty)
+	}
+}

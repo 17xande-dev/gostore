@@ -612,6 +612,7 @@ func TestAdminVariants_UpdateAndDelete(t *testing.T) {
 		"option1":   {"M"},
 		"price":     {"319.00"},
 		"stock_qty": {"2"},
+		"stock_was": {"7"},
 		// "active" omitted, so the variant comes off sale.
 	})
 	if res.StatusCode != http.StatusSeeOther {
@@ -817,4 +818,115 @@ func do(t *testing.T, srv *httptest.Server, req *http.Request) (*http.Response, 
 		t.Fatalf("read body: %v", err)
 	}
 	return res, string(body)
+}
+
+// sell takes qty off a variant's stock the way MarkPaid does, without building an
+// order: the tests below only care that a sale lands between a form render and
+// its save.
+func sell(t *testing.T, pool *pgxpool.Pool, variantID string, qty int) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(),
+		`UPDATE product_variants SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1`, qty, variantID); err != nil {
+		t.Fatalf("sell: %v", err)
+	}
+}
+
+func stockVariant(t *testing.T, s *shop, stock int) (catalog.Product, catalog.Variant) {
+	t.Helper()
+	p, err := s.catalog.Create(t.Context(), catalog.Product{Slug: "tee", Title: "Tee", Active: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	v, err := s.catalog.CreateVariant(t.Context(), catalog.Variant{
+		ProductID: p.ID, SKU: "TEE-M", Option1: "M", PriceCents: 29900, StockQty: stock, Active: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateVariant: %v", err)
+	}
+	return p, v
+}
+
+func TestAdminVariants_RefusesAnEditWithoutStockWas(t *testing.T) {
+	// A form without stock_was cannot say what the editor saw, so the stock would
+	// have to be written absolutely - exactly what restores sold stock.
+	s := newStore(t)
+	signIn(t, s.srv)
+	p, v := stockVariant(t, s, 5)
+
+	res, _ := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, url.Values{
+		"sku": {"TEE-M"}, "option1": {"M"}, "price": {"299.00"}, "stock_qty": {"5"}, "active": {"1"},
+	})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("edit without stock_was = %d, want 400", res.StatusCode)
+	}
+	for _, bad := range []string{"abc", "-1", ""} {
+		res, _ := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, url.Values{
+			"sku": {"TEE-M"}, "option1": {"M"}, "price": {"299.00"}, "stock_qty": {"5"}, "stock_was": {bad}, "active": {"1"},
+		})
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("stock_was %q = %d, want 400", bad, res.StatusCode)
+		}
+	}
+}
+
+func TestAdminVariants_StockWasRoundTripsOnAValidationError(t *testing.T) {
+	// If the re-rendered form re-read the stored stock, the next submit would
+	// silently re-base on it and the editor's view of "what I saw" would be lost.
+	s := newStore(t)
+	signIn(t, s.srv)
+	p, v := stockVariant(t, s, 5)
+	sell(t, s.pool, v.ID, 4) // stored stock is now 1; the editor still saw 5
+
+	res, body := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, url.Values{
+		"sku": {"TEE-M"}, "option1": {"M"}, "price": {"not money"}, "stock_qty": {"5"}, "stock_was": {"5"}, "active": {"1"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("bad price = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, `name="stock_was" value="5"`) {
+		t.Errorf("the submitted stock_was did not round-trip: %s", body)
+	}
+	if strings.Contains(body, `name="stock_was" value="1"`) {
+		t.Error("the form re-based stock_was on the stored stock")
+	}
+}
+
+func TestAdminVariants_SavingAPriceDoesNotRestoreSoldStock(t *testing.T) {
+	s := newStore(t)
+	signIn(t, s.srv)
+	p, v := stockVariant(t, s, 5)
+	sell(t, s.pool, v.ID, 4)
+
+	res, body := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, url.Values{
+		"sku": {"TEE-M"}, "option1": {"M"}, "price": {"319.00"}, "stock_qty": {"5"}, "stock_was": {"5"}, "active": {"1"},
+	})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save = %d %s", res.StatusCode, body)
+	}
+	got, _ := s.catalog.Variants(t.Context(), p.ID)
+	if got[0].StockQty != 1 || got[0].PriceCents != 31900 {
+		t.Errorf("variant is %+v, want stock 1 and the new price", got[0])
+	}
+}
+
+func TestAdminVariants_StockChangedIsAFieldError(t *testing.T) {
+	s := newStore(t)
+	signIn(t, s.srv)
+	p, v := stockVariant(t, s, 5)
+	sell(t, s.pool, v.ID, 4) // stock 1
+
+	// The editor lowers 5 to 0: a change of -5 against a stock of 1.
+	res, body := post(t, s.srv, "/admin/products/"+p.ID+"/variants/"+v.ID, url.Values{
+		"sku": {"TEE-M"}, "option1": {"M"}, "price": {"299.00"}, "stock_qty": {"0"}, "stock_was": {"5"}, "active": {"1"},
+	})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("stale decrement = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "Stock has changed since this page was loaded") {
+		t.Errorf("no stock field error: %s", body)
+	}
+	got, _ := s.catalog.Variants(t.Context(), p.ID)
+	if got[0].StockQty != 1 {
+		t.Errorf("stock = %d, want it untouched at 1", got[0].StockQty)
+	}
 }

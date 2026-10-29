@@ -160,9 +160,17 @@
           {{/* A download cannot run out, so the field would be a number nothing
                reads. Submitted as 0 so the form still round-trips. */}}
           <input type="hidden" name="stock_qty" value="0">
+          <input type="hidden" name="stock_was" value="0">
         {{else}}
+        {{/* Stock is saved as a change from stock_was, the count this form was
+             rendered with, so a sale made since cannot be written back. After a
+             rejected save the submitted pair is shown again, not the stored count:
+             re-reading it would quietly re-base the next submit. */}}
+        {{$stock := .StockQty}}{{$was := .StockQty}}
+        {{if and (eq $.VariantErrorID .ID) $.VariantForm.StockWas}}{{$stock = $.VariantForm.StockQty}}{{$was = $.VariantForm.StockWas}}{{end}}
         <div class="field">
-          <label>Stock <input name="stock_qty" value="{{.StockQty}}" size="5" required></label>
+          <label>Stock <input name="stock_qty" value="{{$stock}}" size="5" required></label>
+          <input type="hidden" name="stock_was" value="{{$was}}">
         </div>
         {{end}}
         <div class="field">

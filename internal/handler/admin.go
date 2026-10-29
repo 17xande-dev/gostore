@@ -471,6 +471,10 @@ type variantForm struct {
 	Options  [catalog.OptionSlots]string
 	Price    string
 	StockQty string
+	// StockWas is the stock the edit form was rendered with, as submitted. It
+	// is echoed back on a rejected edit rather than re-read from the database,
+	// because re-reading would quietly re-base the next submit on the new count.
+	StockWas string
 	Active   bool
 }
 
@@ -609,7 +613,7 @@ func (h *Handler) adminProductDelete(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) adminVariantCreate(w http.ResponseWriter, r *http.Request) {
 	productID := r.PathValue("id")
-	v, form, errs, ok := h.parseVariant(w, r)
+	v, form, errs, _, ok := h.parseVariant(w, r, false)
 	if !ok {
 		return
 	}
@@ -633,7 +637,7 @@ func (h *Handler) adminVariantCreate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) adminVariantUpdate(w http.ResponseWriter, r *http.Request) {
 	productID, variantID := r.PathValue("id"), r.PathValue("variantID")
-	v, form, errs, ok := h.parseVariant(w, r)
+	v, form, errs, stockWas, ok := h.parseVariant(w, r, true)
 	if !ok {
 		return
 	}
@@ -644,7 +648,7 @@ func (h *Handler) adminVariantUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.cat.UpdateVariant(r.Context(), v); err != nil {
+	if _, err := h.cat.UpdateVariant(r.Context(), v, stockWas); err != nil {
 		if errs, ok := admin.VariantWriteErrors(err); ok {
 			h.renderVariantErrors(w, r, http.StatusUnprocessableEntity, productID, form, variantID, errs)
 			return
@@ -710,16 +714,31 @@ func (h *Handler) categories(w http.ResponseWriter, r *http.Request) ([]catalog.
 
 // parseVariant reads a variant form, returning both the parsed variant and the
 // raw input, so a rejected form can be re-rendered exactly as it was typed.
-func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.Variant, variantForm, validate.FormErrors, bool) {
+//
+// An edit (isEdit) also carries stock_was, the stock the form was rendered with,
+// which UpdateVariant needs to turn the submitted stock into a change. A missing
+// or malformed one is a malformed form, not a field error: no page the admin
+// served omits it.
+func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request, isEdit bool) (catalog.Variant, variantForm, validate.FormErrors, int, bool) {
 	if err := r.ParseForm(); err != nil {
 		h.badForm(w, r)
-		return catalog.Variant{}, variantForm{}, nil, false
+		return catalog.Variant{}, variantForm{}, nil, 0, false
+	}
+	var stockWas int
+	if isEdit {
+		var err error
+		stockWas, err = strconv.Atoi(strings.TrimSpace(r.PostFormValue("stock_was")))
+		if err != nil || stockWas < 0 {
+			h.badForm(w, r)
+			return catalog.Variant{}, variantForm{}, nil, 0, false
+		}
 	}
 
 	form := variantForm{
 		SKU:      strings.TrimSpace(r.PostFormValue("sku")),
 		Price:    strings.TrimSpace(r.PostFormValue("price")),
 		StockQty: strings.TrimSpace(r.PostFormValue("stock_qty")),
+		StockWas: strings.TrimSpace(r.PostFormValue("stock_was")),
 		Active:   r.PostFormValue("active") != "",
 	}
 	for i := range form.Options {
@@ -751,7 +770,7 @@ func (h *Handler) parseVariant(w http.ResponseWriter, r *http.Request) (catalog.
 	for field, msg := range verrs {
 		errs.Add(field, msg)
 	}
-	return v, form, errs, true
+	return v, form, errs, stockWas, true
 }
 
 func (h *Handler) productForm(r *http.Request, p catalog.Product, cats []catalog.Category, isNew bool, errs validate.FormErrors) productFormPage {

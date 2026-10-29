@@ -7,6 +7,7 @@ import (
 
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestStore_CreateGetAndUpdate(t *testing.T) {
@@ -163,7 +164,7 @@ func TestStore_VariantOptionsRoundTrip(t *testing.T) {
 	}
 
 	v.Option2, v.Option3 = "Black", "Linen"
-	if _, err := s.UpdateVariant(ctx, v); err != nil {
+	if _, err := s.UpdateVariant(ctx, v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 	got, err := s.Variants(ctx, p.ID)
@@ -206,9 +207,10 @@ func TestStore_Variants(t *testing.T) {
 		t.Errorf("duplicate options = %v, want an options conflict", err)
 	}
 
+	was := v.StockQty
 	v.StockQty = 2
 	v.PriceCents = 31900
-	if _, err := s.UpdateVariant(ctx, v); err != nil {
+	if _, err := s.UpdateVariant(ctx, v, was); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 
@@ -231,7 +233,7 @@ func TestStore_Variants(t *testing.T) {
 	other := mustCreate(t, s, catalog.Product{Slug: "other", Title: "Other", Active: true})
 	stray := v
 	stray.ProductID = other.ID
-	if _, err := s.UpdateVariant(ctx, stray); !errors.Is(err, catalog.ErrNotFound) {
+	if _, err := s.UpdateVariant(ctx, stray, stray.StockQty); !errors.Is(err, catalog.ErrNotFound) {
 		t.Errorf("UpdateVariant across products = %v, want ErrNotFound", err)
 	}
 	if err := s.DeleteVariant(ctx, other.ID, v.ID); !errors.Is(err, catalog.ErrNotFound) {
@@ -321,8 +323,9 @@ func TestStore_UpsertIsRerunnable(t *testing.T) {
 
 	// Someone sells eleven of them.
 	sold := first.Variants[0]
+	was := sold.StockQty
 	sold.StockQty = 9
-	if _, err := s.UpdateVariant(ctx, sold); err != nil {
+	if _, err := s.UpdateVariant(ctx, sold, was); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 
@@ -650,4 +653,80 @@ func titles(files []catalog.File) []string {
 		out = append(out, f.Title)
 	}
 	return out
+}
+
+// sell takes qty off a variant's stock with the statement MarkPaid uses.
+func sell(t *testing.T, pool *pgxpool.Pool, variantID string, qty int) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(),
+		`UPDATE product_variants SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1`, qty, variantID); err != nil {
+		t.Fatalf("sell: %v", err)
+	}
+}
+
+func stockedVariant(t *testing.T, s *catalog.Store, stock int) catalog.Variant {
+	t.Helper()
+	p := mustCreate(t, s, catalog.Product{Slug: "tee", Title: "Tee", Active: true})
+	return mustCreateVariant(t, s, catalog.Variant{
+		ProductID: p.ID, SKU: "TEE-1", Option1: "L", PriceCents: 29900, StockQty: stock, Active: true,
+	})
+}
+
+func stockOf(t *testing.T, s *catalog.Store, v catalog.Variant) int {
+	t.Helper()
+	got, err := s.Variants(t.Context(), v.ProductID)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Variants: %v, %v", got, err)
+	}
+	return got[0].StockQty
+}
+
+func TestStore_UpdateVariantDoesNotRestoreSoldStock(t *testing.T) {
+	// The editor's form was rendered at stock 5; four were sold before the save.
+	// Saving only a price change must not put them back, or a later buyer is not
+	// flagged oversold.
+	pool := dbtest.Pool(t)
+	s := catalog.NewStore(pool)
+	v := stockedVariant(t, s, 5)
+	sell(t, pool, v.ID, 4)
+
+	v.PriceCents = 31900
+	if _, err := s.UpdateVariant(t.Context(), v, 5); err != nil {
+		t.Fatalf("UpdateVariant: %v", err)
+	}
+	if got := stockOf(t, s, v); got != 1 {
+		t.Errorf("stock = %d after a price-only save, want 1 (the sold stock came back)", got)
+	}
+}
+
+func TestStore_UpdateVariantStockIsRelative(t *testing.T) {
+	pool := dbtest.Pool(t)
+	s := catalog.NewStore(pool)
+	v := stockedVariant(t, s, 5)
+	sell(t, pool, v.ID, 2) // 3
+
+	v.StockQty = 10 // the editor saw 5 and raised it by 5
+	if _, err := s.UpdateVariant(t.Context(), v, 5); err != nil {
+		t.Fatalf("UpdateVariant: %v", err)
+	}
+	if got := stockOf(t, s, v); got != 8 {
+		t.Errorf("stock = %d, want 8", got)
+	}
+}
+
+func TestStore_UpdateVariantRefusesToGoNegative(t *testing.T) {
+	pool := dbtest.Pool(t)
+	s := catalog.NewStore(pool)
+	v := stockedVariant(t, s, 5)
+	sell(t, pool, v.ID, 4) // 1
+
+	v.StockQty, v.PriceCents = 0, 1 // -5 against a stock of 1
+	_, err := s.UpdateVariant(t.Context(), v, 5)
+	if !errors.Is(err, catalog.ErrStockChanged) {
+		t.Fatalf("UpdateVariant = %v, want ErrStockChanged", err)
+	}
+	got, _ := s.Variants(t.Context(), v.ProductID)
+	if got[0].StockQty != 1 || got[0].PriceCents != 29900 {
+		t.Errorf("a refused save changed the row: %+v", got[0])
+	}
 }

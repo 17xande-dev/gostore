@@ -200,8 +200,9 @@ func TestOrderMail_OwnerNotificationCarriesTheOversellWarning(t *testing.T) {
 	order := placeOrder(t, s, "S", 2)
 
 	v := s.variants["S"]
+	was := v.StockQty
 	v.StockQty = 1
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, was); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 

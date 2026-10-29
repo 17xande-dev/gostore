@@ -1246,7 +1246,7 @@ func (q *Queries) UpdateProductFile(ctx context.Context, arg UpdateProductFilePa
 const updateVariant = `-- name: UpdateVariant :one
 UPDATE product_variants
 SET sku = $3, option1 = $4, option2 = $5, option3 = $6,
-    price_cents = $7, stock_qty = $8, active = $9
+    price_cents = $7, stock_qty = stock_qty + $9::bigint, active = $8
 WHERE id = $1 AND product_id = $2
 RETURNING id, product_id, sku, option1, option2, option3, price_cents, stock_qty, active
 `
@@ -1259,12 +1259,17 @@ type UpdateVariantParams struct {
 	Option2    string
 	Option3    string
 	PriceCents int64
-	StockQty   int
 	Active     bool
+	StockDelta int64
 }
 
 // The product id is part of the WHERE clause, so a mismatched pair from a URL
 // updates nothing instead of editing another product's variant.
+// Stock is a delta, not an absolute: an editor's form was rendered at some
+// moment, and a sale (MarkPaid) can land before the save. Writing the number the
+// editor saw would put sold stock back. A delta that would take stock below zero
+// trips the table's CHECK (stock_qty >= 0), which the store reports as
+// ErrStockChanged.
 func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (ProductVariant, error) {
 	row := q.db.QueryRow(ctx, updateVariant,
 		arg.ID,
@@ -1274,8 +1279,8 @@ func (q *Queries) UpdateVariant(ctx context.Context, arg UpdateVariantParams) (P
 		arg.Option2,
 		arg.Option3,
 		arg.PriceCents,
-		arg.StockQty,
 		arg.Active,
+		arg.StockDelta,
 	)
 	var i ProductVariant
 	err := row.Scan(

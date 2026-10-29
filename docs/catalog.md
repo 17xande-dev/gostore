@@ -33,6 +33,17 @@ product exactly like this; Magento, Saleor and Sylius add a reusable template on
 every one of them keeps that template separate from the browsing taxonomy. A template layer
 here would be strictly additive later, because the values live in these columns either way.
 
+## Editing stock
+
+Editing a variant changes its stock **relative to what the editor saw**, not to an absolute
+number. The admin form carries the count it was rendered with (`stock_was`) and the save
+adds the difference to the stored count, so a sale that lands between loading the page and
+saving it is kept instead of being written back (which would also stop a later buyer being
+flagged oversold). A save that would take stock below zero is refused with a field error
+asking for a reload. The MCP `update_variant` tool works the same way from the count it just
+read, so leaving `stock_qty` out never touches stock. Seeding and creating a variant still
+set stock absolutely.
+
 ## Categories
 
 **A category is a row, not a string on the product.** Two tables: `categories`, and a

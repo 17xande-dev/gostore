@@ -16,6 +16,11 @@ import (
 // handlers can answer 404 without inspecting driver errors.
 var ErrNotFound = errors.New("catalog: not found")
 
+// ErrStockChanged is returned when a stock edit, applied as a change to the
+// current count, would leave it negative: the stock was sold down since the
+// editor's page was loaded.
+var ErrStockChanged = errors.New("catalog: stock changed since it was read")
+
 // ErrInUse is returned when a delete would orphan a row that purchase history
 // points at. Orders snapshot what was bought, but they still reference the
 // variant, and history must not be rewritable.
@@ -502,7 +507,12 @@ func (s *Store) CreateVariant(ctx context.Context, v Variant) (Variant, error) {
 // UpdateVariant writes every editable variant column. The product id is part of
 // the WHERE clause so a mismatched pair from a URL updates nothing instead of
 // editing another product's variant.
-func (s *Store) UpdateVariant(ctx context.Context, v Variant) (Variant, error) {
+//
+// Stock is relative: v.StockQty is the value the editor submitted and stockWas
+// the value the editor was shown, and the row moves by the difference. An
+// absolute write would put back stock sold between the page load and the save.
+// A change that would leave stock negative is refused with ErrStockChanged.
+func (s *Store) UpdateVariant(ctx context.Context, v Variant, stockWas int) (Variant, error) {
 	row, err := s.q.UpdateVariant(ctx, gen.UpdateVariantParams{
 		ID:         v.ID,
 		ProductID:  v.ProductID,
@@ -511,7 +521,7 @@ func (s *Store) UpdateVariant(ctx context.Context, v Variant) (Variant, error) {
 		Option2:    v.Option2,
 		Option3:    v.Option3,
 		PriceCents: v.PriceCents,
-		StockQty:   v.StockQty,
+		StockDelta: int64(v.StockQty - stockWas),
 		Active:     v.Active,
 	})
 	if err != nil {
@@ -813,6 +823,10 @@ func translate(err error) error {
 		switch pgErr.Code {
 		case "22P02": // invalid input syntax, i.e. not a UUID
 			return ErrNotFound
+		case "23514": // check violation: stock_qty >= 0
+			if strings.Contains(pgErr.ConstraintName, "stock") {
+				return ErrStockChanged
+			}
 		case "23503": // foreign key violation
 			return ErrInUse
 		case "23505": // unique violation

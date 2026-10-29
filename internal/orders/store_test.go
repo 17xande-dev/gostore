@@ -172,7 +172,7 @@ func TestCreateFromCart_PricesFromTheCatalogNotThePage(t *testing.T) {
 
 	v := s.variants["TEE-S"]
 	v.PriceCents = 39900
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestCreateFromCart_RefusesWhatCannotBeBought(t *testing.T) {
 		// the cart page.
 		v := s.variants["TEE-S"]
 		v.Active = false
-		if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+		if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 			t.Fatalf("UpdateVariant: %v", err)
 		}
 
@@ -225,8 +225,9 @@ func TestCreateFromCart_RefusesWhatCannotBeBought(t *testing.T) {
 
 		// Somebody else bought one first.
 		v := s.variants["TEE-M"]
+		was := v.StockQty
 		v.StockQty = 1
-		if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+		if _, err := s.catalog.UpdateVariant(t.Context(), v, was); err != nil {
 			t.Fatalf("UpdateVariant: %v", err)
 		}
 
@@ -245,7 +246,7 @@ func TestCreateFromCart_RefusesWhatCannotBeBought(t *testing.T) {
 		s.add(t, "TEE-S", 1)
 		v := s.variants["TEE-S"]
 		v.Active = false
-		if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+		if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 			t.Fatalf("UpdateVariant: %v", err)
 		}
 		if _, err := s.orders.CreateFromCart(t.Context(), s.cartID, testCustomer(), "ZAR", "fake"); err == nil {
@@ -417,8 +418,9 @@ func TestMarkPaid_RecordsTheSaleEvenWhenOversold(t *testing.T) {
 	}
 
 	v := s.variants["TEE-M"]
+	was := v.StockQty
 	v.StockQty = 1
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, was); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 

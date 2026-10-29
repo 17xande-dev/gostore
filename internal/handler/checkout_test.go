@@ -206,7 +206,7 @@ func TestCheckout_RefusesACartThatCannotBeBought(t *testing.T) {
 	// has to re-check rather than trust the cart page for.
 	v := s.variants["S"]
 	v.Active = false
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestCheckout_CartPageOffersItOnlyWhenBuyable(t *testing.T) {
 	// Withdraw it: the link goes, and the reason appears instead.
 	v := s.variants["S"]
 	v.Active = false
-	if _, err := s.catalog.UpdateVariant(t.Context(), v); err != nil {
+	if _, err := s.catalog.UpdateVariant(t.Context(), v, v.StockQty); err != nil {
 		t.Fatalf("UpdateVariant: %v", err)
 	}
 	_, body := get(t, s.srv, "/cart")

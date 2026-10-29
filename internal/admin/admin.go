@@ -104,8 +104,17 @@ const ProductInUse = "This product has been ordered and cannot be deleted. Deact
 // VariantInUse is why an ordered variant cannot be deleted.
 const VariantInUse = "This variant has been ordered and cannot be deleted. Deactivate it instead."
 
+// VariantStockChanged is shown when a stock edit would take the count below zero
+// because sales have landed since the form was loaded.
+const VariantStockChanged = "Stock has changed since this page was loaded. Reload the page and try again."
+
 // VariantWriteErrors is ProductWriteErrors for a variant.
 func VariantWriteErrors(err error) (validate.FormErrors, bool) {
+	if errors.Is(err, catalog.ErrStockChanged) {
+		errs := validate.FormErrors{}
+		errs.Add("stock_qty", VariantStockChanged)
+		return errs, true
+	}
 	conflict, ok := errors.AsType[*catalog.ConflictError](err)
 	if !ok {
 		return nil, false

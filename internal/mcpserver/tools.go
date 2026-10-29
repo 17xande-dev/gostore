@@ -508,7 +508,7 @@ func (s *Server) createVariant(ctx context.Context, _ auth.User, in variantInput
 		Option1: opts[0], Option2: opts[1], Option3: opts[2],
 		PriceCents: cents, StockQty: in.StockQty, Active: in.Active == nil || *in.Active,
 	}
-	return s.saveVariant(ctx, v, true)
+	return s.saveVariant(ctx, v, true, 0)
 }
 
 type variantUpdate struct {
@@ -517,7 +517,7 @@ type variantUpdate struct {
 	SKU       *string   `json:"sku,omitempty"`
 	Options   *[]string `json:"options,omitempty"`
 	Price     *string   `json:"price,omitempty" jsonschema:"decimal amount, e.g. 149.99"`
-	StockQty  *int      `json:"stock_qty,omitempty"`
+	StockQty  *int      `json:"stock_qty,omitempty" jsonschema:"the new stock count; applied as a change from the count just read, so sales made in between are kept. Omit to leave stock alone"`
 	Active    *bool     `json:"active,omitempty"`
 }
 
@@ -549,16 +549,19 @@ func (s *Server) updateVariant(ctx context.Context, _ auth.User, in variantUpdat
 			return Variant{}, refuse("price: enter an amount like 149.99")
 		}
 	}
+	// The stock read above is what the change is measured from. Without a
+	// stock_qty the delta is zero, so a sale made since the read is never undone.
+	stockWas := v.StockQty
 	if in.StockQty != nil {
 		v.StockQty = *in.StockQty
 	}
 	if in.Active != nil {
 		v.Active = *in.Active
 	}
-	return s.saveVariant(ctx, v, false)
+	return s.saveVariant(ctx, v, false, stockWas)
 }
 
-func (s *Server) saveVariant(ctx context.Context, v catalog.Variant, isNew bool) (Variant, error) {
+func (s *Server) saveVariant(ctx context.Context, v catalog.Variant, isNew bool, stockWas int) (Variant, error) {
 	v, errs := admin.PrepareVariant(v)
 	if errs.Any() {
 		return Variant{}, fieldErrors(errs)
@@ -568,7 +571,7 @@ func (s *Server) saveVariant(ctx context.Context, v catalog.Variant, isNew bool)
 	if isNew {
 		saved, err = s.d.Catalog.CreateVariant(ctx, v)
 	} else {
-		saved, err = s.d.Catalog.UpdateVariant(ctx, v)
+		saved, err = s.d.Catalog.UpdateVariant(ctx, v, stockWas)
 	}
 	if err != nil {
 		if errs, ok := admin.VariantWriteErrors(err); ok {
