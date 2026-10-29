@@ -220,4 +220,3 @@ func LoadOrderDetail(ctx context.Context, store *orders.Store, grants *downloads
 	}
 	return d, nil
 }
-

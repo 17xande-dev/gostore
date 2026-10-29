@@ -1,3 +1,4 @@
+SHELL := bash
 COMPOSE ?= docker compose
 export LOCAL_UID := $(shell id -u)
 export LOCAL_GID := $(shell id -g)
@@ -80,23 +81,26 @@ THEME_RELOAD ?= true
 SQLC_VERSION ?= v1.31.1
 SQLC ?= sqlc
 
+# govulncheck is pinned in the Makefile rather than go.mod for the same reason as
+# sqlc: it is a build-time tool and would drag its dependencies into go.mod.
+# Pin carefully: v1.1.x crashes on Go 1.27; v1.9.0 works.
+GOVULNCHECK_VERSION ?= v1.9.0
+
 # The published image. There is no CI publishing this — see "publish" below —
 # so TAG defaults to a real version tag when HEAD has one (git tag v1.2.3) and
 # to the short commit sha otherwise, which `publish` then refuses: unlike
-# ~/dev/riverschurch/website-backend's per-commit continuous deploy, gostore is
-# published for other people to run, so the tag is the version contract, not a
-# build's provenance.
+# a project that deploys every commit, gostore is published for other people to
+# run, so the tag is the version contract, not a build's provenance.
 IMAGE ?= ghcr.io/17xande-dev/gostore
 GIT_SHA := $(shell git rev-parse --short HEAD)
 TAG ?= $(shell git describe --tags --exact-match 2>/dev/null || echo $(GIT_SHA))
 
-# The binary is CGO_ENABLED=0 (see Dockerfile), so unlike website-backend's
-# go-sqlite3 build this has no architecture the image is pinned to for
-# correctness — linux/amd64 is just what the servers it runs on are.
+# The binary is CGO_ENABLED=0 (see Dockerfile), so unlike a cgo build (go-sqlite3,
+# say) it has no architecture the image is pinned to for correctness — linux/amd64 is just what the servers it runs on are.
 PLATFORM ?= linux/amd64
 
 .PHONY: up local-dirs down logs run build test vet fmt tidy psql migrate migrate-status seed hashpw \
-	check-config sqlc sqlc-check sqlc-install image check-clean check-tagged publish
+	check-config sqlc sqlc-check sqlc-install vulncheck vulncheck-install fmt-check image check-clean check-tagged publish
 
 ## up: build and start the whole local stack
 up: local-dirs
@@ -173,6 +177,21 @@ sqlc-check:
 sqlc-install:
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
 
+## vulncheck-install: install the pinned govulncheck
+vulncheck-install:
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+## vulncheck: fail if a reachable known vulnerability affects the build (what CI runs)
+vulncheck:
+	govulncheck ./...
+
+## fmt-check: fail, listing the files, if any tracked Go source is not gofmt-clean
+# What CI runs. Scoped to tracked files so untracked scratch under .local/ cannot
+# fail a build.
+fmt-check:
+	@bad="$$(gofmt -l $$(git ls-files '*.go'))"; \
+	if [ -n "$$bad" ]; then echo "not gofmt-clean:"; echo "$$bad"; exit 1; fi
+
 build:
 	go build ./...
 
@@ -228,7 +247,7 @@ check-tagged:
 # GHCR defaults a newly pushed package to private. After the first publish,
 # set it public in the package's GitHub settings (and "connect repository")
 # or every deploy needs a PAT with read:packages — the same trap
-# website-backend's README documents for its (deliberately private) image.
+# any deliberately private image runs into.
 publish: check-clean check-tagged image
 	docker push $(IMAGE):$(TAG)
 	docker tag $(IMAGE):$(TAG) $(IMAGE):latest

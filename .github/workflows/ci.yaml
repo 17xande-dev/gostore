@@ -40,6 +40,12 @@ jobs:
       - run: make sqlc-install
       - run: make sqlc-check
 
+      # Formatting and known-vulnerability checks. govulncheck fails the build only
+      # for vulnerabilities whose code is actually reachable from this module.
+      - run: make fmt-check
+      - run: make vulncheck-install
+      - run: make vulncheck
+
       - run: go vet ./...
       - run: go build ./...
       # Database-backed tests apply migrations to fresh schemas and exercise real SQL.
