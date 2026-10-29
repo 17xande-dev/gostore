@@ -340,3 +340,52 @@ func TestRateLimit_CapRefusesNewClientsAndFailsClosed(t *testing.T) {
 		t.Errorf("%d buckets after expiry, want 1", got)
 	}
 }
+
+func TestRateLimit_CapSweepReclaimsExpiredBucketsOnly(t *testing.T) {
+	// The ordinary once-per-TTL sweep must not be what frees room here, or the
+	// cap-time sweep is never exercised: it ran at t=1000, and the next is not due
+	// until t=1060, but the cap-time sweep at t=1061 resets that clock.
+	l := newTestLimiter(2, 3, 60*time.Second)
+	l.allow("10.0.0.1", time.Unix(1000, 0)) // regular sweep runs
+	l.allow("10.0.0.2", time.Unix(1050, 0))
+	l.allow("10.0.0.3", time.Unix(1050, 0))
+	l.allow("10.0.0.1", time.Unix(1059, 0))
+
+	if l.allow("10.9.9.9", time.Unix(1061, 0)) {
+		t.Fatal("a newcomer was admitted while every bucket was live")
+	}
+	// .2 and .3 are now 61s idle, .1 only 52s, and no regular sweep is due.
+	if !l.allow("10.9.9.9", time.Unix(1111, 0)) {
+		t.Fatal("the cap-time sweep did not reclaim the expired buckets")
+	}
+	if got := l.size(); got != 2 {
+		t.Errorf("%d buckets, want 2 (the live one kept, plus the newcomer)", got)
+	}
+	if _, ok := l.buckets["10.0.0.1"]; !ok {
+		t.Error("a live bucket was dropped by the cap-time sweep")
+	}
+}
+
+func TestRateLimit_CapSweepIsNotRunPerRefusedRequest(t *testing.T) {
+	// Each sweep scans the whole map under the lock, so a flood of newcomers must
+	// not trigger one apiece.
+	l := newTestLimiter(1, 2, 60*time.Second)
+	l.allow("10.0.0.1", time.Unix(1000, 0))
+	l.allow("10.0.0.2", time.Unix(1000, 0))
+
+	if l.allow("10.9.9.9", time.Unix(1058, 0)) { // cap-time sweep: nothing expired yet
+		t.Fatal("admitted while full")
+	}
+	// Both buckets expired at 1060, but the last cap-time sweep was 3s ago, so
+	// the newcomer is refused without a scan and nothing is reclaimed.
+	if l.allow("10.9.9.9", time.Unix(1061, 0)) {
+		t.Error("a refused newcomer triggered a second sweep inside capSweepEvery")
+	}
+	if got := l.size(); got != 2 {
+		t.Errorf("%d buckets, want 2 (no rescan yet)", got)
+	}
+	// Once the interval has passed the sweep runs and the cap heals.
+	if !l.allow("10.9.9.9", time.Unix(1058, 0).Add(capSweepEvery+time.Second)) {
+		t.Error("the cap did not heal once capSweepEvery had passed")
+	}
+}

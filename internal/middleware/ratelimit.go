@@ -76,6 +76,14 @@ const limiterTTL = 10 * time.Minute
 // makes the map's size a bound rather than a hope.
 const maxBuckets = 10_000
 
+// capSweepEvery is the least time between sweeps triggered by hitting the cap.
+// A sweep scans every bucket under the limiter's lock, and at the cap every
+// refused newcomer would otherwise run one: an attacker's request rate would
+// become the lock's busy time, and existing clients (the payment callback among
+// them) would queue behind it. Spaced out, the scan is a rare cost, while the cap
+// still heals within roughly the TTL plus this interval of buckets expiring.
+const capSweepEvery = 5 * time.Second
+
 // limiterKey is the identity a client is throttled under.
 //
 // IPv4 is keyed by the full address. IPv6 is keyed by its /64, because that is
@@ -170,8 +178,10 @@ type ipLimiter struct {
 	// capLogged is when the cap last logged, so a flood is one line per TTL
 	// window rather than one per request.
 	capLogged time.Time
-	name      string
-	log       *slog.Logger
+	// capSwept is when a cap-triggered sweep last ran; see capSweepEvery.
+	capSwept time.Time
+	name     string
+	log      *slog.Logger
 }
 
 type bucket struct {
@@ -198,8 +208,13 @@ func (l *ipLimiter) allow(ip string, now time.Time) bool {
 		}
 		if len(l.buckets) >= limit {
 			// Make room the cheap way first: idle buckets cost nothing to forget.
-			l.evict(now)
-			l.lastKeep = now
+			// At most once per capSweepEvery, so a flood of newcomers is refused
+			// without rescanning the map on every request.
+			if l.capSwept.IsZero() || now.Sub(l.capSwept) >= capSweepEvery {
+				l.evict(now)
+				l.lastKeep = now
+				l.capSwept = now
+			}
 		}
 		if len(l.buckets) >= limit {
 			// Still full of live clients. Refuse the newcomer: failing open would
