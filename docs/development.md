@@ -54,11 +54,11 @@ Three things worth knowing before touching `sqlc.yaml`:
 
 ### Migrations
 
-**Current greenfield baseline:** `0001_init.sql` contains the complete schema,
-including checkout attempts, the email outbox and fulfillment tracking. There are
-no incremental upgrade migrations yet. Edit the baseline's table definitions while
-the project is greenfield, regenerate with `make sqlc`, and recreate the development
-database to pick up the new schema.
+`0001_init.sql` is the baseline schema: checkout attempts, the email outbox and
+fulfillment tracking included. Every migration after it (`0002_admin_api_tokens.sql`,
+`0003_admin_image_uploads.sql`, ...) is an incremental upgrade, so a schema change is a
+new numbered file. The baseline itself is no longer edited either; it may already be applied
+somewhere, and the rules below apply to it as to any other migration.
 
 The migrations are also sqlc's idea of the schema, so a migration and the generated code
 change together: add a column, run `make sqlc`.
@@ -78,7 +78,7 @@ ALTER TABLE products ADD COLUMN subtitle TEXT NOT NULL DEFAULT '';
 ALTER TABLE products DROP COLUMN subtitle;
 ```
 
-Once there is deployed data to preserve, use these rules for subsequent changes:
+These rules govern every change:
 
 - **Never edit a migration that has been applied anywhere.** goose records versions, not
   checksums, so an edited file is silently skipped and the schema quietly diverges from

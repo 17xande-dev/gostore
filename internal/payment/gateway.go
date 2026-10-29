@@ -4,9 +4,8 @@
 //
 // Two real gateways ship, in internal/payment/payfast and
 // internal/payment/snapscan, and a store may enable either or both. The split
-// exists so that adding a third is a documented extension point rather than a
-// fork, and so the handler tests never talk to a payment provider — see fake.go
-// and CONTRIBUTING.md.
+// exists so that adding a third is an extension point rather than a fork, and so
+// the handler tests never talk to a payment provider — see fake.go.
 //
 // # What the second gateway changed
 //
