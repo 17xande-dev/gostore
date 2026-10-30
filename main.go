@@ -191,7 +191,10 @@ func run() error {
 		Addr:              net.JoinHostPort("", cfg.Port),
 		Handler:           routes(cfg, h, mcpSrv, gateways, users, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// The default is 1 MB per request, and a rate-limit key can come from a
+		// header. Nothing this store sends or sets comes near 64 KiB.
+		MaxHeaderBytes: 64 << 10,
+		IdleTimeout:    60 * time.Second,
 	}
 
 	errc := make(chan error, 1)
