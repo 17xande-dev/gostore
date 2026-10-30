@@ -154,6 +154,32 @@ sudo docker compose exec -T postgres dropdb -U gostore restore_check
 The live store is untouched throughout. Do the same with a dump fetched from the offsite
 bucket now and then, since that is the copy you will need on the day the server is gone.
 
+## Moving an existing install from Postgres 17 to 18
+
+The deployment files in this release run Postgres 18, and a 17 data directory cannot be
+opened by it, so an install created from an older release moves by dump and restore.
+Postgres 18 also keeps its data one level deeper: the volume is now mounted at
+`/var/lib/postgresql`, not `/var/lib/postgresql/data`. Copy the new `compose.yaml` over
+the old one (as in step 5 of the guide) before starting it, because the old mount path
+with the 18 image would put the database on an anonymous volume that is lost when the
+container is recreated. Plan for a few minutes without the store.
+
+```sh
+sudo ./backup.sh
+sudo docker compose stop server
+sudo docker compose exec -T postgres pg_dump -U gostore gostore > /root/gostore-pg17.sql
+sudo docker compose down                      # keeps the volume, for now
+sudo docker volume rm gostore_pgdata          # the project name is gostore in both deployments
+# copy the new compose.yaml into place here
+sudo docker compose up -d --wait postgres
+sudo docker compose exec -T postgres psql -q -v ON_ERROR_STOP=1 -U gostore gostore < /root/gostore-pg17.sql >/dev/null
+sudo docker compose up -d
+```
+
+Check `docker compose exec postgres psql -U gostore -c 'select count(*) from orders'`
+against what you expect before deleting `/root/gostore-pg17.sql` and the backup taken
+first. Removing the volume is the point of no return; the dump is what you are left with.
+
 ## What this does not give you
 
 These are nightly snapshots: restoring loses whatever happened since the last one — up to
