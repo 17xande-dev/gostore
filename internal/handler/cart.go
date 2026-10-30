@@ -118,7 +118,7 @@ func (h *Handler) cartUpdate(w http.ResponseWriter, r *http.Request) {
 
 	token := h.tokenFromCookie(r)
 	if token == "" {
-		h.cartProblem(w, r, "Your cart has expired.")
+		h.cartExpired(w, r)
 		return
 	}
 
@@ -132,13 +132,13 @@ func (h *Handler) cartUpdate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) cartDelete(w http.ResponseWriter, r *http.Request) {
 	token := h.tokenFromCookie(r)
 	if token == "" {
-		h.cartProblem(w, r, "Your cart has expired.")
+		h.cartExpired(w, r)
 		return
 	}
 	if err := h.cart.Remove(r.Context(), token, r.PathValue("variantID")); err != nil {
 		if errors.Is(err, cart.ErrNotFound) {
 			// The cookie outlived the cart row (swept after expiry).
-			h.cartProblem(w, r, "Your cart has expired.")
+			h.cartExpired(w, r)
 			return
 		}
 		h.serverError(w, r, err)
@@ -182,7 +182,7 @@ func (h *Handler) cartUpdateFailed(w http.ResponseWriter, r *http.Request, token
 	var out *cart.OutOfStockError
 	switch {
 	case errors.Is(err, cart.ErrNotFound):
-		h.cartProblem(w, r, "Your cart has expired.")
+		h.cartExpired(w, r)
 	case errors.As(err, &out):
 		h.renderCart(w, r, http.StatusConflict, h.cartFor(r, token), "",
 			"Only "+strconv.Itoa(out.Available)+" of that option left.")
@@ -207,6 +207,12 @@ func (h *Handler) cartProblem(w http.ResponseWriter, r *http.Request, message st
 		return
 	}
 	h.renderCart(w, r, http.StatusConflict, c, "", message)
+}
+
+// cartExpired answers an edit to a cart that no longer exists. Edits come from
+// the cart page, so the shopper sees that page, empty, with the reason.
+func (h *Handler) cartExpired(w http.ResponseWriter, r *http.Request) {
+	h.renderCart(w, r, http.StatusConflict, cart.Cart{}, "", "Your cart has expired.")
 }
 
 func (h *Handler) renderCart(w http.ResponseWriter, r *http.Request, status int, c cart.Cart, notice, problem string) {

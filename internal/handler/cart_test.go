@@ -491,8 +491,9 @@ func TestCart_EditingAnExpiredCartSaysSo(t *testing.T) {
 		req.Header.Set("Origin", srv.URL)
 		req.AddCookie(stale)
 		res, body := do(t, srv, req)
-		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") {
-			t.Errorf("update = %d %s, want 409 and the expiry message", res.StatusCode, body)
+		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") ||
+			!strings.Contains(body, "Your cart is empty.") {
+			t.Errorf("update = %d %s, want 409, the expiry message and an empty cart", res.StatusCode, body)
 		}
 	})
 
@@ -507,8 +508,9 @@ func TestCart_EditingAnExpiredCartSaysSo(t *testing.T) {
 		req.Header.Set("Origin", srv.URL)
 		req.AddCookie(stale)
 		res, body := do(t, srv, req)
-		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") {
-			t.Errorf("delete = %d %s, want 409 and the expiry message", res.StatusCode, body)
+		if res.StatusCode != http.StatusConflict || !strings.Contains(body, "Your cart has expired.") ||
+			!strings.Contains(body, "Your cart is empty.") {
+			t.Errorf("delete = %d %s, want 409, the expiry message and an empty cart", res.StatusCode, body)
 		}
 	})
 }
