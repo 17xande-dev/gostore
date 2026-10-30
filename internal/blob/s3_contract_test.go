@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // The tests here talk to a real S3-compatible server, so they run only when
@@ -130,12 +131,12 @@ func TestS3Downloads_RealServerPresignedGet(t *testing.T) {
 	}
 }
 
-func readObject(t *testing.T, c *minio.Client, bucket, key string) ([]byte, error) {
+func readObject(t *testing.T, c *s3.Client, bucket, key string) ([]byte, error) {
 	t.Helper()
-	obj, err := c.GetObject(t.Context(), bucket, key, minio.GetObjectOptions{})
+	out, err := c.GetObject(t.Context(), &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 	if err != nil {
 		return nil, err
 	}
-	defer obj.Close()
-	return io.ReadAll(obj)
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
 }

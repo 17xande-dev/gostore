@@ -137,7 +137,7 @@ above and run:
 BLOB_TEST_ENDPOINT=127.0.0.1:9000 go test ./internal/blob/
 ```
 
-Run them after updating `minio-go`; the in-memory fakes cannot tell you the client still
+Run them after updating the AWS SDK modules; the in-memory fakes cannot tell you the client still
 agrees with a real server.
 
 ## Dependencies
@@ -164,14 +164,14 @@ question is the depth of the problem, not the size of the dependency.
 | [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`17xande-dev/mailer`](https://github.com/17xande-dev/mailer) | Sending email, behind one `Sender` interface — the SMTP transport, the XOAUTH2 token dance for Exchange, and the fake the handler tests inject. Shared with another application, which is why it is a module rather than an `internal/` package. It pulls in [`wneessen/go-mail`](https://github.com/wneessen/go-mail) for MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
-| [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, RustFS and other S3-compatible servers |
+| [`aws/aws-sdk-go-v2`](https://github.com/aws/aws-sdk-go-v2) (`service/s3`, `feature/s3/manager`, `credentials`) | Object storage over the S3 API — R2, GCS interop, RustFS and other S3-compatible servers. Configured with checksums "when required"; see [the S3 client](catalog.md) |
 | [`modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) | The [MCP endpoint](mcp.md): the protocol's JSON-RPC, the Streamable HTTP transport, tool schemas inferred from Go structs. The official SDK, maintained by the MCP project with Google. The protocol is young and still moving — sessions, streaming and capability negotiation have changed between revisions — which is exactly the kind of problem not to hand-roll. Linked in with it: `google/jsonschema-go`, `segmentio/encoding`, `yosida95/uritemplate` and `golang.org/x/oauth2` (for types; no OAuth flow is used) |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:
 a router (`ServeMux` does method and wildcard patterns), a validation library (struct tags
 fight the per-field messages these forms need), and a decimal type (money is
 integer cents). A UUID library is not needed *directly* — the database generates ids — and
-`google/uuid` now arrives indirectly with minio-go, which is fine.
+The AWS SDK brings `smithy-go` and its own small internal modules, which is the price of using the official client.
 
 ### Build-time tools
 

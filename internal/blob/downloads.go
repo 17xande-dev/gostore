@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // Downloads is private object storage: bytes only a paying buyer may read.
@@ -108,20 +109,20 @@ func (NoDownloads) Open(context.Context, string) (io.ReadCloser, int64, error) {
 // S3Downloads is Downloads against a private S3-compatible bucket: Google Cloud
 // Storage through its interoperability XML API, Cloudflare R2, or RustFS.
 //
-// It reuses the S3 client for the same reasons documented on S3 — minio-go speaks
-// the conservative subset all three agree on — but against a different bucket,
+// It reuses the S3 client configuration documented on S3, but against a different bucket,
 // with no public base URL. There is no URL method here at all, and that is the
 // enforcement: a key from this store has no address anybody can be given.
 type S3Downloads struct {
-	client *minio.Client
-	bucket string
+	client   *s3.Client
+	uploader *manager.Uploader
+	bucket   string
 
 	// signer mints presigned URLs, and is a second client only when the browser
 	// reaches this bucket at a different address than the server does — see
 	// S3Config.PublicEndpoint. It makes no network calls: presigning is local
 	// arithmetic over the credentials, so a client pointed at an address this
 	// process cannot reach is still perfectly able to sign for it.
-	signer *minio.Client
+	signer *s3.PresignClient
 }
 
 // NewS3Downloads validates the configuration and returns Downloads.
@@ -148,36 +149,46 @@ func NewS3Downloads(cfg S3Config) (*S3Downloads, error) {
 		return nil, fmt.Errorf("blob: download endpoint %q must be host[:port] with no scheme", cfg.Endpoint)
 	}
 
-	client, err := newMinioClient(cfg)
+	client, err := newS3Client(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	signer := client
+	signingClient := client
 	if pub := strings.TrimSpace(cfg.PublicEndpoint); pub != "" && pub != cfg.Endpoint {
 		if strings.Contains(pub, "://") {
 			return nil, fmt.Errorf("blob: download public endpoint %q must be host[:port] with no scheme", pub)
 		}
 		signing := cfg
 		signing.Endpoint = pub
-		if signer, err = newMinioClient(signing); err != nil {
+		if signingClient, err = newS3Client(signing); err != nil {
 			return nil, err
 		}
 	}
-	return &S3Downloads{client: client, bucket: cfg.Bucket, signer: signer}, nil
+	uploader := manager.NewUploader(client, func(u *manager.Uploader) {
+		u.PartSize = uploadPartSize
+		// One part in flight, so the memory held is one part, not several.
+		u.Concurrency = 1
+	})
+	return &S3Downloads{
+		client:   client,
+		uploader: uploader,
+		bucket:   cfg.Bucket,
+		signer:   s3.NewPresignClient(signingClient),
+	}, nil
 }
 
 // uploadPartSize is how much of an upload the client holds in memory at once.
 //
-// Pinned rather than left to minio-go, which derives a part size from the object
-// size — so the buffer, and the memory, would grow with the file.
+// Pinned rather than left to the SDK default, so the buffer, and the memory, do not
+// depend on the file.
 //
 // Sixteen mebibytes is comfortably above the 5 MiB protocol minimum and makes the
-// cost a constant. Measured against a local S3 server: a 477 MB upload grew the
-// server's resident memory by 75 MB and a 1.43 GB upload by 65 MB. Three times the
-// file, no more memory — which is the property that matters, and the reason the
-// figure is not the 16 MiB this constant names: it also covers the client's other
-// buffers and whatever the collector has not yet returned.
+// cost a constant. Measured against RustFS with the AWS SDK's upload manager (one
+// part in flight): an 800 MiB upload peaked at 70 MiB of memory obtained from the
+// operating system, process-wide. The figure is above the 16 MiB this constant
+// names because it also covers the client's other buffers and whatever the
+// collector has not yet returned.
 //
 // It bounds an object at 16 MiB × 10 000 parts, about 160 GB, far past anything
 // DOWNLOAD_MAX_BYTES will allow.
@@ -186,9 +197,11 @@ const uploadPartSize = 16 << 20
 func (s *S3Downloads) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
 	// No CacheControl, unlike an image. These objects are fetched through
 	// short-lived signed URLs and must not be cached by anything in between.
-	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
-		ContentType: contentType,
-		PartSize:    uploadPartSize,
+	_, err := s.uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        r,
+		ContentType: aws.String(contentType),
 	})
 	if err != nil {
 		return fmt.Errorf("blob: put download %s: %w", key, err)
@@ -197,37 +210,33 @@ func (s *S3Downloads) Put(ctx context.Context, key string, r io.Reader, size int
 }
 
 func (s *S3Downloads) Delete(ctx context.Context, key string) error {
-	if err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	if err != nil {
 		return fmt.Errorf("blob: delete download %s: %w", key, err)
 	}
 	return nil
 }
 
 func (s *S3Downloads) PresignGet(ctx context.Context, key, filename string, ttl time.Duration) (string, bool, error) {
-	params := url.Values{}
-	params.Set("response-content-disposition", contentDisposition(filename))
-
-	link, err := s.signer.PresignedGetObject(ctx, s.bucket, key, ttl, params)
+	req, err := s.signer.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket:                     aws.String(s.bucket),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String(contentDisposition(filename)),
+	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", false, fmt.Errorf("blob: presign download %s: %w", key, err)
 	}
-	return link.String(), true, nil
+	return req.URL, true, nil
 }
 
 func (s *S3Downloads) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
-	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	// GetObject answers before any body is read, so a missing object is an error
+	// here and not halfway through a response that has already claimed 200.
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
 	if err != nil {
 		return nil, 0, fmt.Errorf("blob: open download %s: %w", key, err)
 	}
-	// GetObject is lazy — it does not talk to the bucket until the first read — so
-	// Stat is what turns a missing object into an error here rather than halfway
-	// through a response that has already claimed 200.
-	info, err := obj.Stat()
-	if err != nil {
-		obj.Close()
-		return nil, 0, fmt.Errorf("blob: stat download %s: %w", key, err)
-	}
-	return obj, info.Size, nil
+	return out.Body, aws.ToInt64(out.ContentLength), nil
 }
 
 // DiskDownloads keeps purchased files in a directory, for a shop that wants no

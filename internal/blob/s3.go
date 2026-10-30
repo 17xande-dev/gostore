@@ -7,23 +7,25 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // S3 is Storage against any S3-compatible object store: Cloudflare R2, Google
 // Cloud Storage in interoperability mode, or a self-hosted server such as RustFS.
 //
-// The client is minio-go rather than the AWS SDK, and the reason is which
-// backends this project actually targets. Since aws-sdk-go-v2's service/s3
-// v1.73.0, every PutObject carries a CRC32 checksum by default, and that broke
-// R2, GCS interop and older S3-compatible servers — the stores here — while being correct
-// for the one store this project is least likely to be pointed at. minio-go
-// speaks the conservative subset all of them agree on, which is exactly the
-// requirement.
+// The client is the AWS SDK for Go v2, configured for stores that are not AWS.
+// Since service/s3 v1.73.0 every PutObject carries a CRC32 checksum by default,
+// which R2, GCS interop and some self-hosted servers rejected. The SDK has since
+// grown the switch that matters, and newS3Client sets it: checksums are
+// calculated and validated only where an operation requires them. Path-style
+// addressing is on because that is what a custom endpoint expects.
 type S3 struct {
-	client *minio.Client
-	bucket string
+	client   *s3.Client
+	uploader *manager.Uploader
+	bucket   string
 
 	// publicBase is the hostname images are actually served from — R2's
 	// pub-*.r2.dev, a custom domain, or the object server's own address in development. It is
@@ -36,7 +38,7 @@ type S3 struct {
 // S3Config is what S3 needs. Every field is required; NewS3 says which are
 // missing rather than failing at the first upload.
 type S3Config struct {
-	// Endpoint is host[:port], with no scheme — minio-go takes the scheme from
+	// Endpoint is host[:port], with no scheme — the scheme comes from
 	// UseTLS. For R2 this is <account-id>.r2.cloudflarestorage.com.
 	Endpoint  string
 	Bucket    string
@@ -89,7 +91,7 @@ func NewS3(cfg S3Config) (*S3, error) {
 	}
 
 	// A scheme in the endpoint is the single easiest thing to get wrong here, and
-	// minio-go's own error for it is opaque.
+	// the SDK's own error for it is opaque.
 	if strings.Contains(cfg.Endpoint, "://") {
 		return nil, fmt.Errorf("blob: endpoint %q must be host[:port] with no scheme; use BLOB_USE_TLS for the scheme", cfg.Endpoint)
 	}
@@ -98,46 +100,62 @@ func NewS3(cfg S3Config) (*S3, error) {
 		return nil, fmt.Errorf("blob: public base URL %q must be an absolute URL", cfg.PublicBaseURL)
 	}
 
-	client, err := newMinioClient(cfg)
+	client, err := newS3Client(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	return &S3{
 		client:     client,
+		uploader:   manager.NewUploader(client),
 		bucket:     cfg.Bucket,
 		publicBase: strings.TrimRight(cfg.PublicBaseURL, "/"),
 	}, nil
 }
 
-// newMinioClient builds the client both the public and the private store use.
+// newS3Client builds the client both the public and the private store use.
 // Shared so that a change to how this project talks to a bucket — the region
-// default, the credential type — cannot apply to images and not to downloads.
-func newMinioClient(cfg S3Config) (*minio.Client, error) {
+// default, the credential type, the checksum policy — cannot apply to images and
+// not to downloads.
+func newS3Client(cfg S3Config) (*s3.Client, error) {
 	region := cfg.Region
 	if region == "" {
 		// "auto" is what R2 wants and what GCS and RustFS ignore. AWS would not,
 		// which is the one backend this project is least likely to be pointed at.
 		region = "auto"
 	}
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseTLS,
-		Region: region,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("blob: build client for %s: %w", cfg.Endpoint, err)
+	scheme := "https"
+	if !cfg.UseTLS {
+		scheme = "http"
 	}
-	return client, nil
+	if strings.Contains(cfg.Endpoint, "://") {
+		return nil, fmt.Errorf("blob: endpoint %q must be host[:port] with no scheme", cfg.Endpoint)
+	}
+	return s3.New(s3.Options{
+		Region:       region,
+		BaseEndpoint: aws.String(scheme + "://" + cfg.Endpoint),
+		Credentials:  credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
+		UsePathStyle: true,
+
+		// See the comment on S3: the default CRC32 checksums are what broke
+		// non-AWS stores.
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+	}), nil
 }
 
 func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error) {
-	_, err := s.client.PutObject(ctx, s.bucket, key, r, size, minio.PutObjectOptions{
-		ContentType: contentType,
+	// The uploader copes with a reader that is not seekable, which is what an
+	// uploaded multipart file is, and which a plain PutObject over HTTP is not.
+	_, err := s.uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        r,
+		ContentType: aws.String(contentType),
 		// Immutable is honest because the key carries a random component: replacing
 		// an image writes a new key, so a cached copy of this one can never be
 		// stale.
-		CacheControl: "public, max-age=31536000, immutable",
+		CacheControl: aws.String("public, max-age=31536000, immutable"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("blob: put %s: %w", key, err)
@@ -146,7 +164,8 @@ func (s *S3) Put(ctx context.Context, key string, r io.Reader, size int64, conte
 }
 
 func (s *S3) Delete(ctx context.Context, key string) error {
-	if err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	if err != nil {
 		return fmt.Errorf("blob: delete %s: %w", key, err)
 	}
 	return nil

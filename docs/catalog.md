@@ -123,11 +123,13 @@ R2 writes to `<account>.r2.cloudflarestorage.com` and reads from a custom domain
 the compose stack the server writes to `rustfs:9000` while your browser reads from
 `localhost:9000`. Only the operator knows the second one, so it is not derived.
 
-**Why minio-go and not the AWS SDK.** Since `aws-sdk-go-v2/service/s3` v1.73.0 every
-`PutObject` carries a CRC32 checksum by default, which
-[broke R2, GCS interop and older S3-compatible servers](https://github.com/aws/aws-sdk-go-v2/discussions/2960) —
-the three stores this targets — while being correct for the one it is least likely to be
-pointed at. minio-go speaks the conservative subset all of them agree on.
+**The S3 client.** The AWS SDK for Go v2 (`service/s3` with its upload manager), the
+official and most widely maintained client. Since `service/s3` v1.73.0 every `PutObject`
+carries a CRC32 checksum by default, which
+[broke R2, GCS interop and older S3-compatible servers](https://github.com/aws/aws-sdk-go-v2/discussions/2960),
+so the client is built with request and response checksums set to "when required" and
+path-style addressing on. `internal/blob/s3_contract_test.go` runs against a real server
+(RustFS) to prove it still works after an update.
 
 The upload order is chosen so no failure leaves a product pointing at nothing: store the
 new object, point the product at it, and only then delete the old one. A failure part-way
