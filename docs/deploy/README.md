@@ -27,14 +27,14 @@ Before replacing an older deployment's Compose file, stop uploads, retain the ol
 Compose file and volumes, and copy objects to R2 **with their existing object keys**.
 Copy public images and private purchased files into separate buckets. For disk storage,
 copy the contents of the storage directory, including its nested key directories;
-do not add an extra top-level directory. For MinIO, use an S3-aware copy tool such as
-rclone rather than copying MinIO's internal volume files. Verify an image and a paid
+do not add an extra top-level directory. For an older self-hosted S3 server, use an S3-aware copy tool such as
+rclone rather than copying the server's internal volume files. Verify an image and a paid
 download before switching configuration. Then remove `IMAGE_DIR`/`DOWNLOAD_DIR` from
 the production environment and set `BLOB_*`/`DOWNLOAD_*`. Keep the original data until
 the new deployment and its backups have been verified.
 
-Development now uses `.local/images` and `.local/downloads`; existing MinIO demo
-objects similarly need copying by key, or a freshly recreated demo database can be
+Development now uses `.local/images` and `.local/downloads`; existing demo
+objects in an old object-store volume similarly need copying by key, or a freshly recreated demo database can be
 seeded into the new directories. Changing a backend does not move existing objects.
 
 ## The `.env`
@@ -63,6 +63,27 @@ refuses to do (a dirty tree, an untagged commit) and why.
 
 GHCR makes a newly pushed package private. Set it public in the package's settings
 after the first publish, or the server cannot pull it without a token.
+
+## Storage without R2
+
+R2 is what the guides use, but the server only needs two S3-compatible buckets, so any
+store that speaks that API works: set `BLOB_*` and `DOWNLOAD_*` to its endpoint, as in
+[Configuration](../configuration.md). A self-hosted choice is [RustFS](https://github.com/rustfs/rustfs),
+which the development stack already uses (see
+[Trying a real S3 server](../development.md#trying-a-real-s3-server)). Three things have to
+hold, and R2 gives you them for free:
+
+- the images bucket is readable anonymously, at an address browsers reach over HTTPS
+  (`BLOB_PUBLIC_BASE_URL`);
+- the downloads bucket is **not** readable anonymously, and is also reachable by browsers
+  over HTTPS, because a purchased file is fetched by a signed link straight from it
+  (`DOWNLOAD_ENDPOINT`, or `DOWNLOAD_PUBLIC_ENDPOINT` when the server reaches it by a
+  different name);
+- the two use different buckets and different credentials.
+
+So a self-hosted store needs a reverse proxy in front of it that terminates TLS for both
+names. This repository ships no Compose file for that, and none has been run in
+production; use the R2 deployments unless you are prepared to own that part.
 
 ## Running it anywhere else
 

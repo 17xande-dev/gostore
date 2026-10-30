@@ -109,6 +109,37 @@ records applied versions, so simply restarting will not reapply an edited baseli
 The files are ordinary goose migrations, so the `goose` CLI works against this directory
 unchanged when a migration needs to be inspected or applied by hand.
 
+### Trying a real S3 server
+
+Development stores images and downloads in directories, which needs nothing running. To
+exercise the bucket backends without a Cloudflare account, the compose file has a
+[RustFS](https://github.com/rustfs/rustfs) service behind the `s3` profile:
+
+```sh
+docker compose --profile s3 up -d --wait rustfs
+for b in gostore-images gostore-downloads; do
+  curl -s --aws-sigv4 aws:amz:auto:s3 --user rustfsadmin:rustfsadmin -X PUT http://127.0.0.1:9000/$b
+done
+```
+
+Then point the server at it with the `BLOB_*` and `DOWNLOAD_*` settings, endpoint
+`127.0.0.1:9000` (`rustfs:9000` from inside the compose network, with
+`BLOB_USE_TLS=false` and `DOWNLOAD_USE_TLS=false`), credentials `rustfsadmin` /
+`rustfsadmin`, and `DOWNLOAD_PUBLIC_ENDPOINT=127.0.0.1:9000` so the signed link works from
+your browser. Make the images bucket publicly readable before expecting product photos to
+display.
+
+The same server backs the storage tests that need a real bucket. They skip unless
+`BLOB_TEST_ENDPOINT` is set; create `gostore-test-images` and `gostore-test-downloads` as
+above and run:
+
+```sh
+BLOB_TEST_ENDPOINT=127.0.0.1:9000 go test ./internal/blob/
+```
+
+Run them after updating `minio-go`; the in-memory fakes cannot tell you the client still
+agrees with a real server.
+
 ## Dependencies
 
 The objection this project has is to **frameworks**, not libraries: something that owns the
@@ -133,7 +164,7 @@ question is the depth of the problem, not the size of the dependency.
 | [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`17xande-dev/mailer`](https://github.com/17xande-dev/mailer) | Sending email, behind one `Sender` interface — the SMTP transport, the XOAUTH2 token dance for Exchange, and the fake the handler tests inject. Shared with another application, which is why it is a module rather than an `internal/` package. It pulls in [`wneessen/go-mail`](https://github.com/wneessen/go-mail) for MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
-| [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, MinIO |
+| [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, RustFS and other S3-compatible servers |
 | [`modelcontextprotocol/go-sdk`](https://github.com/modelcontextprotocol/go-sdk) | The [MCP endpoint](mcp.md): the protocol's JSON-RPC, the Streamable HTTP transport, tool schemas inferred from Go structs. The official SDK, maintained by the MCP project with Google. The protocol is young and still moving — sessions, streaming and capability negotiation have changed between revisions — which is exactly the kind of problem not to hand-roll. Linked in with it: `google/jsonschema-go`, `segmentio/encoding`, `yosida95/uritemplate` and `golang.org/x/oauth2` (for types; no OAuth flow is used) |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:
@@ -186,7 +217,7 @@ Recorded here so they are decided deliberately rather than by default:
 5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
 6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
 7. **Order emails + admin orders** — go-mail, receipts, `/admin/orders` ← *done*
-8. **Images** — `blob` package, admin upload to R2/GCS/MinIO ← *done*
+8. **Images** — `blob` package, admin upload to R2/GCS/RustFS ← *done*
 9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
 10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *done*
 11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *done*

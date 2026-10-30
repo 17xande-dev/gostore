@@ -106,7 +106,7 @@ func (NoDownloads) Open(context.Context, string) (io.ReadCloser, int64, error) {
 }
 
 // S3Downloads is Downloads against a private S3-compatible bucket: Google Cloud
-// Storage through its interoperability XML API, Cloudflare R2, or MinIO.
+// Storage through its interoperability XML API, Cloudflare R2, or RustFS.
 //
 // It reuses the S3 client for the same reasons documented on S3 — minio-go speaks
 // the conservative subset all three agree on — but against a different bucket,
@@ -173,7 +173,7 @@ func NewS3Downloads(cfg S3Config) (*S3Downloads, error) {
 // size — so the buffer, and the memory, would grow with the file.
 //
 // Sixteen mebibytes is comfortably above the 5 MiB protocol minimum and makes the
-// cost a constant. Measured against the compose MinIO: a 477 MB upload grew the
+// cost a constant. Measured against a local S3 server: a 477 MB upload grew the
 // server's resident memory by 75 MB and a 1.43 GB upload by 65 MB. Three times the
 // file, no more memory — which is the property that matters, and the reason the
 // figure is not the 16 MiB this constant names: it also covers the client's other

@@ -80,7 +80,7 @@ Two backends, mutually exclusive, both behind `blob.Storage`:
 
 | | Set | Image URL | Suits |
 |---|---|---|---|
-| **Object storage** | `BLOB_*` | the bucket's public hostname | anything scaled out; R2, GCS interop, MinIO |
+| **Object storage** | `BLOB_*` | the bucket's public hostname | anything scaled out; R2, GCS interop, RustFS |
 | **A local directory** | `IMAGE_DIR` | `/images/...`, served by this server | one instance with a persistent volume |
 | **Neither** | — | products have no images, and the admin says so | a catalog that does not need pictures |
 
@@ -120,12 +120,12 @@ With a bucket, `BLOB_ENDPOINT` and `BLOB_PUBLIC_BASE_URL` are separate values be
 address a bucket is *written* through and the address it is *read* from are routinely
 different:
 R2 writes to `<account>.r2.cloudflarestorage.com` and reads from a custom domain, and in
-the compose stack the server writes to `minio:9000` while your browser reads from
+the compose stack the server writes to `rustfs:9000` while your browser reads from
 `localhost:9000`. Only the operator knows the second one, so it is not derived.
 
 **Why minio-go and not the AWS SDK.** Since `aws-sdk-go-v2/service/s3` v1.73.0 every
 `PutObject` carries a CRC32 checksum by default, which
-[broke R2, GCS interop and older MinIO](https://github.com/aws/aws-sdk-go-v2/discussions/2960) —
+[broke R2, GCS interop and older S3-compatible servers](https://github.com/aws/aws-sdk-go-v2/discussions/2960) —
 the three stores this targets — while being correct for the one it is least likely to be
 pointed at. minio-go speaks the conservative subset all of them agree on.
 

@@ -12,12 +12,12 @@ import (
 )
 
 // S3 is Storage against any S3-compatible object store: Cloudflare R2, Google
-// Cloud Storage in interoperability mode, or MinIO.
+// Cloud Storage in interoperability mode, or a self-hosted server such as RustFS.
 //
 // The client is minio-go rather than the AWS SDK, and the reason is which
 // backends this project actually targets. Since aws-sdk-go-v2's service/s3
 // v1.73.0, every PutObject carries a CRC32 checksum by default, and that broke
-// R2, GCS interop and older MinIO — the three stores here — while being correct
+// R2, GCS interop and older S3-compatible servers — the stores here — while being correct
 // for the one store this project is least likely to be pointed at. minio-go
 // speaks the conservative subset all of them agree on, which is exactly the
 // requirement.
@@ -26,7 +26,7 @@ type S3 struct {
 	bucket string
 
 	// publicBase is the hostname images are actually served from — R2's
-	// pub-*.r2.dev, a custom domain, or MinIO's own address in development. It is
+	// pub-*.r2.dev, a custom domain, or the object server's own address in development. It is
 	// configuration rather than something derived from the endpoint, because the
 	// address a bucket is *written* through and the address it is *read* from are
 	// routinely different, and only the operator knows the second one.
@@ -43,7 +43,7 @@ type S3Config struct {
 	AccessKey string
 	SecretKey string
 
-	// Region is "auto" for R2. GCS and MinIO ignore it; AWS would not.
+	// Region is "auto" for R2. GCS and RustFS ignore it; AWS would not.
 	Region string
 	UseTLS bool
 
@@ -59,7 +59,7 @@ type S3Config struct {
 	// presigned URL's signature covers the Host header, so a URL signed for the
 	// address the server connects through cannot be rewritten to the address the
 	// browser uses; it has to be *signed* for that one from the start. In compose
-	// the server reaches MinIO at minio:9000 and a browser reaches it at
+	// the server reaches RustFS at rustfs:9000 and a browser reaches it at
 	// localhost:9000, and without this the redirect would point at a hostname only
 	// the container can resolve.
 	PublicEndpoint string
@@ -116,7 +116,7 @@ func NewS3(cfg S3Config) (*S3, error) {
 func newMinioClient(cfg S3Config) (*minio.Client, error) {
 	region := cfg.Region
 	if region == "" {
-		// "auto" is what R2 wants and what GCS and MinIO ignore. AWS would not,
+		// "auto" is what R2 wants and what GCS and RustFS ignore. AWS would not,
 		// which is the one backend this project is least likely to be pointed at.
 		region = "auto"
 	}

@@ -74,8 +74,8 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `BLOB_BUCKET` | no² | — | Bucket name |
 | `BLOB_ACCESS_KEY_ID` / `BLOB_SECRET_ACCESS_KEY` | no² | — | Credentials |
 | `BLOB_PUBLIC_BASE_URL` | no² | — | Where images are **read** from — not where they are written |
-| `BLOB_REGION` | no | `auto` | What R2 wants; GCS and MinIO ignore it |
-| `BLOB_USE_TLS` | no | `true` | `false` only for a MinIO on the same machine |
+| `BLOB_REGION` | no | `auto` | What R2 wants; GCS and RustFS ignore it |
+| `BLOB_USE_TLS` | no | `true` | `false` only for an object server such as RustFS on the same machine |
 | `DOWNLOAD_DIR` | no⁴ | — | Store purchased files in this directory — **never** served publicly |
 | `DOWNLOAD_ENDPOINT` | no⁴ | — | Private bucket host[:port], no scheme |
 | `DOWNLOAD_BUCKET` | no⁴ | — | Bucket name; must not be `BLOB_BUCKET` |

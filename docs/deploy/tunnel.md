@@ -165,7 +165,7 @@ sudo docker compose exec postgres psql -U gostore -c "ALTER USER gostore PASSWOR
 A new Graph client secret — they expire, two years at most — is an ordinary change:
 create it in Entra, put it in `.env`, `up -d`.
 
-**Older MinIO installations.** Follow the [storage migration notes](README.md#upgrading-from-local-production-storage)
+**Older installations with their own object store.** Follow the [storage migration notes](README.md#upgrading-from-local-production-storage)
 before changing Compose files. Existing objects must be copied by key; the new
 configuration does not move them automatically.
 

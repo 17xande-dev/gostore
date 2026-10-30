@@ -12,7 +12,7 @@ import (
 )
 
 // FakeDownloads keeps purchased files in memory, so the download path can be
-// exercised end to end without MinIO running.
+// exercised end to end without an object store running.
 //
 // It can act as either kind of backend, which is the reason it exists rather than
 // the tests using DiskDownloads with a t.TempDir(). The handler has two endings —
