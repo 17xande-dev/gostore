@@ -1,6 +1,6 @@
 # Build a static binary, then ship it alone. Templates and migrations are
 # go:embed'ed, so the runtime image has no assets and needs no shell.
-FROM golang:1.27-alpine AS build
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
