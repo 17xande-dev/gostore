@@ -9,6 +9,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/17xande-dev/password"
 )
 
 func TestStartCartCleanup_SweepsOnBootAndStopsWithTheContext(t *testing.T) {
@@ -114,10 +115,10 @@ func TestStartSessionCleanup_SweepsExpiredSessionsOnBoot(t *testing.T) {
 }
 
 // mustHash is argon2id at its cheapest; this test is about the sweep.
-func mustHash(t *testing.T, password string) string {
+func mustHash(t *testing.T, pw string) string {
 	t.Helper()
-	h, err := auth.HashPassword(password,
-		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
+	defer password.SetParamsForTesting(password.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})()
+	h, err := auth.HashPassword(t.Context(), pw)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}

@@ -161,7 +161,7 @@ question is the depth of the problem, not the size of the dependency.
 | [`jackc/pgx/v5`](https://github.com/jackc/pgx) | Postgres driver and pool. No cgo, so the binary stays static |
 | [`pressly/goose/v3`](https://github.com/pressly/goose) | Migrations: advisory locking, `NO TRANSACTION` support, and a CLI for the day one needs hand-holding |
 | [`justinas/nosurf`](https://github.com/justinas/nosurf) | CSRF tokens and origin checks |
-| [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
+| [`17xande-dev/password`](https://github.com/17xande-dev/password) | Argon2id hashing with a process-wide concurrency cap; older bcrypt hashes still verify. Password policy stays in gostore. |
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`17xande-dev/mailer`](https://github.com/17xande-dev/mailer) | Sending email, behind one `Sender` interface — the SMTP transport, the XOAUTH2 token dance for Exchange, and the fake the handler tests inject. Shared with another application, which is why it is a module rather than an `internal/` package. It pulls in [`wneessen/go-mail`](https://github.com/wneessen/go-mail) for MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
 | [`aws/aws-sdk-go-v2`](https://github.com/aws/aws-sdk-go-v2) (`service/s3`, `feature/s3/manager`, `credentials`) | Object storage over the S3 API — R2, GCS interop, RustFS and other S3-compatible servers. Configured with checksums "when required"; see [the S3 client](catalog.md) |

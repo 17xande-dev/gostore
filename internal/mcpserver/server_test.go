@@ -19,6 +19,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
+	"github.com/17xande-dev/password"
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +34,11 @@ type fixture struct {
 	orders  *orders.Store
 	carts   *cart.Store
 	images  *blob.Fake
+}
+
+func TestMain(m *testing.M) {
+	defer password.SetParamsForTesting(password.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})()
+	m.Run()
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -82,8 +88,7 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 // account makes an administrator and a token for it.
 func (f *fixture) account(t *testing.T, email string, role auth.Role) (auth.User, string) {
 	t.Helper()
-	hash, err := auth.HashPassword("correct horse battery",
-		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
+	hash, err := auth.HashPassword(t.Context(), "correct horse battery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,8 +205,7 @@ func TestEndpoint_ARevokedTokenStopsOnItsNextCall(t *testing.T) {
 
 func mustHash(t *testing.T) string {
 	t.Helper()
-	h, err := auth.HashPassword("another password entirely",
-		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
+	h, err := auth.HashPassword(t.Context(), "another password entirely")
 	if err != nil {
 		t.Fatal(err)
 	}

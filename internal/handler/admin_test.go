@@ -26,6 +26,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/password"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -37,16 +38,15 @@ const (
 	testPassword = "correct horse battery staple"
 )
 
-// cheapHash is argon2id at its cheapest: these tests assert on authentication
-// behaviour, not on how expensive the hash is, and DefaultParams would add 64 MiB
-// and a tenth of a second to every account created here.
-//
-// The claim and change-password handlers hash at auth.DefaultParams, because they
-// are the real thing — this is only for accounts a test creates directly.
-func cheapHash(t *testing.T, password string) string {
+func TestMain(m *testing.M) {
+	// Test handler behaviour without paying the production KDF cost for each request.
+	defer password.SetParamsForTesting(password.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})()
+	m.Run()
+}
+
+func cheapHash(t *testing.T, pw string) string {
 	t.Helper()
-	h, err := auth.HashPassword(password,
-		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
+	h, err := auth.HashPassword(t.Context(), pw)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -277,6 +277,54 @@ func signInAs(t *testing.T, srv *httptest.Server, email, password string) {
 	}
 	if len(res.Cookies()) == 0 {
 		t.Fatal("sign in set no cookie")
+	}
+}
+
+func TestAdmin_LoginAcceptsPreMigrationHash(t *testing.T) {
+	for _, tc := range []struct {
+		name, hash, pw string
+	}{
+		// Generated with this app's hashpw command before switching modules.
+		{"argon2id", "$argon2id$v=19$m=65536,t=3,p=4$MF2OwXptF7kLvgkjUDS3Aw$oaQzkC9ObPlmpcrl/MIA1bysVLv6gIlZl9y0rxd9yGI", testPassword},
+		// The module's compatibility fixture checked against the old bcrypt reader.
+		{"bcrypt", "$2a$10$enFzWumMIWCNHULrn1l39eSZI7xFWKYtW4B/wbjObDBEUgNrNdYC6", "fixture password — correct horse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newUnclaimedStore(t)
+			u, err := s.users.Create(t.Context(), testEmail, "", tc.hash, auth.RoleOwner, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signInAs(t, s.srv, testEmail, tc.pw)
+			if res, _ := get(t, s.srv, "/admin/products"); res.StatusCode != http.StatusOK {
+				t.Fatalf("protected page after legacy sign-in = %d, want 200", res.StatusCode)
+			}
+			var stored string
+			if err := s.pool.QueryRow(t.Context(), `SELECT password_hash FROM admin_users WHERE id = $1`, u.ID).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored != tc.hash {
+				t.Error("sign-in unexpectedly changed the stored hash")
+			}
+		})
+	}
+}
+
+func TestAdmin_MalformedStoredHashIsARateLimitedLoginFailure(t *testing.T) {
+	s := newStore(t, func(c *config.Config) { c.RateLimits.LoginPerMinute = 2 })
+	// Bypass write-time validation to simulate corrupt data already on disk.
+	if _, err := s.pool.Exec(t.Context(), `UPDATE admin_users SET password_hash = 'broken' WHERE id = $1`, s.owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"email": {testEmail}, "password": {testPassword}}
+	for range 2 {
+		res, body := post(t, s.srv, "/admin/login", form)
+		if res.StatusCode != http.StatusUnauthorized || !strings.Contains(body, "That email and password do not match an account.") {
+			t.Fatalf("login with corrupt hash = %d %s, want generic 401", res.StatusCode, body)
+		}
+	}
+	if res, _ := post(t, s.srv, "/admin/login", form); res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("third attempt = %d, want 429", res.StatusCode)
 	}
 }
 
