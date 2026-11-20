@@ -22,6 +22,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/validate"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/ratelimit/clientip"
 	"github.com/justinas/nosurf"
 )
 
@@ -81,7 +82,7 @@ type limiters struct {
 // perMinute builds a limiter allowing n requests a minute, or a pass-through when
 // n is zero. Burst is a third of the allowance, minimum two, so a shopper who
 // double-clicks is never the one who trips it.
-func perMinute(name string, n int, source middleware.ClientIPSource, log *slog.Logger, exceeded http.Handler) middleware.Middleware {
+func perMinute(name string, n int, source clientip.Source, log *slog.Logger, exceeded http.Handler) middleware.Middleware {
 	if n <= 0 {
 		log.Warn("rate limiting is disabled for a surface that has one available", "limiter", name)
 		return func(next http.Handler) http.Handler { return next }
@@ -92,6 +93,16 @@ func perMinute(name string, n int, source middleware.ClientIPSource, log *slog.L
 		Burst:    max(2, n/3),
 		Exceeded: exceeded,
 	}, source, log)
+}
+
+// clientIP is the address a request came from under CLIENT_IP_SOURCE, as the
+// string the payment gateways' source-IP check and the download audit take. It is
+// empty when neither a trusted header nor the connection yields an address.
+func (h *Handler) clientIP(r *http.Request) string {
+	if addr := h.cfg.ClientIPSource.Addr(r); addr.IsValid() {
+		return addr.String()
+	}
+	return ""
 }
 
 // rateLimited is the page a throttled person sees. The payment callback does not

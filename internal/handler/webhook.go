@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/payment"
 )
@@ -90,7 +89,7 @@ func (h *Handler) paymentCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceIP := middleware.ClientIP(r, h.cfg.ClientIPSource)
+	sourceIP := h.clientIP(r)
 	cb, err := gateway.ParseCallback(r.Context(), payment.Notification{
 		Body: body, Header: r.Header, SourceIP: sourceIP,
 	})

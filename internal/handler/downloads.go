@@ -10,7 +10,6 @@ import (
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/middleware"
 )
 
 // RegisterDownloads mounts the buyer's side of a digital product.
@@ -94,7 +93,7 @@ func (h *Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	access, err := h.grants.Authorize(r.Context(), e,
-		fileID, middleware.ClientIP(r, h.cfg.ClientIPSource), r.UserAgent())
+		fileID, h.clientIP(r), r.UserAgent())
 	if err != nil {
 		h.downloadError(w, r, err)
 		return
@@ -220,7 +219,7 @@ func (h *Handler) checkoutDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	access, err := h.grants.Authorize(r.Context(), e,
-		fileID, middleware.ClientIP(r, h.cfg.ClientIPSource), r.UserAgent())
+		fileID, h.clientIP(r), r.UserAgent())
 	if err != nil {
 		h.downloadError(w, r, err)
 		return

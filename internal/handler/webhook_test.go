@@ -12,10 +12,10 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/config"
-	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/payment"
 	"github.com/17xande-dev/payment/payfast"
+	"github.com/17xande-dev/ratelimit/clientip"
 )
 
 // placeOrder runs a real checkout and returns the pending order it created, so the
@@ -124,16 +124,21 @@ func TestPayFastCallback_UsesBareClientIPFromTrustedHeader(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, header, value string
-		source              middleware.ClientIPSource
+		source              string
 		want                orders.Status
 	}{
-		{"forwarded", "X-Forwarded-For", "192.0.2.44:4711, 10.0.0.1", middleware.ClientIPForwarded, orders.StatusPaid},
-		{"cloudflare", "CF-Connecting-IP", "192.0.2.44:4711", middleware.ClientIPCloudflare, orders.StatusPaid},
-		{"outside allowlist", "X-Forwarded-For", "198.51.100.7:4711", middleware.ClientIPForwarded, orders.StatusPending},
+		{"forwarded", "X-Forwarded-For", "192.0.2.44:4711, 10.0.0.1", "forwarded", orders.StatusPaid},
+		{"cloudflare", "CF-Connecting-IP", "192.0.2.44:4711", "cloudflare", orders.StatusPaid},
+		{"remote ignores a spoofed allowed address", "X-Forwarded-For", "192.0.2.44", "remote", orders.StatusPending},
+		{"outside allowlist", "X-Forwarded-For", "198.51.100.7:4711", "forwarded", orders.StatusPending},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStoreWith(t, []payment.Gateway{gateway}, func(cfg *config.Config) {
-				cfg.ClientIPSource = tc.source
+				src, err := clientip.ParseSource(tc.source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.ClientIPSource = src
 			})
 			variants := stockCart(t, s.catalog)
 			addToCart(t, s.srv, variants["S"].ID, 1)
