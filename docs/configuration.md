@@ -40,7 +40,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `PAYFAST_PASSPHRASE` | no | — | The account's salt passphrase; must match the dashboard exactly |
 | `PAYFAST_SANDBOX` | no | `true` | `false` takes real money. Set it explicitly when deploying — see [Going live](payments.md#going-live) |
 | `PAYFAST_NOTIFY_URL` | no | derived | Override when PayFast cannot reach `BASE_URL` (a tunnel) |
-| `PAYFAST_ALLOWED_CIDRS` | no | published ranges | Override the source ranges; `any` disables the check |
+| `PAYFAST_ALLOWED_CIDRS` | no | PayFast's default static ranges | Comma-separated CIDRs that replace the static ranges. Addresses resolved from PayFast's notification hostnames are still accepted. `any` disables both source-IP checks (sandbox testing only) |
 | `SNAPSCAN_SNAP_CODE` | one gateway² | — | From SnapScan merchant support. Its presence switches SnapScan on. **No sandbox: this takes real money** |
 | `SNAPSCAN_API_KEY` | with SnapScan | — | Reads payments back from SnapScan's API, which is how a notification is confirmed |
 | `SNAPSCAN_WEBHOOK_AUTH_KEY` | with SnapScan | — | The shared secret a notification's HMAC is computed with |

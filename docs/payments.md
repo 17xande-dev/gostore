@@ -118,7 +118,7 @@ merchant id, because that combination signs every payment with a key printed in 
 documentation.
 
 One more, if you deploy behind any proxy or managed platform: **`CLIENT_IP_SOURCE` must
-describe it**, or the source-IP check below compares PayFast's ranges against your load
+describe it**, or the source-IP check below compares PayFast's source addresses against your load
 balancer's address and rejects every genuine notification — money taken, nothing recorded.
 Use `forwarded` behind a proxy that *replaces* `X-Forwarded-For`, and `cloudflare` where
 Cloudflare is the only way in. It must stay `remote` when nothing in front of the server
@@ -136,7 +136,11 @@ form-encoded POST to `notify_url` — is the only statement about a payment this
 and it passes four independent checks before anything happens:
 
 1. **The signature recomputes** over the fields exactly as received, in the order received.
-2. **The source IP** is one of PayFast's published ranges.
+2. **The source IP** matches a static range or an address resolved from PayFast's
+   notification hostnames for the selected mode. Setting `PAYFAST_ALLOWED_CIDRS`
+   replaces only the static ranges. Using static ranges alone requires passing an
+   explicitly empty `payfast.Config.SourceHosts` in Go; there is no environment
+   variable for that.
 3. **PayFast confirms it**, when the exact bytes received are posted back to
    `/eng/query/validate`.
 4. **The merchant id** is ours.
