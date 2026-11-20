@@ -33,21 +33,23 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 	if err != nil {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
-	gateway := payment.NewFake()
+	gateways := registryOf(t, payment.NewFake())
 	h := New(Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:   downloads.NewStore(pool, store),
-		Gateways: registryOf(t, gateway), Mail: mailer.NewFake(), Images: images,
+		Gateways: gateways, Mail: mailer.NewFake(), Images: images,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 
 	mux := http.NewServeMux()
 	h.RegisterStorefront(mux)
 
+	gatewayForms, gatewayImages := gateways.CSP()
 	srv := httptest.NewServer(middleware.Chain(mux, middleware.SecurityHeaders(middleware.Policy{
 		FrameAncestors: cfg.EmbedOrigins,
-		FormActions:    []string{gateway.CSP().FormAction},
+		FormActions:    gatewayForms,
+		ImgSources:     gatewayImages,
 	})))
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)

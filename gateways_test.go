@@ -2,11 +2,15 @@ package main
 
 import (
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/gostore/internal/handler"
+	"github.com/17xande-dev/gostore/internal/mcpserver"
 )
 
 // gatewayConfig is the smallest config newGateways reads, with both providers
@@ -130,5 +134,62 @@ func TestNewGateways_DeclareTheirCSPOrigins(t *testing.T) {
 	}
 	if _, images := payfastOnly.CSP(); len(images) != 0 {
 		t.Errorf("img-src = %q for a store with no QR gateway", images)
+	}
+}
+
+func TestCheckout_FormActionCSP(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	const process = "https://www.payfast.co.za"
+	const hosted = "https://payment.payfast.io"
+	const sandbox = "https://sandbox.payfast.co.za"
+
+	for _, tc := range []struct {
+		name     string
+		sandbox  bool
+		snapscan bool
+		want     []string
+	}{
+		{name: "live PayFast", want: []string{"'self'", process, hosted}},
+		{name: "live PayFast with SnapScan", snapscan: true, want: []string{"'self'", process, hosted}},
+		{name: "sandbox PayFast", sandbox: true, want: []string{"'self'", sandbox}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := gatewayConfig()
+			cfg.PayFast.Sandbox = tc.sandbox
+			if !tc.snapscan {
+				cfg.SnapScan = config.SnapScan{}
+			}
+
+			gateways, err := newGateways(cfg, log)
+			if err != nil {
+				t.Fatalf("newGateways: %v", err)
+			}
+			h := handler.New(handler.Deps{Config: cfg, Log: log, Gateways: gateways})
+			mcp := mcpserver.New(mcpserver.Deps{Log: log, BaseURL: cfg.BaseURL})
+			router := routes(cfg, h, mcp, gateways, nil, nil, log)
+
+			// Exercise the production routing and CSP wiring without a database:
+			// checkout redirects an anonymous shopper with no cart cookie.
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, cfg.BaseURL+"/cart/checkout", nil))
+			if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/cart" {
+				t.Fatalf("GET /cart/checkout = %d, Location %q; want 303 to /cart", rec.Code, rec.Header().Get("Location"))
+			}
+
+			// Chromium enforces form-action on the redirect, not just the POST.
+			// Check exact source tokens so a look-alike or a wildcard cannot pass.
+			var formActions [][]string
+			for _, header := range rec.Header().Values("Content-Security-Policy") {
+				for directive := range strings.SplitSeq(header, ";") {
+					fields := strings.Fields(directive)
+					if len(fields) > 0 && fields[0] == "form-action" {
+						formActions = append(formActions, fields[1:])
+					}
+				}
+			}
+			if len(formActions) != 1 || !slices.Equal(formActions[0], tc.want) {
+				t.Errorf("form-action = %q, want exactly %q", formActions, tc.want)
+			}
+		})
 	}
 }
