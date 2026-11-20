@@ -2,12 +2,15 @@ package handler
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/ratelimit/clientip"
 )
 
 // The hardening phase's assertions about the running server, as opposed to the
@@ -178,5 +181,121 @@ func TestHardening_PaymentCallbackIsOutsideCSRFAndSetsNoCookie(t *testing.T) {
 	}
 	if !s.reload(t, order.ID).Paid() {
 		t.Error("a notification with no CSRF token was not applied")
+	}
+}
+
+// limiterProbe sends one request to a rate-limited surface carrying the given
+// CF-Connecting-IP and returns the status. The request is refused by the limiter
+// before the handler runs (429) or reaches the handler (anything else), so the
+// handler's own answer is irrelevant.
+type limiterProbe struct {
+	name string
+	send func(t *testing.T, s *shop, cf string) int
+}
+
+func limiterProbes() []limiterProbe {
+	viaServer := func(method, path string, form url.Values) func(*testing.T, *shop, string) int {
+		return func(t *testing.T, s *shop, cf string) int {
+			t.Helper()
+			req := newRequest(t, s.srv, method, path, form)
+			req.Header.Set("CF-Connecting-IP", cf)
+			res, _ := do(t, s.srv, req)
+			return res.StatusCode
+		}
+	}
+	return []limiterProbe{
+		{"admin login", viaServer(http.MethodPost, "/admin/login", url.Values{"x": {"y"}})},
+		{"checkout", viaServer(http.MethodPost, "/cart/checkout", url.Values{"x": {"y"}})},
+		{"payment status", viaServer(http.MethodGet, "/cart/checkout/status?payment=x", nil)},
+		{"download", viaServer(http.MethodGet, "/downloads/x/1", nil)},
+		{"payment callback", func(t *testing.T, s *shop, cf string) int {
+			t.Helper()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+				s.srv.URL+"/payments/fake/callback", strings.NewReader("x=y"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("CF-Connecting-IP", cf)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			return res.StatusCode
+		}},
+		// The MCP endpoint is not mounted by the test server (main wires it), so
+		// mount it the way main does and drive it directly; the peer is fixed.
+		{"mcp", func(t *testing.T, s *shop, cf string) int {
+			t.Helper()
+			ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+			mux := http.NewServeMux()
+			s.handler.RegisterMCP(mux, ok, "/mcp-upload/", ok)
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req.RemoteAddr = "203.0.113.7:4000"
+			req.Header.Set("CF-Connecting-IP", cf)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			return w.Code
+		}},
+	}
+}
+
+func limitedStore(t *testing.T, source string) *shop {
+	t.Helper()
+	src, err := clientip.ParseSource(source) // what config.Load does with CLIENT_IP_SOURCE
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two a minute on every surface: the burst is the floor of 2.
+	return newStore(t, func(c *config.Config) {
+		c.ClientIPSource = src
+		c.RateLimits = config.RateLimits{
+			LoginPerMinute: 2, CheckoutPerMinute: 2, CallbackPerMinute: 2,
+			StatusPerMinute: 2, DownloadPerMinute: 2, MCPPerMinute: 2,
+		}
+	})
+}
+
+func TestHardening_LimitersKeyOnTheConfiguredSource(t *testing.T) {
+	// One peer throughout. With CLIENT_IP_SOURCE=cloudflare the bucket belongs to
+	// the CF-Connecting-IP value, so a second value is a second client and a
+	// repeated one is the same client.
+	s := limitedStore(t, "cloudflare")
+	for _, p := range limiterProbes() {
+		t.Run(p.name, func(t *testing.T) {
+			const a, b = "198.51.100.1", "198.51.100.2"
+			for i := range 2 {
+				if got := p.send(t, s, a); got == http.StatusTooManyRequests {
+					t.Fatalf("request %d from %s was limited inside the burst", i, a)
+				}
+			}
+			if got := p.send(t, s, a); got != http.StatusTooManyRequests {
+				t.Fatalf("third request from %s = %d, want 429", a, got)
+			}
+			if got := p.send(t, s, b); got == http.StatusTooManyRequests {
+				t.Errorf("a different CF-Connecting-IP (%s) shared %s's bucket", b, a)
+			}
+			if got := p.send(t, s, a); got != http.StatusTooManyRequests {
+				t.Errorf("the same CF-Connecting-IP (%s) escaped its bucket: %d", a, got)
+			}
+		})
+	}
+}
+
+func TestHardening_SpoofedHeaderDoesNotEscapeALimiterUnderRemote(t *testing.T) {
+	// With CLIENT_IP_SOURCE=remote the header is attacker input: a fresh claim on
+	// every request must still land in the one bucket of the real peer.
+	s := limitedStore(t, "remote")
+	for _, p := range limiterProbes() {
+		t.Run(p.name, func(t *testing.T) {
+			var last int
+			for i := range 3 {
+				last = p.send(t, s, "198.51.100."+strconv.Itoa(i+1))
+			}
+			if last != http.StatusTooManyRequests {
+				t.Errorf("a spoofed CF-Connecting-IP per request got a fresh bucket each time: third = %d", last)
+			}
+		})
 	}
 }

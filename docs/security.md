@@ -35,10 +35,11 @@ with a `403`, not just absolute links.
 
 ### Rate limits
 
-Per client IP, on these surfaces, with a token bucket from
-[`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) and the keying and
-eviction written here — the algorithm is the part with the clock edge cases already found
-in it, and a bucket per client with bounded memory is where the decisions are.
+Per client IP, on these surfaces, using the shared
+[`17xande-dev/ratelimit`](https://github.com/17xande-dev/ratelimit) module: bounded keyed
+token buckets over [`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate),
+IPv6 grouped by /64, and a full table refusing newcomers rather than admitting them. Its
+`clientip` package resolves the address itself from `CLIENT_IP_SOURCE`.
 
 | Route | Default | Why |
 |---|---|---|

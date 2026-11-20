@@ -20,6 +20,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/ratelimit/clientip"
 )
 
 // newSession gives the server's client a fresh cookie jar, which is what makes a
@@ -51,9 +52,9 @@ type digitalShop struct {
 	notes   catalog.File // in both variants
 }
 
-func newDigitalShop(t *testing.T) *digitalShop {
+func newDigitalShop(t *testing.T, edit ...func(*config.Config)) *digitalShop {
 	t.Helper()
-	s := newStore(t)
+	s := newStore(t, edit...)
 	ctx := t.Context()
 
 	p, err := s.catalog.Create(ctx, catalog.Product{
@@ -751,4 +752,91 @@ func uploadFile(t *testing.T, s *shop, productID, filename string, content []byt
 	req.Header.Set("Origin", s.srv.URL)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	return do(t, s.srv, req)
+}
+
+// auditedIPs is every ip recorded in download_events, oldest first.
+func auditedIPs(t *testing.T, d *digitalShop) []string {
+	t.Helper()
+	rows, err := d.pool.Query(t.Context(), `SELECT ip FROM download_events ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query download_events: %v", err)
+	}
+	defer rows.Close()
+	var ips []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			t.Fatal(err)
+		}
+		ips = append(ips, ip)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return ips
+}
+
+func TestDownloads_AuditStoresTheResolvedClientIP(t *testing.T) {
+	src := func(v string) func(*config.Config) {
+		s, err := clientip.ParseSource(v) // what config.Load does with CLIENT_IP_SOURCE
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func(c *config.Config) { c.ClientIPSource = s }
+	}
+	mp3 := func(d *digitalShop) string { return strconv.FormatInt(d.mp3.ID, 10) }
+	withHeader := func(t *testing.T, d *digitalShop, path, cf string) {
+		t.Helper()
+		req := newRequest(t, d.srv, http.MethodGet, path, nil)
+		req.Header.Set("CF-Connecting-IP", cf)
+		if res, _ := do(t, d.srv, req); res.StatusCode != http.StatusFound {
+			t.Fatalf("GET %s = %d, want 302", path, res.StatusCode)
+		}
+	}
+
+	t.Run("cloudflare: the header value, on both download routes", func(t *testing.T) {
+		d := newDigitalShop(t, src("cloudflare"))
+		token := d.buy(t, d.audio.ID)
+		withHeader(t, d, "/downloads/"+token+"/"+mp3(d), "192.0.2.77")
+
+		e, err := d.grants.Lookup(t.Context(), token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The cart-cookie route a buyer takes straight after paying.
+		withHeader(t, d, "/cart/checkout/downloads/"+e.ID+"/"+mp3(d)+"?ref="+e.OrderID, "192.0.2.78")
+
+		if got := auditedIPs(t, d); !slices.Equal(got, []string{"192.0.2.77", "192.0.2.78"}) {
+			t.Errorf("download_events.ip = %q, want the CF-Connecting-IP of each click", got)
+		}
+	})
+
+	t.Run("remote: a spoofed header is not stored", func(t *testing.T) {
+		d := newDigitalShop(t, src("remote"))
+		token := d.buy(t, d.audio.ID)
+		withHeader(t, d, "/downloads/"+token+"/"+mp3(d), "192.0.2.99")
+
+		got := auditedIPs(t, d)
+		if len(got) != 1 || got[0] != "127.0.0.1" {
+			t.Errorf("download_events.ip = %q, want the real peer 127.0.0.1", got)
+		}
+	})
+
+	t.Run("an unresolvable peer is stored as the empty string", func(t *testing.T) {
+		d := newDigitalShop(t, src("remote"))
+		token := d.buy(t, d.audio.ID)
+
+		mux := http.NewServeMux()
+		d.handler.RegisterDownloads(mux)
+		req := httptest.NewRequest(http.MethodGet, "/downloads/"+token+"/"+mp3(d), nil)
+		req.RemoteAddr = "not-an-address"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusFound {
+			t.Fatalf("download = %d, want 302", w.Code)
+		}
+		if got := auditedIPs(t, d); !slices.Equal(got, []string{""}) {
+			t.Errorf("download_events.ip = %q, want one empty string", got)
+		}
+	})
 }
