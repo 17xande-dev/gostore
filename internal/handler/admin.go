@@ -19,9 +19,9 @@ import (
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
-	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/payment"
 	"github.com/justinas/nosurf"
 )
 

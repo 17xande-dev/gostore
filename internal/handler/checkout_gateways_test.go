@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // qrGateway is a second configured provider whose hand-over is a link and a QR
@@ -137,6 +137,7 @@ func TestCheckout_QRHandoverShowsALinkAndACode(t *testing.T) {
 		"Open Fake QR wallet to pay",                    // the link a phone follows
 		`https://gateway.example/qr/`,                   // and it goes to the gateway
 		`<img src="https://gateway.example/qr/fake.svg`, // the code a desktop shows
+		`hx-get="/cart/checkout/status?ref=` + order.ID + `"`,
 		order.Reference(),
 	} {
 		if !strings.Contains(body, want) {
@@ -192,7 +193,7 @@ func TestCheckoutStatus_ReportsTheOrderAndRedirectsWhenPaid(t *testing.T) {
 	}
 	callback(t, s.srv, "qrfake", payment.FakeCallbackBody(order.ID, "ref-1", "paid", order.TotalCents))
 
-	req, err := http.NewRequest(http.MethodGet, s.srv.URL+"/cart/checkout/status", nil)
+	req, err := http.NewRequest(http.MethodGet, s.srv.URL+"/cart/checkout/status?ref="+order.ID, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestCheckoutStatus_ReportsTheOrderAndRedirectsWhenPaid(t *testing.T) {
 	}
 	defer res.Body.Close()
 
-	if got := res.Header.Get("HX-Redirect"); got != "/cart/checkout/success?order="+order.ID {
+	if got := res.Header.Get("HX-Redirect"); got != "/cart/checkout/success?ref="+order.ID {
 		t.Errorf("HX-Redirect = %q, want the success page once the money is in", got)
 	}
 }

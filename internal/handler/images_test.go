@@ -17,8 +17,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/payment"
 )
 
 // diskShop is a store whose images are files this server serves — the IMAGE_DIR

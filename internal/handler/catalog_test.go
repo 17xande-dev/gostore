@@ -16,8 +16,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/payment"
 )
 
 // newStorefront mirrors how main.go mounts the public routes: security headers

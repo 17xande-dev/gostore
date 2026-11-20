@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/config"
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // The hardening phase's assertions about the running server, as opposed to the

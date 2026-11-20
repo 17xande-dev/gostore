@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // placeOrder runs a real checkout and returns the pending order it created, so the

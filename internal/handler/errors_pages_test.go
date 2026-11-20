@@ -17,8 +17,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/payment"
 )
 
 // The invariant these tests defend: an error response either fills the target it

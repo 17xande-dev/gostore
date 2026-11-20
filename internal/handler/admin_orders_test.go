@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // paidOrder runs a whole checkout and pays it, so the admin tests read an order

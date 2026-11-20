@@ -67,6 +67,35 @@ func TestCheckout_EmptyCartGoesBackToTheCart(t *testing.T) {
 	}
 }
 
+func TestCheckoutOutcome_SelectsOrderFromReturnURL(t *testing.T) {
+	s := newCheckoutShop(t)
+	first := placeOrder(t, s, "S", 1)
+	latest := placeOrder(t, s, "book", 1)
+	if first.Reference() == latest.Reference() {
+		t.Fatal("fixture needs distinct order references")
+	}
+
+	// Another tab can place a newer order while the shopper is at the gateway.
+	// Both generations of return URLs must still select the original order.
+	for _, outcome := range []string{"success", "cancel"} {
+		for _, tc := range []struct {
+			name, query, want, other string
+		}{
+			{"ref", "?ref=" + first.ID, first.Reference(), latest.Reference()},
+			{"legacy order", "?order=" + first.ID, first.Reference(), latest.Reference()},
+			{"ref takes precedence", "?ref=" + first.ID + "&order=" + latest.ID, first.Reference(), latest.Reference()},
+			{"neither", "", latest.Reference(), first.Reference()},
+		} {
+			t.Run(outcome+"/"+tc.name, func(t *testing.T) {
+				res, body := get(t, s.srv, "/cart/checkout/"+outcome+tc.query)
+				if res.StatusCode != http.StatusOK || !strings.Contains(body, tc.want) || strings.Contains(body, tc.other) {
+					t.Errorf("status %d, want 200 and order %s only: %s", res.StatusCode, tc.want, body)
+				}
+			})
+		}
+	}
+}
+
 func TestCheckout_ShowsTheFormAndWhatIsBeingBought(t *testing.T) {
 	s := newCheckoutShop(t)
 	addToCart(t, s.srv, s.variants["S"].ID, 2)
@@ -127,7 +156,7 @@ func TestCheckout_CreatesPendingOrderAndHandsOverToTheGateway(t *testing.T) {
 		t.Fatalf("%d gateway requests, want 1", len(requests))
 	}
 	req := requests[0]
-	if req.OrderID != order.ID || req.AmountCents != order.TotalCents {
+	if req.Reference != order.ID || req.AmountCents != order.TotalCents {
 		t.Errorf("gateway request = %+v, want order %s for %d", req, order.ID, order.TotalCents)
 	}
 	if req.Currency != "ZAR" || req.NameFirst != "Jane" || req.NameLast != "Doe" {
@@ -138,7 +167,7 @@ func TestCheckout_CreatesPendingOrderAndHandsOverToTheGateway(t *testing.T) {
 	for _, want := range []string{
 		`id="gateway-redirect"`,
 		`action="` + s.gateway.CSP().FormAction,
-		`name="order_id" value="` + order.ID + `"`,
+		`name="reference" value="` + order.ID + `"`,
 		`name="signature"`,
 		"/static/redirect.js", // the CSP forbids an inline script, so this is a file
 		// The label, not the route name: "fake" is what the order column and the

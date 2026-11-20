@@ -1,7 +1,8 @@
 # Payments
 
-Two gateways ship — **PayFast** and **SnapScan** — behind a small `payment.Gateway`
-interface. A store enables either or both, and with both the checkout asks the shopper
+The shared [`github.com/17xande-dev/payment`](https://github.com/17xande-dev/payment) module
+provides **PayFast** and **SnapScan** behind a small `payment.Gateway` interface.
+A store enables either or both, and with both the checkout asks the shopper
 which they would like to use. Adding a third is code and no migration: the order's
 `gateway_*` columns are deliberately gateway-neutral.
 
@@ -18,6 +19,12 @@ The two are not the same shape, and the interface says so rather than pretending
 `Handover` is what carries the difference, and a template switches on it. Everything after
 the hand-over — the callback, the amount check, the replay guard, the stock transaction — is
 identical for both, which is the whole point of the split.
+
+The store sends its order ID as `payment.Request.Reference` and matches verified
+callbacks by `Callback.Reference`. `Callback.Ref` is the gateway's transaction ID.
+Browser return and cancel URLs use `?ref=<order-id>` to select an order, but still
+require the matching cart cookie. They accept `?order=<order-id>` for one release
+to support checkouts started before the upgrade.
 
 ## SnapScan
 
@@ -151,7 +158,8 @@ supply a browser token; each gateway authenticates its own notification.
 ### The PayFast signature, and why it is spelled out in code
 
 Three details account for nearly every PayFast integration failure, and
-[`internal/payment/payfast`](../internal/payment/payfast) says so in its package comment:
+[`github.com/17xande-dev/payment/payfast`](https://pkg.go.dev/github.com/17xande-dev/payment/payfast)
+says so in its package comment:
 
 - **The field order is the order they were submitted in, not alphabetical.** Sorting produces
   a signature PayFast rejects. This is why `payment.Field` is a slice and never a map anywhere

@@ -11,7 +11,7 @@ import (
 
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/outbox"
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 func TestCheckout_ConcurrentSubmissionIsOneOrder(t *testing.T) {
@@ -42,13 +42,13 @@ func TestCheckout_ConcurrentSubmissionIsOneOrder(t *testing.T) {
 		t.Fatalf("orders = %d: %v", len(list), err)
 	}
 	for _, request := range s.gateway.Requests() {
-		if request.OrderID != order.ID {
+		if request.Reference != order.ID {
 			t.Fatal("duplicate submission sent a different order")
 		}
 	}
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "once", "paid", order.TotalCents))
 	res, _ := post(t, s.srv, "/cart/checkout", form)
-	if res.StatusCode != http.StatusSeeOther || !strings.Contains(res.Header.Get("Location"), order.ID) {
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/cart/checkout/success?ref="+order.ID {
 		t.Fatal("replayed paid checkout should show its original receipt")
 	}
 }
@@ -65,12 +65,12 @@ func TestCheckout_LatePaymentPreservesEditedCartAndNamesItsOrder(t *testing.T) {
 	if err != nil || len(basket.Items) != 2 {
 		t.Fatalf("new basket lost: %+v %v", basket, err)
 	}
-	_, body := get(t, s.srv, "/cart/checkout/success?order="+first.ID)
+	_, body := get(t, s.srv, "/cart/checkout/success?ref="+first.ID)
 	if !strings.Contains(body, "Payment confirmed") || !strings.Contains(body, first.Reference()) {
 		t.Fatal("return page followed newer order")
 	}
 	newSession(t, s.srv)
-	_, body = get(t, s.srv, "/cart/checkout/success?order="+first.ID)
+	_, body = get(t, s.srv, "/cart/checkout/success?ref="+first.ID)
 	if strings.Contains(body, first.Reference()) {
 		t.Fatal("order id bypassed cart ownership")
 	}

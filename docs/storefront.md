@@ -211,7 +211,7 @@ The order of events matters more than the routes do:
   form returns the same order. A new form is a new checkout attempt.
 - **`/cart/checkout/success` grants nothing.** A shopper can navigate there without paying, so
   it says the payment is being confirmed rather than that it succeeded. It names the order —
-  `?order=...` selects it and the cart cookie authorises access. New return URLs and
+  `?ref=...` selects it and the cart cookie authorises access. New return URLs and
   status polls carry this id so another tab cannot switch the order being shown.
 
 **Which gateway** is a field on the checkout form, resolved before the order row is written —
@@ -230,7 +230,7 @@ key inside its checkout form, alongside the CSRF field:
 <input type="hidden" name="checkout_key" value="{{.Form.Key}}">
 ```
 
-Custom status polls and success/download links should preserve `?order={{.Order.ID}}`
+Custom status polls and success/download links should use `?ref={{.Order.ID}}`
 so they keep showing the selected checkout when another tab places a newer order.
 
 - **A form post** (PayFast) is a real cross-origin submission, not a redirect, so the

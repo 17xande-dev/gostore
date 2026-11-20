@@ -19,7 +19,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // newSession gives the server's client a fresh cookie jar, which is what makes a
@@ -569,7 +569,7 @@ func TestDownloads_SuccessPageOffersTheFilesWithoutTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	path := "/cart/checkout/downloads/" + e.ID + "/" + strconv.FormatInt(d.mp3.ID, 10)
+	path := "/cart/checkout/downloads/" + e.ID + "/" + strconv.FormatInt(d.mp3.ID, 10) + "?ref=" + e.OrderID
 	if !strings.Contains(body, path) {
 		t.Errorf("the success page does not link %s: %s", path, body)
 	}

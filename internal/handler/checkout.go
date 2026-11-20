@@ -10,8 +10,8 @@ import (
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
+	"github.com/17xande-dev/payment"
 )
 
 // Checkout lives under /cart, not at /checkout as the plan's route list had it.
@@ -218,7 +218,7 @@ func (h *Handler) checkoutSubmit(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) checkoutHandover(w http.ResponseWriter, r *http.Request, order orders.Order) {
 	if order.Paid() {
-		http.Redirect(w, r, "/cart/checkout/success?order="+url.QueryEscape(order.ID), http.StatusSeeOther)
+		http.Redirect(w, r, "/cart/checkout/success?ref="+url.QueryEscape(order.ID), http.StatusSeeOther)
 		return
 	}
 	gateway, err := h.gateways.Lookup(order.Gateway)
@@ -228,7 +228,7 @@ func (h *Handler) checkoutHandover(w http.ResponseWriter, r *http.Request, order
 	}
 	customer := order.Customer
 	handover, err := gateway.Handover(payment.Request{
-		OrderID:     order.ID,
+		Reference:   order.ID,
 		AmountCents: order.TotalCents,
 		Currency:    order.Currency,
 		ItemName:    h.cfg.StoreName + " order " + order.Reference(),
@@ -310,7 +310,7 @@ func (h *Handler) checkoutStatus(w http.ResponseWriter, r *http.Request) {
 	// gets the email, which is the ordinary failure mode here and an acceptable
 	// one.
 	if data.Paid && isHTMX(r) {
-		w.Header().Set("HX-Redirect", "/cart/checkout/success?order="+url.QueryEscape(data.Order.ID))
+		w.Header().Set("HX-Redirect", "/cart/checkout/success?ref="+url.QueryEscape(data.Order.ID))
 	}
 	// htmx swaps the block; a browser asking for this URL directly gets a whole
 	// page, so the route is never a bare fragment in an address bar.
@@ -385,7 +385,13 @@ func (h *Handler) checkoutOrder(r *http.Request) (orders.Order, error) {
 	if token == "" {
 		return orders.Order{}, orders.ErrNotFound
 	}
-	if id := r.URL.Query().Get("order"); id != "" {
+	query := r.URL.Query()
+	id := query.Get("ref")
+	// TODO(remove after 2027-01-31): Payers already at a gateway may return with the old key.
+	if id == "" {
+		id = query.Get("order")
+	}
+	if id != "" {
 		o, err := h.orders.Get(r.Context(), id)
 		if err != nil {
 			return orders.Order{}, err

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/config"
-	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/payment"
 )
 
 // notifying returns a shop whose config sends the owner a copy, since that is off

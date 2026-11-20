@@ -1,7 +1,8 @@
 # gostore
 
 A small, self-hostable online store written in Go: `html/template` fragments for an
-htmx frontend, PostgreSQL for storage, and [PayFast](https://payfast.io) for payments.
+htmx frontend, PostgreSQL for storage, and PayFast and SnapScan through the shared
+[`github.com/17xande-dev/payment`](https://github.com/17xande-dev/payment) module.
 Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
@@ -19,8 +20,7 @@ Stdlib-first, with a deliberately tiny dependency surface.
 
 ## Why
 
-Go has no maintained open-source store, and no PayFast integration at all. This aims to
-be honest and good at one thing: a small catalog of physical goods — books and apparel —
+This aims to be honest and good at one thing: a small catalog of physical goods — books and apparel —
 sold in ZAR, with variants, stock, and a spare admin UI. It is not a general commerce
 platform.
 

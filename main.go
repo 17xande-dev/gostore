@@ -28,11 +28,11 @@ import (
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
-	"github.com/17xande-dev/gostore/internal/payment"
-	"github.com/17xande-dev/gostore/internal/payment/payfast"
-	"github.com/17xande-dev/gostore/internal/payment/snapscan"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/mailer/msauth"
+	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/payment/payfast"
+	"github.com/17xande-dev/payment/snapscan"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

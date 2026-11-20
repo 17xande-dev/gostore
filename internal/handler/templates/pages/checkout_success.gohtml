@@ -24,7 +24,7 @@
         {{else}}
           <ul>
           {{range $grant.Files}}
-            <li><a href="/cart/checkout/downloads/{{$grant.Entitlement.ID}}/{{.ID}}?order={{$.Order.ID}}">{{.Title}}</a>
+            <li><a href="/cart/checkout/downloads/{{$grant.Entitlement.ID}}/{{.ID}}?ref={{$.Order.ID}}">{{.Title}}</a>
                 <small>{{.HumanSize}}</small></li>
           {{end}}
           </ul>
