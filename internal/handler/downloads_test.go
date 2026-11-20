@@ -569,7 +569,8 @@ func TestDownloads_SuccessPageOffersTheFilesWithoutTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	path := "/cart/checkout/downloads/" + e.ID + "/" + strconv.FormatInt(d.mp3.ID, 10) + "?ref=" + e.OrderID
+	filePath := "/cart/checkout/downloads/" + e.ID + "/" + strconv.FormatInt(d.mp3.ID, 10)
+	path := filePath + "?ref=" + e.OrderID
 	if !strings.Contains(body, path) {
 		t.Errorf("the success page does not link %s: %s", path, body)
 	}
@@ -577,10 +578,27 @@ func TestDownloads_SuccessPageOffersTheFilesWithoutTheToken(t *testing.T) {
 		t.Errorf("the success-page download = %d, want 302", res.StatusCode)
 	}
 
-	// And somebody else's cookie does not reach it.
+	// A valid cookie for another cart must not reveal the download link or
+	// serve the file directly, even when the full order ID is supplied.
 	newSession(t, d.srv)
-	if res, _ := get(t, d.srv, path); res.StatusCode != http.StatusNotFound {
-		t.Errorf("another shopper reached this order's download: %d", res.StatusCode)
+	addToCart(t, d.srv, d.video.ID, 1)
+	if cartTokenOf(t, d.srv) == d.reload(t, e.OrderID).CartID {
+		t.Fatal("second visitor needs a different cart")
+	}
+	for _, key := range []string{"ref", "order"} {
+		t.Run(key, func(t *testing.T) {
+			query := "?" + key + "=" + e.OrderID
+			res, body := get(t, d.srv, "/cart/checkout/success"+query)
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("another cart's return page = %d, want generic 200 page", res.StatusCode)
+			}
+			if strings.Contains(body, filePath) || strings.Contains(body, d.mp3.Title) || strings.Contains(body, "Your downloads") {
+				t.Error("another cart's return page showed the buyer's downloads")
+			}
+			if res, _ := get(t, d.srv, filePath+query); res.StatusCode != http.StatusNotFound {
+				t.Errorf("another shopper reached this order's download: %d", res.StatusCode)
+			}
+		})
 	}
 }
 

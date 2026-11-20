@@ -2,13 +2,20 @@ package handler
 
 import (
 	"bytes"
+	"crypto/md5" // PayFast's ITN signature format.
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/payment/payfast"
 )
 
 // placeOrder runs a real checkout and returns the pending order it created, so the
@@ -93,6 +100,82 @@ func TestCallback_MarksPaidAndDecrementsStock(t *testing.T) {
 	// And now the return page can say so.
 	if _, body := get(t, s.srv, "/cart/checkout/success"); !strings.Contains(body, "Payment confirmed") {
 		t.Errorf("the success page does not report the confirmed payment: %s", body)
+	}
+}
+
+func TestPayFastCallback_UsesBareClientIPFromTrustedHeader(t *testing.T) {
+	validate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "VALID")
+	}))
+	defer validate.Close()
+
+	const merchantID, passphrase, gatewayRef = "10000100", "test-passphrase", "1089250"
+	gateway, err := payfast.New(payfast.Config{
+		MerchantID: merchantID, MerchantKey: "test-key", Passphrase: passphrase, Sandbox: true,
+		ReturnURL: "https://store.example/cart/checkout/success",
+		CancelURL: "https://store.example/cart/checkout/cancel",
+		NotifyURL: "https://store.example/payments/payfast/callback",
+		// Neither the connection peer nor an address with a port passes this check.
+		AllowedCIDRs: []string{"192.0.2.44/32"}, ValidateURL: validate.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, header, value string
+		source              middleware.ClientIPSource
+		want                orders.Status
+	}{
+		{"forwarded", "X-Forwarded-For", "192.0.2.44:4711, 10.0.0.1", middleware.ClientIPForwarded, orders.StatusPaid},
+		{"cloudflare", "CF-Connecting-IP", "192.0.2.44:4711", middleware.ClientIPCloudflare, orders.StatusPaid},
+		{"outside allowlist", "X-Forwarded-For", "198.51.100.7:4711", middleware.ClientIPForwarded, orders.StatusPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStoreWith(t, []payment.Gateway{gateway}, func(cfg *config.Config) {
+				cfg.ClientIPSource = tc.source
+			})
+			variants := stockCart(t, s.catalog)
+			addToCart(t, s.srv, variants["S"].ID, 1)
+			form := validCheckoutForm()
+			form.Set("gateway", gateway.Name())
+			if res, body := post(t, s.srv, "/cart/checkout", form); res.StatusCode != http.StatusOK {
+				t.Fatalf("PayFast checkout = %d: %s", res.StatusCode, body)
+			}
+			order, err := s.orders.LatestForCart(t.Context(), cartTokenOf(t, s.srv))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			fields := "m_payment_id=" + order.ID + "&pf_payment_id=" + gatewayRef +
+				"&payment_status=COMPLETE&amount_gross=" + payment.FormatAmount(order.TotalCents) + "&merchant_id=" + merchantID
+			digest := md5.Sum([]byte(fields + "&passphrase=" + passphrase))
+			body := fmt.Sprintf("%s&signature=%x", fields, digest)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+				s.srv.URL+"/payments/payfast/callback", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set(tc.header, tc.value)
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("ITN response = %d, want 200", res.StatusCode)
+			}
+
+			// PayFast rejection also gets 200, so check the persisted result.
+			got := s.reload(t, order.ID)
+			if got.Status != tc.want {
+				t.Errorf("order status = %q, want %q", got.Status, tc.want)
+			}
+			if tc.want == orders.StatusPaid && got.GatewayRef != gatewayRef {
+				t.Errorf("gateway transaction ID = %q, want %q", got.GatewayRef, gatewayRef)
+			}
+		})
 	}
 }
 
@@ -256,13 +339,12 @@ func TestCallback_AlwaysAnswers200(t *testing.T) {
 		gateway string
 		body    []byte
 	}{
-		"unknown gateway":  {"stripe", payment.FakeCallbackBody(order.ID, "1", "paid", order.TotalCents)},
-		"unknown order":    {"fake", payment.FakeCallbackBody("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "1", "paid", 100)},
-		"malformed order":  {"fake", payment.FakeCallbackBody("not-a-uuid", "1", "paid", 100)},
-		"empty body":       {"fake", nil},
-		"nonsense body":    {"fake", []byte("%%%")},
-		"no order id":      {"fake", []byte("status=paid&amount=299.00")},
-		"absurd body size": {"fake", []byte("a=" + strings.Repeat("b", maxCallbackBytes+100))},
+		"unknown gateway": {"stripe", payment.FakeCallbackBody(order.ID, "1", "paid", order.TotalCents)},
+		"unknown order":   {"fake", payment.FakeCallbackBody("3f2504e0-4f89-41d3-9a0c-0305e82c3301", "1", "paid", 100)},
+		"malformed order": {"fake", payment.FakeCallbackBody("not-a-uuid", "1", "paid", 100)},
+		"empty body":      {"fake", nil},
+		"nonsense body":   {"fake", []byte("%%%")},
+		"no order id":     {"fake", []byte("status=paid&amount=299.00")},
 	}
 	for name, tc := range cases {
 		res := callback(t, s.srv, tc.gateway, tc.body)
@@ -273,6 +355,29 @@ func TestCallback_AlwaysAnswers200(t *testing.T) {
 
 	if got := s.reload(t, order.ID); got.Paid() {
 		t.Error("one of the rejected notifications paid the order")
+	}
+}
+
+func TestCallback_BoundsBodyRead(t *testing.T) {
+	gateway := payment.NewFake()
+	gateway.Reject = true
+	h := New(Deps{Config: testConfig(), Log: slog.New(slog.DiscardHandler), Gateways: registryOf(t, gateway)})
+	mux := http.NewServeMux()
+	h.RegisterPayments(mux)
+
+	// Check bytes consumed, not whether the gateway rejects the body. A gateway
+	// cannot protect the memory the handler has already used to buffer it.
+	body := strings.NewReader("padding=" + strings.Repeat("x", maxCallbackBytes+100))
+	before := body.Len()
+	req := httptest.NewRequest(http.MethodPost, "/payments/fake/callback", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Errorf("callback = %d, want 200", res.Code)
+	}
+	if read := before - body.Len(); read == 0 || read > maxCallbackBytes+1 {
+		t.Errorf("callback read %d bytes, want a nonzero read bounded by %d", read, maxCallbackBytes+1)
 	}
 }
 

@@ -69,10 +69,26 @@ func TestCheckout_LatePaymentPreservesEditedCartAndNamesItsOrder(t *testing.T) {
 	if !strings.Contains(body, "Payment confirmed") || !strings.Contains(body, first.Reference()) {
 		t.Fatal("return page followed newer order")
 	}
+
+	// An empty jar only exercises the missing-cookie check. A different cart
+	// must reach the order lookup without gaining access to the selected order.
 	newSession(t, s.srv)
-	_, body = get(t, s.srv, "/cart/checkout/success?ref="+first.ID)
-	if strings.Contains(body, first.Reference()) {
-		t.Fatal("order id bypassed cart ownership")
+	addToCart(t, s.srv, s.variants["book"].ID, 1)
+	if cartTokenOf(t, s.srv) == first.CartID {
+		t.Fatal("second visitor needs a different cart")
+	}
+	for _, outcome := range []string{"success", "cancel"} {
+		for _, key := range []string{"ref", "order"} {
+			t.Run(outcome+"/"+key, func(t *testing.T) {
+				res, body := get(t, s.srv, "/cart/checkout/"+outcome+"?"+key+"="+first.ID)
+				if res.StatusCode != http.StatusOK {
+					t.Fatalf("another cart's return page = %d, want generic 200 page", res.StatusCode)
+				}
+				if strings.Contains(body, first.Reference()) || strings.Contains(body, "Payment confirmed") {
+					t.Error("another cart's return page showed the buyer's order")
+				}
+			})
+		}
 	}
 }
 
