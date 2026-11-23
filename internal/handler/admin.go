@@ -204,7 +204,7 @@ func (h *Handler) FirstPartyHandler(protect middleware.Middleware) http.Handler 
 // CSRF-protected group — the admin, the cart, and the first-party catalog pages
 // that carry an add-to-cart form — shares a single configuration and a single
 // token pool.
-func (h *Handler) withCSRF(next http.Handler) http.Handler {
+func (h *Handler) withCSRF(next *http.ServeMux) http.Handler {
 	csrf := nosurf.New(next)
 	csrf.SetBaseCookie(http.Cookie{
 		// Path "/" because the protected routes span /admin, /cart, /cart/checkout
@@ -223,7 +223,7 @@ func (h *Handler) withCSRF(next http.Handler) http.Handler {
 	// the right signal rather than r.TLS: behind a TLS-terminating proxy the
 	// connection is plain HTTP but the browser's origin is https.
 	csrf.SetIsTLSFunc(func(*http.Request) bool { return h.cfg.CookieSecure })
-	return csrf
+	return h.limitBodies(csrf, next)
 }
 
 // csrfFailed answers a request whose CSRF token was missing or wrong. It is a
@@ -303,7 +303,7 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products", auth.PermCatalogWrite, h.adminProductCreate)
 	admin("GET /admin/products/{id}/edit", auth.PermRead, h.adminProductEdit)
 	admin("GET /admin/products/{id}/downloads", auth.PermRead, h.adminProductDownloads)
-	admin("POST /admin/products/{id}/files", auth.PermCatalogWrite, h.adminProductFileUpload)
+	admin(productFileUpload, auth.PermCatalogWrite, h.adminProductFileUpload)
 	admin("POST /admin/products/{id}/files/{fileID}", auth.PermCatalogWrite, h.adminProductFileUpdate)
 	admin("POST /admin/products/{id}/files/{fileID}/delete", auth.PermCatalogWrite, h.adminProductFileDelete)
 	admin("POST /admin/products/{id}", auth.PermCatalogWrite, h.adminProductUpdate)
@@ -311,7 +311,7 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("POST /admin/products/{id}/variants", auth.PermCatalogWrite, h.adminVariantCreate)
 	admin("POST /admin/products/{id}/variants/{variantID}", auth.PermCatalogWrite, h.adminVariantUpdate)
 	admin("POST /admin/products/{id}/variants/{variantID}/delete", auth.PermCatalogWrite, h.adminVariantDelete)
-	admin("POST /admin/products/{id}/image", auth.PermCatalogWrite, h.adminProductImageUpload)
+	admin(productImageUpload, auth.PermCatalogWrite, h.adminProductImageUpload)
 	admin("POST /admin/products/{id}/image/delete", auth.PermCatalogWrite, h.adminProductImageDelete)
 	// Categories. Deleting one unlinks it from its products and never deletes them
 	// — see internal/handler/admin_categories.go.

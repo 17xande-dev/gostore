@@ -17,9 +17,7 @@ import (
 // admin.ReplaceProductImage's, shared with the MCP endpoint's upload URL; this
 // file is the form, and the messages a person reads when it refuses.
 
-// maxImageBytes caps the request body. The multipart reader gets a limit too, but
-// this one is applied to the connection so an oversized upload is refused while it
-// is still arriving rather than after it has all been buffered.
+// maxImageBytes caps the image; the pre-CSRF body cap also allows for its envelope.
 const maxImageBytes = blob.MaxUploadBytes
 
 func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request) {
@@ -31,17 +29,7 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// A body bigger than the cap is cut off here, and ParseMultipartForm then
-	// reports the truncation as a malformed form — which is why the message below
-	// mentions the size rather than the syntax.
-	r.Body = http.MaxBytesReader(w, r.Body, maxImageBytes+1024)
-	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		h.imageProblem(w, r, p.ID, "That file is too large, or the upload was interrupted. The limit is "+
-			humanBytes(maxImageBytes)+".")
-		return
-	}
-	defer r.MultipartForm.RemoveAll()
-
+	// The pre-CSRF body cap owns multipart parsing and temp-file cleanup.
 	file, header, err := r.FormFile("image")
 	if err != nil {
 		h.imageProblem(w, r, p.ID, "Choose an image file to upload.")

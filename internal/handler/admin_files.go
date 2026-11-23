@@ -19,7 +19,7 @@ import (
 // object first, record the row second, so no failure leaves a row pointing at
 // bytes that are not there. What is different is everything about the size.
 //
-// # Memory is bounded, but it is not free — and disk is not bounded at all
+// # Memory and disk are bounded, but neither is free
 //
 // The image path reads the whole upload into memory, which is right for a
 // five-megabyte photograph and catastrophic for a two-gigabyte video. Here
@@ -59,20 +59,7 @@ func (h *Handler) adminProductFileUpload(w http.ResponseWriter, r *http.Request)
 	}
 	maxBytes := h.downloadMaxBytes()
 
-	// The +4096 is headroom for the multipart envelope — boundaries, headers, the
-	// other fields — so a file of exactly the limit is not refused for the wrapper
-	// around it.
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+4096)
-	// A small in-memory limit and everything else to a temporary file. This is not
-	// the streaming part — that is FormFile below — it only governs the small
-	// fields.
-	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		h.fileProblem(w, r, p.ID, "That file is too large, or the upload was interrupted. The limit is "+
-			catalog.HumanBytes(maxBytes)+".")
-		return
-	}
-	defer r.MultipartForm.RemoveAll()
-
+	// The pre-CSRF body cap owns multipart parsing and temp-file cleanup.
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		h.fileProblem(w, r, p.ID, "Choose a file to upload.")
