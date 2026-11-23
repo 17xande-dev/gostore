@@ -58,6 +58,16 @@ func (h *Handler) adminProductFileUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	maxBytes := h.downloadMaxBytes()
+	tooLarge := func() {
+		h.fileProblem(w, r, p.ID, "That file is too large, or the upload was interrupted. The limit is "+
+			downloadLimitLabel(maxBytes)+".")
+	}
+	// This is a read-only error path, including when the pre-CSRF cap has
+	// already discarded the body.
+	if uploadTooLarge(r) {
+		tooLarge()
+		return
+	}
 
 	// The pre-CSRF body cap owns multipart parsing and temp-file cleanup.
 	file, header, err := r.FormFile("file")
@@ -66,6 +76,10 @@ func (h *Handler) adminProductFileUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer file.Close()
+	if header.Size > maxBytes {
+		tooLarge()
+		return
+	}
 
 	// Sniff the leading bytes, then rewind. multipart.File is an io.ReadSeeker
 	// whichever way the part was spooled, so this costs nothing.
@@ -97,12 +111,6 @@ func (h *Handler) adminProductFileUpload(w http.ResponseWriter, r *http.Request)
 	// length is known and can be checked before a byte is sent to storage. Passing
 	// a real size also lets the backend upload in one pass rather than buffering
 	// chunks to discover where the stream ends.
-	if header.Size > maxBytes {
-		h.fileProblem(w, r, p.ID, "That file is "+catalog.HumanBytes(header.Size)+
-			", and the limit is "+catalog.HumanBytes(maxBytes)+".")
-		return
-	}
-
 	contentType := http.DetectContentType(head)
 	ext := blob.DownloadExtension(contentType, header.Filename)
 	key, err := blob.DownloadKey(p.ID, ext)
@@ -363,6 +371,18 @@ func (h *Handler) fileProblem(w http.ResponseWriter, r *http.Request, productID,
 // downloadMaxBytes is the configured cap, with the package default when config
 // has not been loaded — which is the case in a handler test that builds a
 // config.Config by hand.
+// Show whole binary units for limits configured that way, including the 2 GiB
+// default. Other limits keep the catalog's human-readable decimal formatting.
+func downloadLimitLabel(n int64) string {
+	if n >= 1<<30 && n%(1<<30) == 0 {
+		return strconv.FormatInt(n>>30, 10) + " GiB"
+	}
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return humanBytes(n)
+	}
+	return catalog.HumanBytes(n)
+}
+
 func (h *Handler) downloadMaxBytes() int64 {
 	if h.cfg.DownloadMaxBytes > 0 {
 		return h.cfg.DownloadMaxBytes

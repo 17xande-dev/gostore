@@ -228,7 +228,15 @@ func (h *Handler) withCSRF(next *http.ServeMux) http.Handler {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   nosurf.MaxAge,
 	})
-	csrf.SetFailureHandler(http.HandlerFunc(h.csrfFailed))
+	csrf.SetFailureHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The browser's form token is in the discarded body. After nosurf's
+		// origin check, allow only the upload handler's read-only rejection.
+		if uploadTooLarge(r) && nosurf.Reason(r) == nosurf.ErrBadToken && r.Header.Get(nosurf.HeaderName) == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		h.csrfFailed(w, r)
+	}))
 
 	// nosurf compares a request's Origin against one it builds from the Host
 	// header, and assumes https unless told otherwise — so without this every

@@ -29,6 +29,16 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	tooLarge := func() {
+		h.imageProblem(w, r, p.ID, "That image is larger than "+humanBytes(maxImageBytes)+".")
+	}
+	// This branch also serves rejected requests whose bodies were discarded
+	// before CSRF. Nothing below it should run for such a request.
+	if uploadTooLarge(r) {
+		tooLarge()
+		return
+	}
+
 	// The pre-CSRF body cap owns multipart parsing and temp-file cleanup.
 	file, header, err := r.FormFile("image")
 	if err != nil {
@@ -49,7 +59,7 @@ func (h *Handler) adminProductImageUpload(w http.ResponseWriter, r *http.Request
 	_, err = admin.ReplaceProductImage(r.Context(), h.cat, h.blob, h.log, p, body)
 	switch {
 	case errors.Is(err, admin.ErrImageTooLarge):
-		h.imageProblem(w, r, p.ID, "That image is larger than "+humanBytes(maxImageBytes)+".")
+		tooLarge()
 		return
 	case errors.Is(err, admin.ErrImageEmpty):
 		h.imageProblem(w, r, p.ID, "That file is empty.")
@@ -119,7 +129,7 @@ func (h *Handler) imageProblem(w http.ResponseWriter, r *http.Request, productID
 func humanBytes(n int64) string {
 	const mib = 1 << 20
 	if n >= mib && n%mib == 0 {
-		return strconv.FormatInt(n/mib, 10) + " MB"
+		return strconv.FormatInt(n/mib, 10) + " MiB"
 	}
 	return strconv.FormatInt(n, 10) + " bytes"
 }

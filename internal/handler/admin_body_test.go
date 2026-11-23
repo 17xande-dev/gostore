@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/auth"
+	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/justinas/nosurf"
 )
@@ -93,11 +94,16 @@ func TestProductUploadBodyLimits(t *testing.T) {
 		if res.StatusCode != http.StatusSeeOther {
 			t.Fatalf("image at limit: status %d, want 303", res.StatusCode)
 		}
-		res, _ = uploadImage(t, s, p.ID, "large.jpg", append(atLimit, make([]byte, 1<<20)...), "image/jpeg")
-		if res.StatusCode != http.StatusRequestEntityTooLarge {
-			t.Fatalf("image over limit: status %d, want 413", res.StatusCode)
+		path := "/admin/products/" + p.ID + "/image"
+		checkOversizedUpload(t, s, path, "image", 6<<20, true,
+			http.StatusUnprocessableEntity, "That image is larger than 5 MiB.", p.Title)
+		checkOversizedUpload(t, s, path, "image", 6<<20, false,
+			http.StatusRequestEntityTooLarge, "Request body too large.", "")
+		got, err := s.catalog.Get(t.Context(), p.ID)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if len(s.images.Keys()) != 1 {
+		if obj, ok := s.images.Get(got.ImageKey); !ok || !bytes.Equal(obj.Body, atLimit) || len(s.images.Keys()) != 1 {
 			t.Fatal("refused upload changed image storage")
 		}
 	})
@@ -113,10 +119,8 @@ func TestProductUploadBodyLimits(t *testing.T) {
 		if res.StatusCode != http.StatusSeeOther {
 			t.Fatalf("download at limit: status %d, want 303", res.StatusCode)
 		}
-		res, _ = uploadFile(t, d.shop, d.product.ID, "large.txt", append(atLimit, make([]byte, 1<<20)...), nil)
-		if res.StatusCode != http.StatusRequestEntityTooLarge {
-			t.Fatalf("download over limit: status %d, want 413", res.StatusCode)
-		}
+		checkOversizedUpload(t, d.shop, "/admin/products/"+d.product.ID+"/files", "file", 3<<20, true,
+			http.StatusUnprocessableEntity, "That file is too large, or the upload was interrupted. The limit is 2 MiB.", d.product.Title)
 		if len(d.files.Keys()) != filesBefore+1 {
 			t.Fatal("refused upload changed download storage")
 		}
@@ -137,6 +141,57 @@ func TestProductUploadBodyLimits(t *testing.T) {
 			t.Fatalf("upload left temp files: %v, %v", entries, err)
 		}
 	})
+	t.Run("default download cap", func(t *testing.T) {
+		d := newDigitalShop(t)
+		signIn(t, d.srv)
+		path := "/admin/products/" + d.product.ID + "/files"
+		filesBefore := len(d.files.Keys())
+		// Assert the real default without allocating or reading a 2 GiB body.
+		checkOversizedUpload(t, d.shop, path, "file", int64(blob.DefaultMaxDownloadBytes)+1<<20, true,
+			http.StatusUnprocessableEntity, "That file is too large, or the upload was interrupted. The limit is 2 GiB.", d.product.Title)
+		checkOversizedUpload(t, d.shop, path, "file", int64(blob.DefaultMaxDownloadBytes)+1<<20, false,
+			http.StatusRequestEntityTooLarge, "Request body too large.", "")
+		if len(d.files.Keys()) != filesBefore {
+			t.Fatal("refused upload changed download storage")
+		}
+	})
+}
+
+func checkOversizedUpload(t *testing.T, s *shop, path, field string, size int64, signed bool, status int, message, title string) {
+	t.Helper()
+	var data bytes.Buffer
+	m := multipart.NewWriter(&data)
+	if err := m.WriteField("csrf_token", csrfToken(t, s.srv)); err != nil {
+		t.Fatal(err)
+	}
+	part, err := m.CreateFormFile(field, "oversized.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(make([]byte, min(size, 6<<20))); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body := &bodyProbe{Reader: &data}
+	r := httptest.NewRequest(http.MethodPost, s.srv.URL+path, body)
+	r.ContentLength = max(int64(data.Len()), size)
+	r.Header.Set("Content-Type", m.FormDataContentType())
+	r.Header.Set("Origin", s.srv.URL)
+	if signed {
+		for _, c := range s.srv.Client().Jar.Cookies(r.URL) {
+			r.AddCookie(c)
+		}
+	}
+	w := httptest.NewRecorder()
+	s.srv.Config.Handler.ServeHTTP(w, r)
+	if w.Code != status || !strings.Contains(w.Body.String(), message) || body.calls != 0 {
+		t.Fatalf("oversized upload: status %d, reads %d; want %d with %q and zero reads", w.Code, body.calls, status, message)
+	}
+	if title != "" && (!strings.Contains(w.Body.String(), title) || !csrfFieldRE.MatchString(w.Body.String())) {
+		t.Fatal("oversize response did not render the editable product page")
+	}
 }
 
 func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
