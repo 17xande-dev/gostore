@@ -1142,6 +1142,8 @@ func TestLoad_RejectsABaseURLThatCannotBeAnOrigin(t *testing.T) {
 	for _, base := range []string{
 		"https://Store.Example.com",      // upper case
 		"https://store.example.com:443",  // default port
+		"https://store.example.com:0443", // leading zero
+		"https://store.example.com:0",    // port zero
 		"https://store.example.com/shop", // path
 		"https://user@store.example.com", // userinfo
 		"store.example.com",              // no scheme

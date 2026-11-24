@@ -596,7 +596,7 @@ func Load() (Config, error) {
 	// -check-config reports them, because the handler only refuses at startup
 	// after -migrate has already run, so the documented
 	// `-check-config && -migrate && exec` order would not catch a bad value.
-	if _, err := csrf.New(csrf.Config{Origin: c.BaseURL, Insecure: !c.CookieSecure}); err != nil {
+	if err := csrf.ValidateOrigin(c.BaseURL, !c.CookieSecure); err != nil {
 		return Config{}, fmt.Errorf("config: BASE_URL %q cannot be the site's origin: %w "+
 			"(want lower-case scheme://host[:port] with no path)", c.BaseURL, err)
 	}
