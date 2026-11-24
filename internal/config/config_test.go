@@ -1134,3 +1134,24 @@ func TestLoad_SMTPHostNeedsEmailFrom(t *testing.T) {
 		t.Errorf("error = %v, want it to name EMAIL_FROM", err)
 	}
 }
+
+// BASE_URL becomes the CSRF origin, compared byte for byte with a browser's
+// Origin header, so a value no browser could send must stop startup here, where
+// -check-config reports it, and not in the handler after -migrate has run.
+func TestLoad_RejectsABaseURLThatCannotBeAnOrigin(t *testing.T) {
+	for _, base := range []string{
+		"https://Store.Example.com",      // upper case
+		"https://store.example.com:443",  // default port
+		"https://store.example.com/shop", // path
+		"https://user@store.example.com", // userinfo
+		"store.example.com",              // no scheme
+	} {
+		t.Run(base, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("BASE_URL", base)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BASE_URL") {
+				t.Errorf("Load with BASE_URL %q = %v, want an error naming BASE_URL", base, err)
+			}
+		})
+	}
+}

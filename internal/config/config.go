@@ -20,6 +20,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/ratelimit/clientip"
+	"github.com/17xande-dev/websec/csrf"
 )
 
 // Config is the fully resolved configuration for one server process.
@@ -589,6 +590,15 @@ func Load() (Config, error) {
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
+	}
+	// BASE_URL is the CSRF origin, compared byte for byte with the Origin a
+	// browser sends. The same rules the library enforces are applied here, where
+	// -check-config reports them, because the handler only refuses at startup
+	// after -migrate has already run, so the documented
+	// `-check-config && -migrate && exec` order would not catch a bad value.
+	if _, err := csrf.New(csrf.Config{Origin: c.BaseURL, Insecure: !c.CookieSecure}); err != nil {
+		return Config{}, fmt.Errorf("config: BASE_URL %q cannot be the site's origin: %w "+
+			"(want lower-case scheme://host[:port] with no path)", c.BaseURL, err)
 	}
 	if key, err := hex.DecodeString(c.EmailQueueKey); err != nil || len(key) != 32 {
 		return Config{}, errors.New("config: EMAIL_QUEUE_KEY must be 64 hexadecimal characters; generate with openssl rand -hex 32")
