@@ -25,11 +25,11 @@ nosurf also requires that an unsafe request identify its origin, via `Sec-Fetch-
 testing needs `-H "Origin: http://localhost:8080"` or the request is rejected before the
 token is even examined.
 
-The origin nosurf compares against is built from the request's `Host` and a scheme it
-assumes is `https` unless told otherwise, so the scheme is taken from **`BASE_URL`** rather
-than from the connection: behind a TLS-terminating proxy the connection is plain HTTP while
-the browser's origin is `https`. Getting `BASE_URL` wrong therefore breaks every admin form
-with a `403`, not just absolute links.
+The origin the check compares against is **`BASE_URL`** itself (websec's csrf `Origin`),
+not the request's `Host` and not the connection's scheme: behind a TLS-terminating proxy the
+connection is plain HTTP while the browser's origin is `https`. It must be a lower-case
+`scheme://host[:port]` with no path and no default port, or startup fails. Getting
+`BASE_URL` wrong therefore breaks every admin form with a `403`, not just absolute links.
 
 ## Hardening
 

@@ -30,8 +30,9 @@ backup hands over no live session, and there is no signing secret to configure o
 The row is what makes a session revocable, which is the whole reason for the table: changing
 an account's password, disabling it, or changing its role deletes every session it holds in
 the same transaction, so the next request from that browser is anonymous rather than valid
-until the cookie happens to expire. Expiry is enforced in the lookup's own SQL predicate; the
-hourly sweep of expired rows keeps the table bounded and is explicitly not what makes it
+until the cookie happens to expire. The absolute expiry is enforced in the lookup's own SQL predicate, and a session unused
+for 2 hours ends (`last_seen`, written at most once a minute); the
+hourly sweep of expired and idle rows keeps the table bounded and is explicitly not what makes it
 correct.
 
 The costs, stated plainly: one indexed lookup per admin request, and a session that outlives

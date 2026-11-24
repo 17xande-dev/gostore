@@ -34,7 +34,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 |---|---|---|---|
 | `DATABASE_URL` | **yes** | — | Postgres connection string |
 | `SETUP_TOKEN` | no | generated | The one-time token that claims the first account. 32+ characters. Generated and logged on first boot if unset |
-| `SESSION_TTL_HOURS` | no | `24` | How long a sign-in lasts |
+| `SESSION_TTL_HOURS` | no | `24` | The absolute limit on a sign-in. A session also ends after 2 hours without a request |
 | `PAYFAST_MERCHANT_ID` | one gateway² | — | From the PayFast dashboard. Its presence switches PayFast on |
 | `PAYFAST_MERCHANT_KEY` | with PayFast | — | From the PayFast dashboard |
 | `PAYFAST_PASSPHRASE` | no | — | The account's salt passphrase; must match the dashboard exactly |
@@ -47,7 +47,7 @@ cannot be read. A trailing newline is stripped, so a file written by
 | `SNAPSCAN_VALIDATION_KEY` | no | — | Secure QR Payload key; signs the amount and reference in the payment URL |
 | `CLIENT_IP_SOURCE` | no | `remote` | Where the client address is read from: `remote`, `forwarded` (leftmost `X-Forwarded-For`, only with a proxy that replaces it) or `cloudflare` (`CF-Connecting-IP`) |
 | `PORT` | no | `8080` | Listen port |
-| `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs |
+| `BASE_URL` | no | `http://localhost:8080` | Public origin, for absolute URLs and the CSRF origin check. Lower-case `scheme://host[:port]`, no path, no default port; anything else fails startup |
 | `STORE_NAME` | no | `gostore` | Displayed store name |
 | `CURRENCY` | no | `ZAR` | Currency code. Both gateways settle in `ZAR` only, and the server refuses to start on anything else |
 | `EMBED_ORIGINS` | no | — | Origins allowed to fetch and frame the catalog fragments |
