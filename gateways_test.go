@@ -164,7 +164,10 @@ func TestCheckout_FormActionCSP(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newGateways: %v", err)
 			}
-			h := handler.New(handler.Deps{Config: cfg, Log: log, Gateways: gateways})
+			h, err := handler.New(handler.Deps{Config: cfg, Log: log, Gateways: gateways})
+			if err != nil {
+				t.Fatalf("handler.New: %v", err)
+			}
 			mcp := mcpserver.New(mcpserver.Deps{Log: log, BaseURL: cfg.BaseURL})
 			router := routes(cfg, h, mcp, gateways, nil, nil, log)
 

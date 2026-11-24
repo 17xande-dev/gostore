@@ -366,7 +366,7 @@ func TestCallback_AlwaysAnswers200(t *testing.T) {
 func TestCallback_BoundsBodyRead(t *testing.T) {
 	gateway := payment.NewFake()
 	gateway.Reject = true
-	h := New(Deps{Config: testConfig(), Log: slog.New(slog.DiscardHandler), Gateways: registryOf(t, gateway)})
+	h := mustNew(t, Deps{Config: testConfig(), Log: slog.New(slog.DiscardHandler), Gateways: registryOf(t, gateway)})
 	mux := http.NewServeMux()
 	h.RegisterPayments(mux)
 

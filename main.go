@@ -149,7 +149,7 @@ func run() error {
 	cat := catalog.NewStore(pool)
 	orderStore := orders.NewStore(pool)
 	grants := downloads.NewStore(pool, cat)
-	h := handler.New(handler.Deps{
+	h, err := handler.New(handler.Deps{
 		Config:   cfg,
 		Log:      log,
 		Tmpl:     tmpl,
@@ -164,6 +164,9 @@ func run() error {
 		Files:    files,
 		Users:    users,
 	})
+	if err != nil {
+		return err
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	waitWorker := h.StartMailWorker(workerCtx)
 	defer func() { stopWorker(); waitWorker() }()
@@ -616,7 +619,7 @@ func routes(cfg config.Config, h *handler.Handler, mcpSrv *mcpserver.Server, gat
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:
 	// they are embeddable cross-origin, which means cookie-free.
-	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(users, log))
+	firstParty := h.FirstPartyHandler(h.RequireAdmin())
 	mux.Handle("/admin/", firstParty)
 	// Both patterns: one matches /cart exactly, the other everything below it —
 	// which includes /cart/checkout, where the cart cookie is in scope.

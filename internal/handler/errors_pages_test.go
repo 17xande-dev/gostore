@@ -296,7 +296,7 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	gateway := payment.NewFake()
-	h := New(Deps{
+	h := mustNew(t, Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:   downloads.NewStore(pool, store),

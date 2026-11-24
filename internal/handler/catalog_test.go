@@ -34,7 +34,7 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	gateways := registryOf(t, payment.NewFake())
-	h := New(Deps{
+	h := mustNew(t, Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:   downloads.NewStore(pool, store),

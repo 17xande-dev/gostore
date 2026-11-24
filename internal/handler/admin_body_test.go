@@ -15,7 +15,6 @@ import (
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/config"
-	"github.com/justinas/nosurf"
 )
 
 type bodyProbe struct {
@@ -124,18 +123,24 @@ func TestProductUploadBodyLimits(t *testing.T) {
 		if len(d.files.Keys()) != filesBefore+1 {
 			t.Fatal("refused upload changed download storage")
 		}
-		// The higher allowance is only for multipart bodies that can spool.
-		form := &bodyProbe{}
-		r := httptest.NewRequest(http.MethodPost, d.srv.URL+"/admin/products/"+d.product.ID+"/files", form)
-		r.ContentLength = defaultFormLimit + 1
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
-			r.AddCookie(c)
-		}
-		w := httptest.NewRecorder()
-		d.srv.Config.Handler.ServeHTTP(w, r)
-		if w.Code != http.StatusRequestEntityTooLarge || form.calls != 0 {
-			t.Errorf("download URL-encoded form: status %d, reads %d; want 413, 0", w.Code, form.calls)
+		// The higher allowance is only for multipart bodies that can spool: any
+		// other media type on the upload routes keeps the default form cap.
+		for _, route := range []string{"/files", "/image"} {
+			for _, ct := range []string{"application/x-www-form-urlencoded", "application/json", "text/plain"} {
+				form := &bodyProbe{}
+				r := httptest.NewRequest(http.MethodPost, d.srv.URL+"/admin/products/"+d.product.ID+route, form)
+				r.ContentLength = defaultFormLimit + 1
+				r.Header.Set("Content-Type", ct)
+				r.Header.Set("Origin", d.srv.URL)
+				for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
+					r.AddCookie(c)
+				}
+				w := httptest.NewRecorder()
+				d.srv.Config.Handler.ServeHTTP(w, r)
+				if w.Code != http.StatusRequestEntityTooLarge || form.calls != 0 {
+					t.Errorf("%s %s: status %d, reads %d; want 413, 0", route, ct, w.Code, form.calls)
+				}
+			}
 		}
 		if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
 			t.Fatalf("upload left temp files: %v, %v", entries, err)
@@ -207,7 +212,7 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 			r.Header.Set("HX-Request", "true")
 		}
 		for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
-			if c.Name != nosurf.CookieName || includeCSRF {
+			if c.Name != d.handler.csrf.CookieName() || includeCSRF {
 				r.AddCookie(c)
 			}
 		}

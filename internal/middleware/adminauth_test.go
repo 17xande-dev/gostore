@@ -11,6 +11,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/password"
+	"github.com/17xande-dev/websec/cookie"
 )
 
 // cheapHash keeps these tests fast: they are about the middleware, not about how
@@ -41,6 +42,16 @@ func store(t *testing.T) (*auth.Store, auth.User, context.Context) {
 	return s, u, ctx
 }
 
+// testSession is the production cookie policy (secure, so __Secure-admin_session):
+// the tests must send the name a browser would, not the bare one.
+var testSession = func() *cookie.Cookie {
+	c, err := auth.NewSessionCookie(false)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}()
+
 // protected wraps a handler in RequireAdmin, and reports both whether the handler
 // was reached and which user reached it.
 func protected(t *testing.T, s *auth.Store) (http.Handler, *auth.User) {
@@ -55,14 +66,14 @@ func protected(t *testing.T, s *auth.Store) (http.Handler, *auth.User) {
 		got = u
 		w.Write([]byte("secret"))
 	})
-	return RequireAdmin(s, slog.New(slog.DiscardHandler))(next), &got
+	return RequireAdmin(s, slog.New(slog.DiscardHandler), testSession)(next), &got
 }
 
 func request(t *testing.T, h http.Handler, method, target, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), method, target, nil)
 	if token != "" {
-		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+		req.AddCookie(&http.Cookie{Name: testSession.Name(), Value: token})
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

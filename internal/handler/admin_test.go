@@ -21,7 +21,6 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/mailer"
@@ -58,8 +57,14 @@ func testConfig() config.Config {
 		StoreName:  "Test Store",
 		Currency:   "ZAR",
 		SessionTTL: time.Hour,
+		// The own origin the CSRF layer trusts. A test server replaces it with its
+		// listener's address (see newUnclaimedStoreWith), since a real browser's
+		// Origin is the server's own.
+		BaseURL: testBaseURL,
 	}
 }
+
+const testBaseURL = "http://store.test"
 
 // shop is a running server and everything behind it a test might assert on: what
 // reached the database, what the checkout handed the gateway, and what mail went
@@ -158,6 +163,12 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	for _, e := range edit {
 		e(&cfg)
 	}
+	// Listen first: the configured origin must be the address browsers-in-tests
+	// post from, and it is only known once the listener exists.
+	srv := httptest.NewUnstartedServer(nil)
+	if cfg.BaseURL == testBaseURL {
+		cfg.BaseURL = "http://" + srv.Listener.Addr().String()
+	}
 
 	pool := dbtest.Pool(t)
 	store := catalog.NewStore(pool)
@@ -180,7 +191,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(Deps{
+	h := mustNew(t, Deps{
 		Config:   cfg,
 		Log:      log,
 		Tmpl:     tmpl,
@@ -203,12 +214,13 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	h.RegisterStorefront(mux)
 	h.RegisterPayments(mux)
 	h.RegisterDownloads(mux)
-	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(users, log))
+	firstParty := h.FirstPartyHandler(h.RequireAdmin())
 	mux.Handle("/admin/", firstParty)
 	mux.Handle("/cart", firstParty)
 	mux.Handle("/cart/", firstParty)
 
-	srv := httptest.NewServer(mux)
+	srv.Config.Handler = mux
+	srv.Start()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookiejar: %v", err)

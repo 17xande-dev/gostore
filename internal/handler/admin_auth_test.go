@@ -38,7 +38,7 @@ func TestAdminAuth_SignsInWithEmailAndPassword(t *testing.T) {
 		t.Errorf("Location = %q, want /admin/products", got)
 	}
 
-	cookie := sessionCookieFrom(t, res)
+	cookie := sessionCookieFrom(t, s, res)
 	if !cookie.HttpOnly {
 		t.Error("the session cookie is not HttpOnly")
 	}
@@ -98,7 +98,7 @@ func TestAdminAuth_RejectsBadCredentials(t *testing.T) {
 			t.Errorf("%s: no error message on the re-rendered form", name)
 		}
 		for _, c := range res.Cookies() {
-			if c.Name == auth.CookieName && c.Value != "" {
+			if c.Name == s.handler.session.Name() && c.Value != "" {
 				t.Errorf("%s issued a session cookie", name)
 			}
 		}
@@ -142,7 +142,7 @@ func TestAdminAuth_LogoutDeletesTheSessionRow(t *testing.T) {
 	if got := res.Header.Get("Location"); got != "/admin/login" {
 		t.Errorf("Location = %q, want /admin/login", got)
 	}
-	cookie := sessionCookieFrom(t, res)
+	cookie := sessionCookieFrom(t, s, res)
 	if cookie.Value != "" || cookie.MaxAge >= 0 {
 		t.Errorf("logout cookie is %+v, want an empty value and a negative MaxAge", cookie)
 	}
@@ -173,13 +173,13 @@ func TestAdminAuth_SignInReplacesAnExistingSession(t *testing.T) {
 		"email":    {testEmail},
 		"password": {testPassword},
 	})
-	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: planted})
+	req.AddCookie(&http.Cookie{Name: s.handler.session.Name(), Value: planted})
 	res, body := do(t, s.srv, req)
 	if res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("sign in = %d %s", res.StatusCode, body)
 	}
 
-	issued := sessionCookieFrom(t, res)
+	issued := sessionCookieFrom(t, s, res)
 	if issued.Value == planted {
 		t.Fatal("the planted token was kept as the session")
 	}
@@ -249,7 +249,7 @@ func TestAdminAuth_ExpiredSessionIsRejected(t *testing.T) {
 	}
 
 	req := newRequest(t, s.srv, http.MethodGet, "/admin/products", nil)
-	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	req.AddCookie(&http.Cookie{Name: s.handler.session.Name(), Value: token})
 	if res, _ := do(t, s.srv, req); res.StatusCode != http.StatusSeeOther {
 		t.Errorf("expired session = %d, want 303", res.StatusCode)
 	}
@@ -349,13 +349,13 @@ func TestAdminAuth_NextKeepsALegitimateTarget(t *testing.T) {
 	}
 }
 
-func sessionCookieFrom(t *testing.T, res *http.Response) *http.Cookie {
+func sessionCookieFrom(t *testing.T, s *shop, res *http.Response) *http.Cookie {
 	t.Helper()
 	for _, c := range res.Cookies() {
-		if c.Name == auth.CookieName {
+		if c.Name == s.handler.session.Name() {
 			return c
 		}
 	}
-	t.Fatalf("no %s cookie in the response", auth.CookieName)
+	t.Fatalf("no %s cookie in the response", s.handler.session.Name())
 	return nil
 }

@@ -66,7 +66,7 @@ func (h *Handler) RegisterStorefront(mux *http.ServeMux) {
 	catalogMux.HandleFunc("OPTIONS /products", plainNotFound)
 	catalogMux.HandleFunc("OPTIONS /products/{slug}", plainNotFound)
 
-	firstParty := h.withCSRF(catalogMux)
+	firstParty := h.csrf.Handler(catalogMux)
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.isEmbedded(r) {
 			catalogMux.ServeHTTP(w, r)

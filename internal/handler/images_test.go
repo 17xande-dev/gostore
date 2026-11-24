@@ -41,7 +41,7 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	cat := catalog.NewStore(pool)
-	h := New(Deps{
+	h := mustNew(t, Deps{
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: cat, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:   downloads.NewStore(pool, cat),

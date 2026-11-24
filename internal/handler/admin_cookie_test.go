@@ -11,20 +11,21 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/config"
-	"github.com/justinas/nosurf"
 )
 
 func TestAdminCookieAttributes(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		t.Run(fmt.Sprintf("secure=%t", secure), func(t *testing.T) {
 			const ttl = time.Hour
-			s := newStore(t, func(c *config.Config) {
-				c.CookieSecure, c.SessionTTL = secure, ttl
-			})
-			origin := "http://example.test"
+			origin, csrfName, sessionName := "http://example.test", "csrf_token", "admin_session"
 			if secure {
-				origin = "https://example.test"
+				// The prefixes are literal on purpose: the browser enforces them, so
+				// the test must not derive them from the code that picks them.
+				origin, csrfName, sessionName = "https://example.test", "__Host-csrf_token", "__Secure-admin_session"
 			}
+			s := newStore(t, func(c *config.Config) {
+				c.CookieSecure, c.SessionTTL, c.BaseURL = secure, ttl, origin
+			})
 			send := func(method, path string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 				r := httptest.NewRequest(method, origin+path, strings.NewReader(form.Encode()))
 				r.Header.Set("Origin", origin)
@@ -54,9 +55,9 @@ func TestAdminCookieAttributes(t *testing.T) {
 			if loginForm.Code != http.StatusOK {
 				t.Fatalf("login form: status %d", loginForm.Code)
 			}
-			csrf := cookie(loginForm, nosurf.CookieName, "/")
-			if csrf.MaxAge != nosurf.MaxAge || !csrf.Expires.IsZero() || csrf.Value == "" {
-				t.Error("CSRF cookie must carry a value and retain its existing Max-Age-only lifetime")
+			csrf := cookie(loginForm, csrfName, "/")
+			if csrf.MaxAge != 0 || !csrf.Expires.IsZero() || csrf.Value == "" {
+				t.Error("CSRF cookie must carry a value and end with the browser session (no Max-Age, no Expires)")
 			}
 			before := time.Now()
 			login := send(http.MethodPost, "/admin/login", url.Values{
@@ -65,8 +66,11 @@ func TestAdminCookieAttributes(t *testing.T) {
 			if login.Code != http.StatusSeeOther {
 				t.Fatalf("sign in: status %d", login.Code)
 			}
-			session := cookie(login, "admin_session", "/admin")
-			if session.Value == "" || session.MaxAge != int(ttl.Seconds()) ||
+			session := cookie(login, sessionName, "/admin")
+			// Max-Age counts down from the stored expiry and is floored, so it is a
+			// second or two under the TTL, never over it (the cookie must not outlive
+			// the server's session).
+			if session.Value == "" || session.MaxAge > int(ttl.Seconds()) || session.MaxAge < int(ttl.Seconds())-2 ||
 				session.Expires.Before(before.Add(ttl).Truncate(time.Second)) || session.Expires.After(time.Now().Add(ttl)) {
 				t.Error("session cookie must carry a value and expire at the configured TTL")
 			}
@@ -77,8 +81,8 @@ func TestAdminCookieAttributes(t *testing.T) {
 			if logout.Code != http.StatusSeeOther || logout.Header().Get("Location") != "/admin/login" {
 				t.Fatalf("logout: status %d, Location %q", logout.Code, logout.Header().Get("Location"))
 			}
-			cleared := cookie(logout, "admin_session", "/admin")
-			if cleared.Value != "" || cleared.MaxAge >= 0 || !cleared.Expires.IsZero() {
+			cleared := cookie(logout, sessionName, "/admin")
+			if cleared.Value != "" || cleared.MaxAge >= 0 || !cleared.Expires.Before(time.Now()) {
 				t.Error("logout must clear the cookie immediately with an empty value and negative MaxAge")
 			}
 		})
