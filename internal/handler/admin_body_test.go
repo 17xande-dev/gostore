@@ -293,5 +293,10 @@ func TestAnonymousStreamedImageUploadIsRefusedWithoutReading(t *testing.T) {
 			t.Errorf("%s: status %d body %q, reads %d; want 401 \"Sign in required.\", 0 reads",
 				ct, w.Code, w.Body.String(), body.calls)
 		}
+		// HTTP/1 (httptest's request) must not keep the connection to drain an
+		// unread streamed body; the kit does the same for declared sizes.
+		if got := w.Header().Get("Connection"); got != "close" {
+			t.Errorf("%s: Connection = %q on the refusal, want close", ct, got)
+		}
 	}
 }
