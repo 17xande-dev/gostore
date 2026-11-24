@@ -426,11 +426,12 @@ func (s *Store) CountSessionsForUser(ctx context.Context, id string) (int, error
 	return n, nil
 }
 
-// DeleteExpiredSessions is housekeeping, swept periodically. Expiry is enforced
+// DeleteExpiredSessions is housekeeping, swept periodically: it removes sessions
+// past their absolute expiry and sessions idle for longer than SessionIdle. Expiry is enforced
 // on read, so this stops the table growing without bound rather than making
 // anything correct.
 func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
-	n, err := s.q.DeleteExpiredAdminSessions(ctx)
+	n, err := s.q.DeleteExpiredAdminSessions(ctx, SessionIdle.Seconds())
 	if err != nil {
 		return 0, translate(fmt.Errorf("auth: sweep sessions: %w", err))
 	}

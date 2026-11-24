@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/config"
 )
 
@@ -172,5 +174,39 @@ func TestCSRFTokenIsRenewedAtOwnPasswordChange(t *testing.T) {
 	}, renewed)
 	if replay.Code != http.StatusForbidden {
 		t.Errorf("the pre-change token after a password change = %d, want 403", replay.Code)
+	}
+}
+
+// An admin page refuses a session that has sat unused for longer than the idle
+// limit, though its absolute expiry is hours away, and a request inside the limit
+// keeps working. Through the real route, so the lookup the middleware runs is the
+// one under test.
+func TestIdleSessionIsRefusedAtTheAdminRoute(t *testing.T) {
+	s := newSecureShop(t)
+	token, _, err := s.users.IssueSession(t.Context(), s.owner.ID, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+	cookie := &http.Cookie{Name: "__Secure-admin_session", Value: token}
+	// created_at is moved back as well: activity before creation counts as creation.
+	setSeen := func(ago time.Duration) {
+		t.Helper()
+		sum := sha256.Sum256([]byte(token))
+		tag, err := s.pool.Exec(t.Context(),
+			`UPDATE admin_sessions SET last_seen = now() - make_interval(secs => $2),
+			   created_at = now() - interval '4 hours', expires_at = now() + interval '20 hours'
+			 WHERE token_hash = $1`,
+			sum[:], ago.Seconds())
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("set last_seen: %v (rows %d)", err, tag.RowsAffected())
+		}
+	}
+	setSeen(auth.SessionIdle - 5*time.Minute)
+	if w := s.send(t, http.MethodGet, "/admin/products", nil, cookie); w.Code != http.StatusOK {
+		t.Fatalf("session idle for just under the limit = %d, want 200", w.Code)
+	}
+	setSeen(auth.SessionIdle + 5*time.Minute)
+	if w := s.send(t, http.MethodGet, "/admin/products", nil, cookie); w.Code != http.StatusSeeOther {
+		t.Errorf("session idle past the limit = %d, want a redirect to sign in", w.Code)
 	}
 }

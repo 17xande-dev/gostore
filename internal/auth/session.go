@@ -27,6 +27,7 @@ import (
 
 	"github.com/17xande-dev/gostore/internal/db/gen"
 	"github.com/17xande-dev/websec/cookie"
+	websession "github.com/17xande-dev/websec/session"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -41,6 +42,18 @@ const CookieName = "admin_session"
 // would make the browser drop the cookie.
 func NewSessionCookie(insecure bool) (*cookie.Cookie, error) {
 	return cookie.New(cookie.Config{Name: CookieName, Path: "/admin", Insecure: insecure})
+}
+
+// SessionIdle is how long a session may go unused before it ends. The absolute
+// limit is SESSION_TTL_HOURS, passed to IssueSession and stored as the row's
+// expires_at.
+const SessionIdle = 2 * time.Hour
+
+// LifetimeFor is the session policy for an absolute limit: SessionIdle, but never
+// longer than the absolute limit itself (a SESSION_TTL_HOURS of 1 leaves nothing
+// for an idle limit to do).
+func LifetimeFor(absolute time.Duration) websession.Lifetime {
+	return websession.Lifetime{Idle: min(SessionIdle, absolute), Absolute: absolute}
 }
 
 // TokenBytes is how much randomness a session token carries. 32 bytes is the
@@ -95,8 +108,10 @@ func (s *Store) IssueSession(ctx context.Context, userID string, ttl time.Durati
 // is equally not signed in and telling them apart would only invite a caller to
 // treat one of them as nearly authenticated.
 //
-// Expiry is enforced in the query's own predicate rather than by comparing
-// ExpiresAt here, so a caller cannot forget to; the periodic sweep that deletes
+// The absolute limit is enforced in the query's own predicate rather than by
+// comparing ExpiresAt here, so a caller cannot forget to; the idle limit is
+// judged here, and a live session has its last-seen time advanced (at most once
+// a minute); the periodic sweep that deletes
 // expired rows is housekeeping and explicitly not what makes this correct.
 func (s *Store) Session(ctx context.Context, token string) (Session, User, error) {
 	// A short-circuit, not an optimisation: without it an empty cookie would
@@ -117,6 +132,22 @@ func (s *Store) Session(ctx context.Context, token string) (Session, User, error
 		UserID:    row.AdminSession.UserID,
 		CreatedAt: row.AdminSession.CreatedAt,
 		ExpiresAt: row.AdminSession.ExpiresAt,
+	}
+	// The absolute limit is the one this row was issued with (its stored expiry),
+	// not today's SESSION_TTL_HOURS; the idle limit is the policy's. Both are
+	// judged at the database's clock, the one the expiry predicate used.
+	lifetime := LifetimeFor(sess.ExpiresAt.Sub(sess.CreatedAt))
+	now := row.DbNow
+	if lifetime.Expired(sess.CreatedAt, row.AdminSession.LastSeen, now) {
+		return Session{}, User{}, ErrNotFound
+	}
+	if websession.NeedsTouch(row.AdminSession.LastSeen, now) {
+		// The statement repeats the throttle, so concurrent requests write once.
+		if _, err := s.q.TouchAdminSession(ctx, gen.TouchAdminSessionParams{
+			Now: now, TokenHash: hashToken(token), StaleBefore: now.Add(-websession.TouchEvery),
+		}); err != nil {
+			return Session{}, User{}, translate(fmt.Errorf("auth: touch session: %w", err))
+		}
 	}
 	return sess, userOf(row.AdminUser), nil
 }

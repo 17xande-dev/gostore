@@ -117,12 +117,25 @@ VALUES ($1, $2, $3);
 -- rows is housekeeping against unbounded growth and is explicitly not what makes
 -- this correct — between two sweeps the table is full of expired sessions, and a
 -- lookup that returned them would authenticate every one.
+--
+-- db_now is the database's clock for this statement. The idle rule and the touch
+-- throttle in Go are evaluated against it, not against the app server's clock, so
+-- the expiry predicate below and the idle limit cannot disagree about "now".
 -- name: GetAdminSession :one
-SELECT sqlc.embed(s), sqlc.embed(u)
+SELECT sqlc.embed(s), sqlc.embed(u), now()::timestamptz AS db_now
 FROM admin_sessions s
 JOIN admin_users u ON u.id = s.user_id
 WHERE s.token_hash = $1
   AND s.expires_at > now();
+
+-- The throttled last-seen write. @now is the db_now the caller read, so the
+-- predicate and the update use one instant. A last_seen in the future (the clock
+-- stepped back) is rewritten too, so a stored future value extends a session by at
+-- most one request.
+-- name: TouchAdminSession :execrows
+UPDATE admin_sessions SET last_seen = @now
+WHERE token_hash = @token_hash
+  AND (last_seen <= @stale_before OR last_seen > @now);
 
 -- name: DeleteAdminSession :exec
 DELETE FROM admin_sessions WHERE token_hash = $1;
@@ -133,9 +146,12 @@ DELETE FROM admin_sessions WHERE token_hash = $1;
 DELETE FROM admin_sessions WHERE user_id = $1;
 
 -- Housekeeping only: expiry is enforced on read, so this exists to stop the table
--- growing without bound rather than to make anything correct.
+-- growing without bound rather than to make anything correct. It removes sessions
+-- past the absolute limit and sessions idle for longer than idle_seconds.
 -- name: DeleteExpiredAdminSessions :execrows
-DELETE FROM admin_sessions WHERE expires_at < now();
+DELETE FROM admin_sessions
+WHERE expires_at < now()
+   OR last_seen < now() - make_interval(secs => sqlc.arg(idle_seconds)::float8);
 
 -- name: CreateSetupToken :execrows
 INSERT INTO admin_setup (id, token_hash) VALUES (TRUE, $1)
