@@ -268,3 +268,30 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 		t.Fatalf("signed-in upload with a bad CSRF token: status %d; want 403 with no upload", w.Code)
 	}
 }
+
+// An anonymous caller who holds a CSRF cookie (any page issues one) and streams
+// a multipart body to the image route must be refused 401 before the kit reads
+// any of it: the kit's form parse would otherwise buffer up to the image limit
+// in memory for someone who is not signed in.
+func TestAnonymousStreamedImageUploadIsRefusedWithoutReading(t *testing.T) {
+	s, p := uploadShop(t) // signed in, so the cookie jar holds a CSRF cookie
+	path := s.srv.URL + "/admin/products/" + p.ID + "/image"
+	for _, ct := range []string{"multipart/form-data; boundary=x", "Multipart/Form-Data; boundary=x"} {
+		body := &bodyProbe{}
+		r := httptest.NewRequest(http.MethodPost, path, body)
+		r.ContentLength = -1 // streamed: the size cannot be known without reading
+		r.Header.Set("Content-Type", ct)
+		r.Header.Set("Origin", s.srv.URL)
+		for _, c := range s.srv.Client().Jar.Cookies(r.URL) {
+			if c.Name != s.handler.session.Name() { // anonymous: keep the CSRF cookie only
+				r.AddCookie(c)
+			}
+		}
+		w := httptest.NewRecorder()
+		s.srv.Config.Handler.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "Sign in required.") || body.calls != 0 {
+			t.Errorf("%s: status %d body %q, reads %d; want 401 \"Sign in required.\", 0 reads",
+				ct, w.Code, w.Body.String(), body.calls)
+		}
+	}
+}
