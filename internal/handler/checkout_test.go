@@ -376,14 +376,14 @@ func TestCheckout_CartPageOffersItOnlyWhenBuyable(t *testing.T) {
 	}
 }
 
-// cartTokenOf reads the cookie the browser sends to a read-only cart page.
-// The cookie is scoped to /cart, so webtest.Cookie cannot see it at the root.
+// cartTokenOf reads the cart cookie from the browser's jar. The cookie is scoped
+// to /cart, so Client.Cookie (site root) cannot see it; CookieAt asks the jar for
+// that path without sending a request.
 func cartTokenOf(t *testing.T, srv *testServer) string {
 	t.Helper()
 
-	res := srv.browser.With(t).Get("/cart/status")
-	if c, err := res.Request.Cookie(CartCookieName); err == nil {
-		return c.Value
+	if v, ok := srv.browser.With(t).CookieAt("/cart", CartCookieName); ok {
+		return v
 	}
 	t.Fatal("no cart cookie in the jar")
 	return ""
