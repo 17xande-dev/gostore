@@ -26,9 +26,11 @@ secrets; `secretKeys` in `internal/config` is the list — `KEY_FILE` names a
 file whose contents are the value. That keeps it out of the process
 environment, which `docker inspect` shows, and lets a deployment mount it as
 a Compose secret or a Kubernetes one, or render it from a secrets manager.
-Setting both `KEY` and `KEY_FILE` is refused at boot, and so is a file that
-cannot be read. A trailing newline is stripped, so a file written by
-`echo` or `pass show` works as it is.
+Setting both `KEY` and `KEY_FILE` is refused at boot. The file must be readable,
+regular, and at most 64 KiB. All trailing carriage returns (CR) and line feeds
+(LF) are stripped, so extra line endings do not become part of the secret.
+Everything else, including trailing spaces, is preserved. A file that is empty
+after stripping is refused.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
