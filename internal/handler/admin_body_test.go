@@ -49,7 +49,7 @@ func TestLoginCapsDeclaredAndStreamedForms(t *testing.T) {
 	const limit = 256 << 10
 	s := newStore(t)
 	token := csrfToken(t, s.srv)
-	tokenCookie, ok := s.srv.browser.With(t).Cookie(webtest.TokenField)
+	tokenCookie, ok := s.srv.browser.With(t).Cookie(s.handler.csrf.CookieName())
 	if !ok {
 		t.Fatal("login form did not set a CSRF cookie")
 	}
@@ -66,7 +66,7 @@ func TestLoginCapsDeclaredAndStreamedForms(t *testing.T) {
 		}
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("Origin", s.srv.URL)
-		r.AddCookie(&http.Cookie{Name: webtest.TokenField, Value: tokenCookie})
+		r.AddCookie(&http.Cookie{Name: s.handler.csrf.CookieName(), Value: tokenCookie})
 		w := httptest.NewRecorder()
 		s.srv.Config.Handler.ServeHTTP(w, r)
 		maxRead := int64(limit + (64 << 10))
@@ -219,11 +219,11 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 		return w, body.calls
 	}
 	_ = csrfToken(t, d.srv)
-	tokenCookie, ok := d.srv.browser.With(t).Cookie(webtest.TokenField)
+	tokenCookie, ok := d.srv.browser.With(t).Cookie(d.handler.csrf.CookieName())
 	if !ok {
 		t.Fatal("login form did not set a CSRF cookie")
 	}
-	anonymous := []*http.Cookie{{Name: webtest.TokenField, Value: tokenCookie}}
+	anonymous := []*http.Cookie{{Name: d.handler.csrf.CookieName(), Value: tokenCookie}}
 	if w, reads := probe(path, true, true, anonymous); w.Code != http.StatusUnauthorized || w.Header().Get("HX-Refresh") != "true" || reads != 0 {
 		t.Errorf("anonymous htmx upload: status %d, headers %v, %d reads", w.Code, w.Header(), reads)
 	}

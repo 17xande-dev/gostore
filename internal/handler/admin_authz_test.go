@@ -29,7 +29,7 @@ func TestAdminRoutes_EveryProtectedRouteRefusesAnonymous(t *testing.T) {
 		Routes: webtest.Routes(t, patterns, map[string]string{
 			"id": "x", "fileID": "x", "variantID": "x", "entitlementID": "x",
 		}),
-		Min:       25,
+		Min:       32,
 		Client:    func() *webtest.Client { return webtest.NewServer(t, s.srv.Server, browserFormHeaders) },
 		TokenPage: "/admin/login", // Exercise the session check, not nosurf's own refusal.
 		Form:      url.Values{"title": {"Sneaky"}},
