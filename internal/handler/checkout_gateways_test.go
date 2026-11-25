@@ -198,11 +198,7 @@ func TestCheckoutStatus_ReportsTheOrderAndRedirectsWhenPaid(t *testing.T) {
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("HX-Request", "true")
-	res, err = s.srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("GET /cart/checkout/status: %v", err)
-	}
-	defer res.Body.Close()
+	res, _ = do(t, s.srv, req)
 
 	if got := res.Header.Get("HX-Redirect"); got != "/cart/checkout/success?ref="+order.ID {
 		t.Errorf("HX-Redirect = %q, want the success page once the money is in", got)

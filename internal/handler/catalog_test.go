@@ -18,12 +18,13 @@ import (
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 // newStorefront mirrors how main.go mounts the public routes: security headers
 // around everything, CORS from config on the catalog itself, and no session or
 // CSRF layer, because nothing here changes state.
-func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httptest.Server, *catalog.Store) {
+func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*testServer, *catalog.Store) {
 	t.Helper()
 
 	pool := dbtest.Pool(t)
@@ -53,7 +54,7 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 	})))
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
-	return srv, store
+	return &testServer{srv, webtest.NewServer(t, srv)}, store
 }
 
 // stock puts one buyable product in the catalog, plus things that must not
@@ -343,19 +344,19 @@ func TestStorefront_ServesVendoredHTMX(t *testing.T) {
 }
 
 // getWith returns the body of a GET carrying extra headers.
-func getWith(t *testing.T, srv *httptest.Server, path string, header http.Header) string {
+func getWith(t *testing.T, srv *testServer, path string, header http.Header) string {
 	t.Helper()
 	_, body := doGet(t, srv, path, header)
 	return body
 }
 
-func getResponse(t *testing.T, srv *httptest.Server, path string, header http.Header) *http.Response {
+func getResponse(t *testing.T, srv *testServer, path string, header http.Header) *http.Response {
 	t.Helper()
 	res, _ := doGet(t, srv, path, header)
 	return res
 }
 
-func doGet(t *testing.T, srv *httptest.Server, path string, header http.Header) (*http.Response, string) {
+func doGet(t *testing.T, srv *testServer, path string, header http.Header) (*http.Response, string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
 	if err != nil {

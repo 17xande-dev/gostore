@@ -3,7 +3,6 @@ package handler
 import (
 	"html"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -50,7 +49,7 @@ func stockCart(t *testing.T, store *catalog.Store) map[string]catalog.Variant {
 
 // shopper is a client with a cookie jar and no admin session: the cart is
 // anonymous, so nothing here signs in.
-func shopper(t *testing.T) (*httptest.Server, *catalog.Store, map[string]catalog.Variant) {
+func shopper(t *testing.T) (*testServer, *catalog.Store, map[string]catalog.Variant) {
 	t.Helper()
 	srv, store := newServer(t)
 	return srv, store, stockCart(t, store)
@@ -434,7 +433,7 @@ func TestCart_IsNotVisibleToAnotherShopper(t *testing.T) {
 	}
 }
 
-func addToCart(t *testing.T, srv *httptest.Server, variantID string, quantity int) {
+func addToCart(t *testing.T, srv *testServer, variantID string, quantity int) {
 	t.Helper()
 	res, body := post(t, srv, "/cart/items", url.Values{
 		"variant_id": {variantID},
@@ -445,7 +444,7 @@ func addToCart(t *testing.T, srv *httptest.Server, variantID string, quantity in
 	}
 }
 
-func postHTMX(t *testing.T, srv *httptest.Server, path string, form url.Values) (*http.Response, string) {
+func postHTMX(t *testing.T, srv *testServer, path string, form url.Values) (*http.Response, string) {
 	t.Helper()
 	if _, set := form["csrf_token"]; !set {
 		form.Set("csrf_token", csrfToken(t, srv))

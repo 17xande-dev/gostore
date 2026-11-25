@@ -1,11 +1,9 @@
 package handler
 
 import (
-	"html"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
@@ -26,6 +24,7 @@ import (
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/password"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/websec/webtest"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -71,7 +70,7 @@ const testBaseURL = "http://store.test"
 // out. The fakes are the point — a test can inspect both sides of every boundary
 // without a payment provider or a mail server.
 type shop struct {
-	srv     *httptest.Server
+	srv     *testServer
 	catalog *catalog.Store
 	orders  *orders.Store
 	gateway *payment.Fake
@@ -105,9 +104,14 @@ type shop struct {
 	variants map[string]catalog.Variant
 }
 
+type testServer struct {
+	*httptest.Server
+	browser *webtest.Client
+}
+
 // newServer is the narrow view, for tests that only care about the catalog and the
 // admin.
-func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
+func newServer(t *testing.T) (*testServer, *catalog.Store) {
 	t.Helper()
 	s := newStore(t)
 	return s.srv, s.catalog
@@ -221,17 +225,10 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 
 	srv.Config.Handler = mux
 	srv.Start()
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookiejar: %v", err)
-	}
-	srv.Client().Jar = jar
-	// Redirects are the assertion in several tests, so they must not be
-	// followed away.
-	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
 	return &shop{
-		srv: srv, handler: h, catalog: store, orders: orderStore, gateway: gateway,
+		srv:     &testServer{srv, webtest.NewServer(t, srv, browserFormHeaders)},
+		handler: h, catalog: store, orders: orderStore, gateway: gateway,
 		mail: mail, images: images, files: files, grants: grants,
 		users: users, pool: pool,
 	}
@@ -240,7 +237,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 // setup returns a signed-in server for the admin routes plus the catalog store
 // behind it, so a test can assert on both the response and what actually landed
 // in the database.
-func setup(t *testing.T) (*httptest.Server, *catalog.Store) {
+func setup(t *testing.T) (*testServer, *catalog.Store) {
 	t.Helper()
 
 	s := setupShop(t)
@@ -272,12 +269,12 @@ func mustAccount(t *testing.T, s *shop, email, password string, role auth.Role) 
 
 // signIn signs in as the owner newStore created. signInAs is the same thing for
 // any other account a test has made.
-func signIn(t *testing.T, srv *httptest.Server) {
+func signIn(t *testing.T, srv *testServer) {
 	t.Helper()
 	signInAs(t, srv, testEmail, testPassword)
 }
 
-func signInAs(t *testing.T, srv *httptest.Server, email, password string) {
+func signInAs(t *testing.T, srv *testServer, email, password string) {
 	t.Helper()
 
 	res, body := post(t, srv, "/admin/login", url.Values{
@@ -761,51 +758,39 @@ func TestAdminProducts_Delete(t *testing.T) {
 	}
 }
 
-func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, string) {
+func get(t *testing.T, srv *testServer, path string) (*http.Response, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
+	return responseParts(srv.browser.With(t).Get(path))
+}
+
+// browserFormHeaders preserves the browser headers for ordinary form POSTs.
+// do preserves the headers that custom requests set or intentionally omit.
+func browserFormHeaders(r *http.Request) {
+	if r.Method == http.MethodPost {
+		webtest.SecFetchSite("same-origin")(r)
+		webtest.Header("Referer", r.URL.Scheme+"://"+r.URL.Host+r.URL.RequestURI())(r)
 	}
-	return do(t, srv, req)
 }
 
 // post submits a form with a valid CSRF token, so ordinary tests exercise the
 // same path a browser takes rather than being exempted from it. Pass a
 // csrf_token explicitly — including an empty one — to control it, which is how
 // the CSRF tests themselves get a rejection.
-func post(t *testing.T, srv *httptest.Server, path string, form url.Values) (*http.Response, string) {
+func post(t *testing.T, srv *testServer, path string, form url.Values) (*http.Response, string) {
 	t.Helper()
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path,
-		strings.NewReader(withToken(t, srv, form).Encode()))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	// nosurf checks the request's origin as well as its token, via
-	// Sec-Fetch-Site, Origin or Referer — a browser sends all three on a
-	// same-origin form post, so a test that sends none is not emulating one.
-	req.Header.Set("Origin", srv.URL)
-	req.Header.Set("Referer", srv.URL+path)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	return do(t, srv, req)
+	return responseParts(srv.browser.With(t).PostForm(path, withToken(t, srv, form)))
 }
 
 // newRequest builds a request against the test server without sending it, for a
 // test that has to set a header or a cookie of its own before it goes.
-func newRequest(t *testing.T, srv *httptest.Server, method, path string, form url.Values) *http.Request {
+func newRequest(t *testing.T, srv *testServer, method, path string, form url.Values) *http.Request {
 	t.Helper()
 
 	var body io.Reader
 	if form != nil {
 		body = strings.NewReader(withToken(t, srv, form).Encode())
 	}
-	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, body)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
+	req := srv.browser.With(t).NewRequest(method, path, body)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Origin", srv.URL)
@@ -822,15 +807,15 @@ func newRequest(t *testing.T, srv *httptest.Server, method, path string, form ur
 // into it would pin the first server's token to every later request. That
 // failure looks exactly like a refused request, which is what several of these
 // tests assert, so it passes while proving nothing.
-func withToken(t *testing.T, srv *httptest.Server, form url.Values) url.Values {
+func withToken(t *testing.T, srv *testServer, form url.Values) url.Values {
 	t.Helper()
 
 	out := url.Values{}
 	for k, v := range form {
 		out[k] = slices.Clone(v)
 	}
-	if _, set := out["csrf_token"]; !set {
-		out.Set("csrf_token", csrfToken(t, srv))
+	if _, set := out[webtest.TokenField]; !set {
+		out.Set(webtest.TokenField, csrfToken(t, srv))
 	}
 	return out
 }
@@ -845,39 +830,43 @@ func withToken(t *testing.T, srv *httptest.Server, form url.Values) url.Values {
 // third, for a signed-in client — it is the one admin page every role can open,
 // including an account being forced to change its password, which is bounced
 // away from all the others.
-func csrfToken(t *testing.T, srv *httptest.Server) string {
+func csrfToken(t *testing.T, srv *testServer) string {
 	t.Helper()
+	return csrfPage(t, srv).Page().Token()
+}
 
-	res, body := get(t, srv, "/admin/login")
-	if res.StatusCode != http.StatusOK {
-		if res, body = get(t, srv, "/admin/setup"); res.StatusCode != http.StatusOK {
-			_, body = get(t, srv, accountPath)
+func csrfPage(t *testing.T, srv *testServer) *webtest.Response {
+	t.Helper()
+	c := srv.browser.With(t)
+	for _, path := range []string{"/admin/login", "/admin/setup"} {
+		if res := c.Get(path); res.Status == http.StatusOK {
+			return res
 		}
 	}
-
-	m := csrfFieldRE.FindStringSubmatch(body)
-	if m == nil {
-		t.Fatalf("no csrf_token field in the page: %s", body)
-	}
-	// The token is base64, so html/template entity-escapes any "+" in it. A
-	// browser decodes that before submitting; this has to do the same.
-	return html.UnescapeString(m[1])
+	res := c.Get(accountPath)
+	res.WantStatus(http.StatusOK)
+	return res
 }
 
 var csrfFieldRE = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
 
-func do(t *testing.T, srv *httptest.Server, req *http.Request) (*http.Response, string) {
+func do(t *testing.T, srv *testServer, req *http.Request) (*http.Response, string) {
 	t.Helper()
-	res, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)
-	}
-	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	return res, string(body)
+	res := srv.browser.With(t).Do(req, func(r *http.Request) {
+		for _, name := range []string{"Origin", "Referer", "Sec-Fetch-Site"} {
+			r.Header.Del(name)
+			for _, value := range req.Header.Values(name) {
+				r.Header.Add(name, value)
+			}
+		}
+	})
+	return responseParts(res)
+}
+
+// Keep the existing status, header and cookie assertions on their original
+// response shape while webtest owns transport and drains the body.
+func responseParts(res *webtest.Response) (*http.Response, string) {
+	return &http.Response{StatusCode: res.Status, Header: res.Header, Request: res.Request}, res.Body
 }
 
 // sell takes qty off a variant's stock the way MarkPaid does, without building an

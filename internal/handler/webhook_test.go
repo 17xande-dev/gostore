@@ -37,7 +37,7 @@ func placeOrder(t *testing.T, s *shop, sku string, quantity int) orders.Order {
 
 // callback posts a notification the way a gateway does: no session, no CSRF token,
 // no cookies at all.
-func callback(t *testing.T, srv *httptest.Server, gateway string, body []byte) *http.Response {
+func callback(t *testing.T, srv *testServer, gateway string, body []byte) *http.Response {
 	t.Helper()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -47,7 +47,7 @@ func callback(t *testing.T, srv *httptest.Server, gateway string, body []byte) *
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	// Deliberately not srv.Client(): that has the jar, and a gateway has no
+	// Deliberately not srv.browser: that has the jar, and a gateway has no
 	// cookies. Using it would hide a dependency on one.
 	res, err := (&http.Client{}).Do(req)
 	if err != nil {

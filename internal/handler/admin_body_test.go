@@ -8,18 +8,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/config"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 type bodyProbe struct {
 	io.Reader
-	calls, bytes int
+	calls int
 }
 
 func (b *bodyProbe) Read(p []byte) (int, error) {
@@ -27,14 +27,11 @@ func (b *bodyProbe) Read(p []byte) (int, error) {
 	if b.Reader == nil {
 		return 0, errors.New("request body must not be read")
 	}
-	n, err := b.Reader.Read(p)
-	b.bytes += n
-	return n, err
+	return b.Reader.Read(p)
 }
 
 func TestLoginRejectsMultipartWithoutReading(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+	checkTemp := webtest.NoTempFiles(t)
 	s := newStore(t)
 	body := &bodyProbe{}
 	r := httptest.NewRequest(http.MethodPost, s.srv.URL+"/admin/login", body)
@@ -42,12 +39,9 @@ func TestLoginRejectsMultipartWithoutReading(t *testing.T) {
 	r.Header.Set("Origin", s.srv.URL)
 	w := httptest.NewRecorder()
 	s.srv.Config.Handler.ServeHTTP(w, r)
-	entries, err := os.ReadDir(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w.Code != http.StatusUnsupportedMediaType || body.calls != 0 || len(entries) != 0 {
-		t.Errorf("multipart login: status %d, reads %d, temp files %d; want 415, 0, 0", w.Code, body.calls, len(entries))
+	checkTemp()
+	if w.Code != http.StatusUnsupportedMediaType || body.calls != 0 {
+		t.Errorf("multipart login: status %d, reads %d; want 415, 0", w.Code, body.calls)
 	}
 }
 
@@ -55,27 +49,32 @@ func TestLoginCapsDeclaredAndStreamedForms(t *testing.T) {
 	const limit = 256 << 10
 	s := newStore(t)
 	token := csrfToken(t, s.srv)
+	tokenCookie, ok := s.srv.browser.With(t).Cookie(webtest.TokenField)
+	if !ok {
+		t.Fatal("login form did not set a CSRF cookie")
+	}
 	for _, declared := range []bool{true, false} {
-		body := &bodyProbe{Reader: strings.NewReader(url.Values{
+		form := url.Values{
 			"csrf_token": {token}, "email": {testEmail}, "password": {testPassword},
-		}.Encode() + "&padding=" + strings.Repeat("x", 4<<20))}
+		}
+		body := webtest.NewCountingReader(io.MultiReader(
+			strings.NewReader(form.Encode()+"&padding="), webtest.Filler(4<<20),
+		))
 		r := httptest.NewRequest(http.MethodPost, s.srv.URL+"/admin/login", body)
 		if declared {
 			r.ContentLength = limit + 1
 		}
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("Origin", s.srv.URL)
-		for _, c := range s.srv.Client().Jar.Cookies(r.URL) {
-			r.AddCookie(c)
-		}
+		r.AddCookie(&http.Cookie{Name: webtest.TokenField, Value: tokenCookie})
 		w := httptest.NewRecorder()
 		s.srv.Config.Handler.ServeHTTP(w, r)
-		maxRead := limit + (64 << 10)
+		maxRead := int64(limit + (64 << 10))
 		if declared {
 			maxRead = 0
 		}
-		if w.Code != http.StatusRequestEntityTooLarge || body.bytes > maxRead {
-			t.Errorf("declared=%t: status %d, read %d bytes; want 413, at most %d bytes", declared, w.Code, body.bytes, maxRead)
+		if w.Code != http.StatusRequestEntityTooLarge || body.N() > maxRead {
+			t.Errorf("declared=%t: status %d, read %d bytes; want 413, at most %d bytes", declared, w.Code, body.N(), maxRead)
 		}
 	}
 	if n, err := s.users.CountSessionsForUser(t.Context(), s.owner.ID); err != nil || n != 0 {
@@ -108,8 +107,7 @@ func TestProductUploadBodyLimits(t *testing.T) {
 	})
 	t.Run("download", func(t *testing.T) {
 		const limit = 2 << 20 // Exercise temp-file cleanup without a 2 GiB fixture.
-		tmp := t.TempDir()
-		t.Setenv("TMPDIR", tmp)
+		checkTemp := webtest.NoTempFiles(t)
 		d := newDigitalShop(t, func(c *config.Config) { c.DownloadMaxBytes = limit })
 		signIn(t, d.srv)
 		filesBefore := len(d.files.Keys())
@@ -125,6 +123,7 @@ func TestProductUploadBodyLimits(t *testing.T) {
 		}
 		// The higher allowance is only for multipart bodies that can spool: any
 		// other media type on the upload routes keeps the default form cap.
+		signedInCookies := csrfPage(t, d.srv).Request.Cookies()
 		for _, route := range []string{"/files", "/image"} {
 			for _, ct := range []string{"application/x-www-form-urlencoded", "application/json", "text/plain"} {
 				form := &bodyProbe{}
@@ -132,7 +131,7 @@ func TestProductUploadBodyLimits(t *testing.T) {
 				r.ContentLength = defaultFormLimit + 1
 				r.Header.Set("Content-Type", ct)
 				r.Header.Set("Origin", d.srv.URL)
-				for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
+				for _, c := range signedInCookies {
 					r.AddCookie(c)
 				}
 				w := httptest.NewRecorder()
@@ -142,9 +141,7 @@ func TestProductUploadBodyLimits(t *testing.T) {
 				}
 			}
 		}
-		if entries, err := os.ReadDir(tmp); err != nil || len(entries) != 0 {
-			t.Fatalf("upload left temp files: %v, %v", entries, err)
-		}
+		checkTemp()
 	})
 	t.Run("default download cap", func(t *testing.T) {
 		d := newDigitalShop(t)
@@ -166,7 +163,8 @@ func checkOversizedUpload(t *testing.T, s *shop, path, field string, size int64,
 	t.Helper()
 	var data bytes.Buffer
 	m := multipart.NewWriter(&data)
-	if err := m.WriteField("csrf_token", csrfToken(t, s.srv)); err != nil {
+	form := csrfPage(t, s.srv)
+	if err := m.WriteField("csrf_token", form.Page().Token()); err != nil {
 		t.Fatal(err)
 	}
 	part, err := m.CreateFormFile(field, "oversized.bin")
@@ -185,7 +183,7 @@ func checkOversizedUpload(t *testing.T, s *shop, path, field string, size int64,
 	r.Header.Set("Content-Type", m.FormDataContentType())
 	r.Header.Set("Origin", s.srv.URL)
 	if signed {
-		for _, c := range s.srv.Client().Jar.Cookies(r.URL) {
+		for _, c := range form.Request.Cookies() {
 			r.AddCookie(c)
 		}
 	}
@@ -202,7 +200,7 @@ func checkOversizedUpload(t *testing.T, s *shop, path, field string, size int64,
 func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 	d := newDigitalShop(t)
 	path := "/admin/products/" + d.product.ID + "/files"
-	probe := func(path string, htmx bool, includeCSRF bool) (*httptest.ResponseRecorder, int) {
+	probe := func(path string, htmx bool, includeCSRF bool, cookies []*http.Cookie) (*httptest.ResponseRecorder, int) {
 		t.Helper()
 		body := &bodyProbe{}
 		r := httptest.NewRequest(http.MethodPost, d.srv.URL+path, body)
@@ -211,7 +209,7 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 		if htmx {
 			r.Header.Set("HX-Request", "true")
 		}
-		for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
+		for _, c := range cookies {
 			if c.Name != d.handler.csrf.CookieName() || includeCSRF {
 				r.AddCookie(c)
 			}
@@ -221,22 +219,28 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 		return w, body.calls
 	}
 	_ = csrfToken(t, d.srv)
-	if w, reads := probe(path, true, true); w.Code != http.StatusUnauthorized || w.Header().Get("HX-Refresh") != "true" || reads != 0 {
+	tokenCookie, ok := d.srv.browser.With(t).Cookie(webtest.TokenField)
+	if !ok {
+		t.Fatal("login form did not set a CSRF cookie")
+	}
+	anonymous := []*http.Cookie{{Name: webtest.TokenField, Value: tokenCookie}}
+	if w, reads := probe(path, true, true, anonymous); w.Code != http.StatusUnauthorized || w.Header().Get("HX-Refresh") != "true" || reads != 0 {
 		t.Errorf("anonymous htmx upload: status %d, headers %v, %d reads", w.Code, w.Header(), reads)
 	}
 	for _, route := range []string{path, "/admin/products/not-found/files"} {
-		if w, reads := probe(route, false, true); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/login" || reads != 0 {
+		if w, reads := probe(route, false, true, anonymous); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/login" || reads != 0 {
 			t.Errorf("anonymous upload to %s: status %d, headers %v, %d reads", route, w.Code, w.Header(), reads)
 		}
 	}
 	const viewerEmail = "viewer@example.com"
 	mustAccount(t, d.shop, viewerEmail, testPassword, auth.RoleViewer)
 	signInAs(t, d.srv, viewerEmail, testPassword)
-	if w, reads := probe(path, false, true); w.Code != http.StatusForbidden || reads != 0 {
+	if w, reads := probe(path, false, true, csrfPage(t, d.srv).Request.Cookies()); w.Code != http.StatusForbidden || reads != 0 {
 		t.Errorf("viewer upload: status %d, %d reads", w.Code, reads)
 	}
 	signIn(t, d.srv)
-	if w, reads := probe(path, false, false); w.Code != http.StatusForbidden || reads != 0 {
+	signedInCookies := csrfPage(t, d.srv).Request.Cookies()
+	if w, reads := probe(path, false, false, signedInCookies); w.Code != http.StatusForbidden || reads != 0 {
 		t.Errorf("signed-in upload without CSRF cookie: status %d, %d reads", w.Code, reads)
 	}
 
@@ -258,7 +262,7 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, d.srv.URL+path, &payload)
 	r.Header.Set("Content-Type", m.FormDataContentType())
 	r.Header.Set("Origin", d.srv.URL)
-	for _, c := range d.srv.Client().Jar.Cookies(r.URL) {
+	for _, c := range signedInCookies {
 		r.AddCookie(c)
 	}
 	w := httptest.NewRecorder()
@@ -276,13 +280,14 @@ func TestDownloadUploadGateRefusesBeforeReading(t *testing.T) {
 func TestAnonymousStreamedImageUploadIsRefusedWithoutReading(t *testing.T) {
 	s, p := uploadShop(t) // signed in, so the cookie jar holds a CSRF cookie
 	path := s.srv.URL + "/admin/products/" + p.ID + "/image"
+	signedInCookies := csrfPage(t, s.srv).Request.Cookies()
 	for _, ct := range []string{"multipart/form-data; boundary=x", "Multipart/Form-Data; boundary=x"} {
 		body := &bodyProbe{}
 		r := httptest.NewRequest(http.MethodPost, path, body)
 		r.ContentLength = -1 // streamed: the size cannot be known without reading
 		r.Header.Set("Content-Type", ct)
 		r.Header.Set("Origin", s.srv.URL)
-		for _, c := range s.srv.Client().Jar.Cookies(r.URL) {
+		for _, c := range signedInCookies {
 			if c.Name != s.handler.session.Name() { // anonymous: keep the CSRF cookie only
 				r.AddCookie(c)
 			}

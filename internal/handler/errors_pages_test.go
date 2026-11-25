@@ -19,6 +19,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/payment"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 // The invariant these tests defend: an error response either fills the target it
@@ -285,7 +286,7 @@ func TestRequestID_AdoptsAnIncomingID(t *testing.T) {
 //
 // Request IDs are wired here as main.go wires them, because the reference on the
 // error page is half of what these tests are about.
-func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
+func brokenStorefront(t *testing.T, cfg config.Config) *testServer {
 	t.Helper()
 
 	pool := dbtest.Pool(t)
@@ -313,5 +314,5 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 	// Closed after the server is built, so construction succeeds and only the
 	// queries fail — which is what a database that goes away mid-life looks like.
 	pool.Close()
-	return srv
+	return &testServer{srv, webtest.NewServer(t, srv)}
 }

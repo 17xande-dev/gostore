@@ -6,7 +6,6 @@ import (
 	"errors"
 	"mime/multipart"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"slices"
@@ -21,17 +20,14 @@ import (
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/payment"
 	"github.com/17xande-dev/ratelimit/clientip"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 // newSession gives the server's client a fresh cookie jar, which is what makes a
 // test "a different person": new cart, new order, and no admin session.
-func newSession(t *testing.T, srv *httptest.Server) {
+func newSession(t *testing.T, srv *testServer) {
 	t.Helper()
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookiejar: %v", err)
-	}
-	srv.Client().Jar = jar
+	srv.browser = webtest.NewServer(t, srv.Server, browserFormHeaders)
 }
 
 // digitalShop builds the case the feature was designed around: a conference

@@ -3,7 +3,6 @@ package handler
 import (
 	"crypto/rand"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -377,19 +376,14 @@ func TestCheckout_CartPageOffersItOnlyWhenBuyable(t *testing.T) {
 	}
 }
 
-// cartTokenOf reads the cart token out of the client's jar, which is how a test
-// asks the store about the cart the requests have been building up.
-func cartTokenOf(t *testing.T, srv *httptest.Server) string {
+// cartTokenOf reads the cookie the browser sends to a read-only cart page.
+// The cookie is scoped to /cart, so webtest.Cookie cannot see it at the root.
+func cartTokenOf(t *testing.T, srv *testServer) string {
 	t.Helper()
 
-	u, err := url.Parse(srv.URL + "/cart")
-	if err != nil {
-		t.Fatalf("parse URL: %v", err)
-	}
-	for _, c := range srv.Client().Jar.Cookies(u) {
-		if c.Name == CartCookieName {
-			return c.Value
-		}
+	res := srv.browser.With(t).Get("/cart/status")
+	if c, err := res.Request.Cookie(CartCookieName); err == nil {
+		return c.Value
 	}
 	t.Fatal("no cart cookie in the jar")
 	return ""
