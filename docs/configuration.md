@@ -22,15 +22,16 @@ root can read a running container's environment regardless.
 **Any credential can instead arrive as a file**, for a deployment that wants
 more than that. For each of the secrets the server takes —
 `DATABASE_URL`, `SETUP_TOKEN`, `EMAIL_QUEUE_KEY`, the payment keys, the mail and storage
-secrets; `secretKeys` in `internal/config` is the list — `KEY_FILE` names a
-file whose contents are the value. That keeps it out of the process
+secrets (the `env.Secret` fields of `Config`, read in `internal/config`) —
+`KEY_FILE` names a file whose contents are the value. That keeps it out of the process
 environment, which `docker inspect` shows, and lets a deployment mount it as
 a Compose secret or a Kubernetes one, or render it from a secrets manager.
 Setting both `KEY` and `KEY_FILE` is refused at boot. The file must be readable,
 regular, and at most 64 KiB. All trailing carriage returns (CR) and line feeds
 (LF) are stripped, so extra line endings do not become part of the secret.
 Everything else, including trailing spaces, is preserved. A file that is empty
-after stripping is refused.
+after stripping is refused. Errors name the `KEY_FILE` variable and never the
+path or the contents, since a path can itself hold a pasted credential.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
