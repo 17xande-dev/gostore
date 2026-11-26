@@ -58,7 +58,7 @@ func openDownloads(cfg config.Config) (blob.Downloads, error) {
 			Endpoint:       cfg.Downloads.Endpoint,
 			Bucket:         cfg.Downloads.Bucket,
 			AccessKey:      cfg.Downloads.AccessKey,
-			SecretKey:      cfg.Downloads.SecretKey,
+			SecretKey:      cfg.Downloads.SecretKey.Reveal(),
 			Region:         cfg.Downloads.Region,
 			UseTLS:         cfg.Downloads.UseTLS,
 			PublicEndpoint: cfg.Downloads.PublicEndpoint,
