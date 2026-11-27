@@ -35,7 +35,7 @@ path or the contents, since a path can itself hold a pasted credential.
 
 | Var | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | **yes** | — | Postgres connection string |
+| `DATABASE_URL` | **yes** | — | Postgres connection string. The pool needs at least two connections (the default has more): migrations hold one for a session lock while they use another |
 | `SETUP_TOKEN` | no | generated | The one-time token that claims the first account. 32+ characters. Generated and logged on first boot if unset |
 | `SESSION_TTL_HOURS` | no | `24` | The absolute limit on a sign-in. A session also ends after 2 hours without a request |
 | `PAYFAST_MERCHANT_ID` | one gateway² | — | From the PayFast dashboard. Its presence switches PayFast on |
