@@ -241,7 +241,7 @@ func (s *Server) listCategories(ctx context.Context, _ auth.User, _ none) (categ
 
 type orderSearch struct {
 	Search string `json:"search,omitempty" jsonschema:"text to match in the order id, customer name or email"`
-	Filter string `json:"filter,omitempty" jsonschema:"oversold, email (an email not yet delivered) or unfulfilled (paid, physical, not shipped)"`
+	Filter string `json:"filter,omitempty" jsonschema:"oversold, email (a paid order whose confirmation has not been emailed yet) or unfulfilled (paid, physical, not shipped)"`
 	Page   int    `json:"page,omitempty" jsonschema:"1-based; defaults to 1"`
 }
 

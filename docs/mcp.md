@@ -40,8 +40,8 @@ TRK123".
 | `list_products` | read | Every product with its variants |
 | `get_product` | read | One product: variants, categories, image URL, files, and its admin page |
 | `list_categories` | read | Every category, in display order |
-| `search_orders` | read | Orders newest first, 50 a page; text search and the `oversold` / `email` / `unfulfilled` filters |
-| `get_order` | read | One order: items, customer, payment facts, fulfilment, download entitlements, email delivery |
+| `search_orders` | read | Orders newest first, 50 a page; text search and the `oversold` / `email` / `unfulfilled` filters; `email` is paid orders whose confirmation has not been emailed yet |
+| `get_order` | read | One order: items, customer, payment facts, fulfilment, download entitlements, and each email's `state` (pending, running, done or dead), attempts, last error and, once done, `sent_at` |
 | `create_product` | catalog.write | A new product; a blank slug is derived from the title |
 | `update_product` | catalog.write | Changes only the fields given |
 | `delete_product` | catalog.write | Refused once a product has been ordered — deactivate it instead |
@@ -51,7 +51,7 @@ TRK123".
 | `create_category` / `update_category` | catalog.write | |
 | `delete_category` | catalog.write | Removes it from its products; the products are untouched |
 | `set_fulfillment` | orders.write | Shipped or not, tracking reference, internal note — paid orders with physical items only |
-| `retry_order_email` | orders.write | Sends an order's undelivered emails again |
+| `retry_order_email` | orders.write | Revives an order's dead emails and makes pending ones due now; refuses when none is undelivered. Delivered emails are not resent |
 | `revoke_entitlement` / `restore_entitlement` | orders.write | Stops, or restores, a buyer's download link |
 
 "Needs" is the permission from [Roles](admin.md#roles). Only `owner` and `admin` accounts may

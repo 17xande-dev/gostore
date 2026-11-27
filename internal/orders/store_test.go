@@ -587,3 +587,50 @@ func TestCustomer_NameSplitForGateways(t *testing.T) {
 		}
 	}
 }
+
+// The "pending email delivery" filter means a paid order whose confirmation has
+// not been marked emailed. The flag is set in the same transaction that
+// completes the job, so it cannot disagree with the queue.
+func TestSearch_EmailFilterListsPaidOrdersNotYetEmailed(t *testing.T) {
+	s := newShop(t)
+	ctx := t.Context()
+	place := func() Order {
+		t.Helper()
+		cartID, err := s.carts.Create(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.carts.Add(ctx, cartID, s.variants["TEE-S"].ID, 1); err != nil {
+			t.Fatal(err)
+		}
+		o, err := s.orders.CreateFromCart(ctx, cartID, testCustomer(), "ZAR", "fake")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	unpaid, waiting, emailed := place(), place(), place()
+	for _, o := range []Order{waiting, emailed} {
+		pay := paidNotification("299.00")
+		pay.Ref = "ref-" + o.ID // the gateway reference is unique per order
+		if _, err := s.orders.MarkPaid(ctx, o.ID, pay); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.orders.MarkEmailed(ctx, emailed.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := s.orders.Search(ctx, "", "email", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != waiting.ID {
+		var ids []string
+		for _, o := range got {
+			ids = append(ids, o.ID)
+		}
+		t.Fatalf("email filter listed %v, want only the paid order not yet emailed (%s); unpaid is %s, emailed is %s",
+			ids, waiting.ID, unpaid.ID, emailed.ID)
+	}
+}
