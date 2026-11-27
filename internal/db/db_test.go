@@ -227,6 +227,48 @@ func TestOutboxStatus_RefusesAHistoryNewerThanTheBuild(t *testing.T) {
 	}
 }
 
+// previousSchema is the application's migrations before email_jobs was dropped.
+func previousSchema(t *testing.T) fstest.MapFS {
+	t.Helper()
+	files := fstest.MapFS{}
+	for _, name := range []string{"0001_init.sql", "0002_admin_api_tokens.sql", "0003_admin_image_uploads.sql", "0004_admin_sessions_last_seen.sql"} {
+		b, err := os.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files["m/"+name] = &fstest.MapFile{Data: b}
+	}
+	return files
+}
+
+func TestMigrate_DropsLegacyQueueWithoutLosingOrders(t *testing.T) {
+	pool := dbtest.EmptyPool(t)
+	ctx, log := t.Context(), slog.New(slog.DiscardHandler)
+	if err := db.MigrateFS(ctx, pool, previousSchema(t), "m", log); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		WITH o AS (
+			INSERT INTO orders (id, customer_name, customer_email, total_cents, currency, status)
+			VALUES (gen_random_uuid(), 'Buyer', 'buyer@example.com', 100, 'ZAR', 'paid') RETURNING id
+		)
+		INSERT INTO email_jobs (order_id, kind, payload) SELECT id, 'confirmation', '\x01' FROM o
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, pool, log); err != nil {
+		t.Fatal(err)
+	}
+	var legacy bool
+	var orders, jobs int
+	err := pool.QueryRow(ctx, `SELECT to_regclass('email_jobs') IS NOT NULL,
+		(SELECT count(*) FROM orders WHERE customer_email = 'buyer@example.com'), (SELECT count(*) FROM outbox_jobs)`).
+		Scan(&legacy, &orders, &jobs)
+	if err != nil || legacy || orders != 1 || jobs != 0 {
+		t.Fatalf("legacy table = %v, orders = %d, imported jobs = %d, error = %v", legacy, orders, jobs, err)
+	}
+}
+
 func TestMigrate_BaselineDownAndUp(t *testing.T) {
 	pool := dbtest.Pool(t)
 	adapter := stdlib.OpenDBFromPool(pool)
