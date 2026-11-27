@@ -12,7 +12,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
+	"github.com/17xande-dev/outbox"
 )
 
 // Payment facts stay read-only. Fulfillment, download access and email delivery
@@ -26,6 +26,9 @@ type ordersPage struct {
 	Number   int
 	Previous string
 	Next     string
+	// DeadMail is how many emails gave up; the page links to them when it is
+	// not zero, because nobody else will tell an operator a receipt never went.
+	DeadMail int
 }
 
 type orderPage struct {
@@ -34,7 +37,7 @@ type orderPage struct {
 	// Entitlements are the download grants this order created, with a revoke
 	// button each. Empty for an order of physical goods only.
 	Entitlements  []downloads.OrderEntitlement
-	Emails        []outbox.Status
+	Emails        []outbox.Info
 	PendingEmails bool
 }
 
@@ -72,6 +75,15 @@ func (h *Handler) adminOrderList(w http.ResponseWriter, r *http.Request) {
 	}
 	if next {
 		data.Next = link(number + 1)
+	}
+	// The count is a courtesy: a queue that cannot be read must not take the
+	// order list down with it.
+	if h.outbox != nil {
+		if stats, err := h.outbox.Stats(r.Context()); err != nil {
+			h.logger(r).Error("counting dead emails failed", "error", mailQueueError("count emails", err))
+		} else {
+			data.DeadMail = stats.Dead
+		}
 	}
 	h.render(w, r, http.StatusOK, "admin_orders", data)
 }
@@ -126,8 +138,10 @@ func (h *Handler) adminOrderEmailRetry(w http.ResponseWriter, r *http.Request) {
 		h.orderError(w, r, err)
 		return
 	}
-	if err := h.outbox.Retry(r.Context(), order.ID); err != nil {
-		h.serverError(w, r, err)
+	// Dead jobs get a fresh set of attempts and pending ones are made due now;
+	// the library wakes the worker itself.
+	if _, err := h.outbox.RetrySubject(r.Context(), orders.MailSubject(order.ID), h.actorID(r)); err != nil {
+		h.serverError(w, r, mailQueueError("retry order emails", err))
 		return
 	}
 	h.logger(r).Info("queued order emails for retry", "order", order.ID)

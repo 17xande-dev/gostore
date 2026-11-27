@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/17xande-dev/gostore/internal/cart"
-	"github.com/17xande-dev/gostore/internal/outbox"
+	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/outbox"
+	"github.com/17xande-dev/outbox/outboxtest"
+	"github.com/17xande-dev/outbox/pgxstore"
 	"github.com/17xande-dev/payment"
 )
 
@@ -107,7 +110,8 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 		t.Fatal("HTTP callback waited for email")
 	}
 	var encrypted []byte
-	if err := d.pool.QueryRow(t.Context(), `SELECT payload FROM email_jobs WHERE order_id=$1`, order.ID).Scan(&encrypted); err != nil {
+	if err := d.pool.QueryRow(t.Context(), `SELECT payload FROM outbox_jobs WHERE subject=$1 AND kind='confirmation'`,
+		orders.MailSubject(order.ID)).Scan(&encrypted); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(encrypted, []byte("/downloads/")) || bytes.Contains(encrypted, []byte("jane@example.com")) {
@@ -115,15 +119,16 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 	}
 
 	d.mail.Err = errors.New("temporary SMTP failure")
-	d.handler.ProcessMail(t.Context())
-	jobs, err := d.handler.outbox.ForOrder(t.Context(), order.ID)
-	if err != nil || len(jobs) != 1 || jobs[0].Attempts != 1 || jobs[0].SentAt != nil {
-		t.Fatalf("failure not durable: %+v %v", jobs, err)
+	outboxtest.Drain(t, d.handler.MailQueue())
+	jobs := outboxtest.Enqueued(t, d.handler.MailQueue(), outbox.Filter{Subject: orders.MailSubject(order.ID)})
+	if len(jobs) != 1 || jobs[0].Attempts != 1 || jobs[0].State != outbox.StatePending {
+		t.Fatalf("failure not durable: %+v", jobs)
 	}
 	// A fresh queue instance has no memory of the callback's plaintext tokens.
-	d.handler.outbox, err = outbox.New(d.pool, strings.Repeat("ab", 32))
-	if err != nil {
-		t.Fatal(err)
+	var err2 error
+	d.handler.outbox, err2 = d.handler.newMailQueue(pgxstore.New(d.pool), outbox.Options{Sealer: outboxtest.Sealer(t, 1)})
+	if err2 != nil {
+		t.Fatal(err2)
 	}
 	d.mail.Err = nil
 	signIn(t, d.srv)
@@ -131,7 +136,7 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 	if res.StatusCode != http.StatusSeeOther {
 		t.Fatalf("retry: %d %s", res.StatusCode, body)
 	}
-	d.handler.ProcessMail(t.Context())
+	outboxtest.Drain(t, d.handler.MailQueue())
 	sent := d.mail.To("jane@example.com")
 	if len(sent) != 1 {
 		t.Fatalf("sent = %d", len(sent))
@@ -140,7 +145,8 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 	if _, err := d.grants.Lookup(t.Context(), token); err != nil {
 		t.Fatalf("recovered email contains invalid link: %v", err)
 	}
-	if err := d.pool.QueryRow(t.Context(), `SELECT payload FROM email_jobs WHERE order_id=$1`, order.ID).Scan(&encrypted); err != nil {
+	if err := d.pool.QueryRow(t.Context(), `SELECT payload FROM outbox_jobs WHERE subject=$1 AND kind='confirmation'`,
+		orders.MailSubject(order.ID)).Scan(&encrypted); err != nil {
 		t.Fatal(err)
 	}
 	if len(encrypted) != 0 || !d.reload(t, order.ID).Emailed {
@@ -151,7 +157,7 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 func TestOrderMail_QueueFailureRollsBackPayment(t *testing.T) {
 	s := newCheckoutShop(t)
 	order := placeOrder(t, s, "S", 1)
-	if _, err := s.pool.Exec(t.Context(), `ALTER TABLE email_jobs ADD CONSTRAINT test_no_jobs CHECK (false)`); err != nil {
+	if _, err := s.pool.Exec(t.Context(), `ALTER TABLE outbox_jobs ADD CONSTRAINT test_no_jobs CHECK (false)`); err != nil {
 		t.Fatal(err)
 	}
 	res := callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "atomic", "paid", order.TotalCents))

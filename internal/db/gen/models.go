@@ -83,17 +83,6 @@ type DownloadEvent struct {
 	CreatedAt     time.Time
 }
 
-type EmailJob struct {
-	ID            int64
-	OrderID       string
-	Kind          string
-	Payload       []byte
-	Attempts      int
-	NextAttemptAt time.Time
-	LastError     string
-	SentAt        *time.Time
-}
-
 type Entitlement struct {
 	ID          string
 	OrderID     string

@@ -9,11 +9,18 @@ import (
 
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/db/gen"
-	"github.com/17xande-dev/gostore/internal/outbox"
+	"github.com/17xande-dev/outbox"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// MailSubjectPrefix starts the subject of every email job about an order, which
+// is how the admin and the queue's handlers find an order's jobs.
+const MailSubjectPrefix = "order:"
+
+// MailSubject is the outbox subject of an order's email jobs.
+func MailSubject(orderID string) string { return MailSubjectPrefix + orderID }
 
 var (
 	// ErrNotFound means no such order. A malformed id is the same answer: from
@@ -62,9 +69,9 @@ type PaidResult struct {
 	// Grants are the download entitlements this payment created, one per digital
 	// line, each carrying its plaintext token.
 	//
-	// Entitlements keep only the hash. The email outbox retains the token encrypted
-	// until delivery, so a restart can recover the same link without exposing it
-	// in a database dump.
+	// Entitlements keep only the hash. The email outbox retains the token sealed
+	// until delivery succeeds (then it clears the payload), so a restart can
+	// recover the same link without exposing it in a database dump.
 	Grants []Grant
 }
 
@@ -323,12 +330,16 @@ func (s *Store) items(ctx context.Context, orderID string) ([]Item, error) {
 // failing the call: the money has been taken, so refusing to record the order
 // would lose the sale as well as overselling the item.
 func (s *Store) MarkPaid(ctx context.Context, id string, p Payment) (PaidResult, error) {
-	return s.MarkPaidWithMail(ctx, id, p, nil)
+	return s.MarkPaidWithMail(ctx, id, p, nil, nil)
 }
 
-// MarkPaidWithMail commits payment, entitlements and encrypted delivery jobs
-// together. Preparing a job does no network I/O; delivery happens after commit.
-func (s *Store) MarkPaidWithMail(ctx context.Context, id string, p Payment, prepare func(PaidResult) ([]outbox.Message, error)) (PaidResult, error) {
+// MarkPaidWithMail commits payment, entitlements and delivery jobs together.
+// prepare builds the jobs from the result and does no network I/O; enqueue puts
+// each one in this transaction (the queue seals its payload there), so a job
+// exists if and only if the payment commits. Delivery happens after the commit,
+// and the caller wakes the worker. Both are nil for a payment with no mail.
+func (s *Store) MarkPaidWithMail(ctx context.Context, id string, p Payment, prepare func(PaidResult) ([]outbox.Message, error),
+	enqueue func(context.Context, pgx.Tx, outbox.Message) error) (PaidResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return PaidResult{}, fmt.Errorf("orders: begin: %w", err)
@@ -407,14 +418,16 @@ func (s *Store) MarkPaidWithMail(ctx context.Context, id string, p Payment, prep
 			return PaidResult{}, fmt.Errorf("orders: flag oversold: %w", err)
 		}
 	}
-	if prepare != nil {
+	if prepare != nil && enqueue != nil {
 		messages, err := prepare(result)
 		if err != nil {
 			return PaidResult{}, err
 		}
 		for _, m := range messages {
-			if err := q.EnqueueEmail(ctx, gen.EnqueueEmailParams{OrderID: id, Kind: m.Kind, Payload: m.Payload}); err != nil {
-				return PaidResult{}, fmt.Errorf("orders: queue email: %w", err)
+			// The error is passed through unwrapped: a Postgres diagnostic can
+			// echo the row, and the handler's enqueue has already reduced it.
+			if err := enqueue(ctx, tx, m); err != nil {
+				return PaidResult{}, err
 			}
 		}
 	}

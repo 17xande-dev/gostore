@@ -9,6 +9,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/outbox"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -315,7 +316,10 @@ type Entitlement struct {
 }
 
 type Email struct {
-	Kind      string     `json:"kind"`
+	Kind string `json:"kind"`
+	// State is pending, running, done or dead: a dead email will not be tried
+	// again until it is retried.
+	State     string     `json:"state"`
 	Attempts  int        `json:"attempts"`
 	SentAt    *time.Time `json:"sent_at,omitempty"`
 	LastError string     `json:"last_error,omitempty"`
@@ -364,7 +368,11 @@ func (s *Server) getOrder(ctx context.Context, _ auth.User, in byID) (Order, err
 		})
 	}
 	for _, e := range d.Emails {
-		out.Emails = append(out.Emails, Email{Kind: e.Kind, Attempts: e.Attempts, SentAt: e.SentAt, LastError: e.LastError})
+		email := Email{Kind: e.Kind, State: e.State, Attempts: e.Attempts, LastError: e.LastError}
+		if e.State == outbox.StateDone {
+			email.SentAt = &e.FinishedAt
+		}
+		out.Emails = append(out.Emails, email)
 	}
 	return out, nil
 }
@@ -684,15 +692,16 @@ type queued struct {
 	Queued bool `json:"queued"`
 }
 
-func (s *Server) retryOrderEmail(ctx context.Context, _ auth.User, in byID) (queued, error) {
+func (s *Server) retryOrderEmail(ctx context.Context, caller auth.User, in byID) (queued, error) {
 	if _, err := s.d.Orders.Get(ctx, in.ID); err != nil {
 		return queued{}, err
 	}
 	if s.d.Outbox == nil {
 		return queued{}, refuse("this store has no email queue")
 	}
-	if err := s.d.Outbox.Retry(ctx, in.ID); err != nil {
-		return queued{}, err
+	// The audit names the API token's owner, as the admin page names the signed-in one.
+	if _, err := s.d.Outbox.RetrySubject(ctx, orders.MailSubject(in.ID), caller.ID); err != nil {
+		return queued{}, errors.New("could not queue the order's emails")
 	}
 	return queued{Queued: true}, nil
 }

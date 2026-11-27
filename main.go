@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,9 +30,10 @@ import (
 	"github.com/17xande-dev/gostore/internal/mcpserver"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/mailer"
 	"github.com/17xande-dev/mailer/msauth"
+	"github.com/17xande-dev/outbox"
+	"github.com/17xande-dev/outbox/pgxstore"
 	"github.com/17xande-dev/payment"
 	"github.com/17xande-dev/payment/payfast"
 	"github.com/17xande-dev/payment/snapscan"
@@ -78,16 +81,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
-
 	if *migrateStatus {
-		return printMigrationStatus(ctx, pool, log)
-	}
-	if err := db.Migrate(ctx, pool, log); err != nil {
-		return err
+		defer pool.Close()
+		return printMigrationStatus(ctx, os.Stdout, pool, log)
 	}
 	if *migrateOnly {
-		return nil
+		defer pool.Close()
+		return db.Migrate(ctx, pool, log)
+	}
+	return runServer(ctx, cfg, pool, log)
+}
+
+// runServer owns the pool from here: it closes it last, after the email worker
+// has been joined.
+func runServer(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) error {
+	defer pool.Close()
+	if err := db.Migrate(ctx, pool, log); err != nil {
+		return err
 	}
 
 	users := auth.NewStore(pool)
@@ -143,7 +153,7 @@ func run() error {
 	}
 
 	carts := cart.NewStore(pool)
-	queue, err := outbox.New(pool, strings.TrimSpace(cfg.EmailQueueKey.Reveal()))
+	sealer, err := newQueueSealer(strings.TrimSpace(cfg.EmailQueueKey.Reveal()))
 	if err != nil {
 		return err
 	}
@@ -151,26 +161,35 @@ func run() error {
 	orderStore := orders.NewStore(pool)
 	grants := downloads.NewStore(pool, cat)
 	h, err := handler.New(handler.Deps{
-		Config:   cfg,
-		Log:      log,
-		Tmpl:     tmpl,
-		Catalog:  cat,
-		Carts:    carts,
-		Orders:   orderStore,
-		Grants:   grants,
-		Gateways: gateways,
-		Mail:     mail,
-		Outbox:   queue,
-		Images:   images,
-		Files:    files,
-		Users:    users,
+		Config:        cfg,
+		Log:           log,
+		Tmpl:          tmpl,
+		Catalog:       cat,
+		Carts:         carts,
+		Orders:        orderStore,
+		Grants:        grants,
+		Gateways:      gateways,
+		Mail:          mail,
+		OutboxStore:   pgxstore.New(pool),
+		OutboxOptions: outbox.Options{Sealer: sealer, Logger: log},
+		Images:        images,
+		Files:         files,
+		Users:         users,
 	})
 	if err != nil {
 		return err
 	}
-	workerCtx, stopWorker := context.WithCancel(ctx)
-	waitWorker := h.StartMailWorker(workerCtx)
-	defer func() { stopWorker(); waitWorker() }()
+	queue := h.MailQueue()
+	stopWorker := queue.Start(ctx)
+	defer func() {
+		// A timed-out Stop has not joined the worker. Keep the pool available
+		// for it to settle the claim before closing the database.
+		if err := stopWorker(); err != nil {
+			log.Warn("waiting for email worker to stop")
+			for stopWorker() != nil {
+			}
+		}
+	}()
 
 	// Abandoned carts and expired admin sessions are swept in-process, on this
 	// context, so they stop with the server rather than outliving it.
@@ -301,7 +320,24 @@ func ensureSetupToken(ctx context.Context, users *auth.Store, supplied string, l
 	return nil
 }
 
-func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
+// queueKeyID is the key ID the outbox seals under. It is part of the stored
+// format (the second byte of every sealed payload), so changing it is a decision.
+const queueKeyID byte = 1
+
+// newQueueSealer builds the payload sealer from EMAIL_QUEUE_KEY: 32 random bytes
+// as 64 hex characters, used directly as the AES-256-GCM key under ID 1.
+func newQueueSealer(keyHex string) (outbox.Sealer, error) {
+	key, err := hex.DecodeString(keyHex)
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("EMAIL_QUEUE_KEY must be 64 hexadecimal characters (32 random bytes)")
+	}
+	return outbox.AESGCM(queueKeyID, map[byte][]byte{queueKeyID: key})
+}
+
+// printMigrationStatus lists the application's migrations and then the outbox
+// module's, which live in their own history table. Nothing is created: asking
+// never initialises either history.
+func printMigrationStatus(ctx context.Context, out io.Writer, pool *pgxpool.Pool, log *slog.Logger) error {
 	status, err := db.Status(ctx, pool, log)
 	if err != nil {
 		return err
@@ -311,7 +347,18 @@ func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Log
 		if !s.AppliedAt.IsZero() {
 			applied = s.AppliedAt.Format(time.RFC3339)
 		}
-		fmt.Printf("%-6d %-10s %-25s %s\n", s.Source.Version, s.State, applied, s.Source.Path)
+		fmt.Fprintf(out, "%-6d %-10s %-25s %s\n", s.Source.Version, s.State, applied, s.Source.Path)
+	}
+	outboxStatus, err := db.OutboxStatus(ctx, pool)
+	if err != nil {
+		return err
+	}
+	for _, m := range outboxStatus {
+		state, applied := "pending", "pending"
+		if m.Applied {
+			state, applied = "applied", m.AppliedAt.Format(time.RFC3339)
+		}
+		fmt.Fprintf(out, "%-6d %-10s %-25s outbox %s\n", m.Version, state, applied, db.OutboxHistory)
 	}
 	return nil
 }

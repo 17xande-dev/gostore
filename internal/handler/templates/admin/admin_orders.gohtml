@@ -2,6 +2,8 @@
 
 <h1>Orders</h1>
 
+{{if .DeadMail}}<p class="notice"><a href="/admin/mail">{{.DeadMail}} email{{if ne .DeadMail 1}}s have{{else}} has{{end}} failed for good</a> and will not be sent unless retried.</p>{{end}}
+
 <form method="get" action="/admin/orders" class="row">
   <label>Reference, name or email <input type="search" name="q" value="{{.Search}}" maxlength="200"></label>
   <label>Show <select name="filter">

@@ -24,8 +24,9 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/validate"
+	"github.com/17xande-dev/outbox"
+	"github.com/jackc/pgx/v5"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -38,7 +39,7 @@ type Deps struct {
 	Catalog *catalog.Store
 	Orders  *orders.Store
 	Grants  *downloads.Store
-	Outbox  *outbox.Store
+	Outbox  *outbox.Queue[pgx.Tx]
 	// Images is the public image store, for turning an image key into the URL a
 	// client can show. Uploading stays in the admin — see the package tools.
 	Images blob.Storage

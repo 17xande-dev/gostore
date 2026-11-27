@@ -37,8 +37,8 @@
 <h2>Email delivery</h2>
 <ul>
 {{range .Emails}}
-  <li>{{.Kind}} — {{if .SentAt}}sent{{else}}pending ({{.Attempts}} attempts)
-    {{with .LastError}}<span class="badge problem">{{.}}</span>{{end}}{{end}}</li>
+  <li>{{.Kind}} — {{if eq .State "done"}}sent{{else if eq .State "dead"}}failed for good ({{.Attempts}}/{{.MaxAttempts}} attempts){{else}}pending ({{.Attempts}} attempts){{end}}
+    {{with .LastError}}<span class="badge problem">{{.}}</span>{{end}}</li>
 {{end}}
 </ul>
 {{if and .PendingEmails (.Can "orders.write")}}

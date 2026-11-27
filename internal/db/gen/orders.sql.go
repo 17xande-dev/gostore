@@ -604,8 +604,10 @@ WHERE ($1::text = ''
        OR strpos(lower(o.customer_name), lower($1)) > 0)
   AND ($2::text = ''
        OR ($2 = 'oversold' AND o.oversold)
-       OR ($2 = 'email' AND EXISTS
-           (SELECT 1 FROM email_jobs e WHERE e.order_id = o.id AND e.sent_at IS NULL))
+       -- The confirmation not yet sent. The queue's own table is the outbox
+       -- module's and not part of this schema, so this reads the flag the
+       -- confirmation's completion sets in its own transaction.
+       OR ($2 = 'email' AND o.status = 'paid' AND NOT o.emailed)
        OR ($2 = 'unfulfilled' AND o.status = 'paid' AND o.fulfilled_at IS NULL
            AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND i.kind = 'physical')))
 ORDER BY o.created_at DESC, o.id DESC

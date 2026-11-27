@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/outbox/outboxtest"
 	"github.com/17xande-dev/payment"
 )
 
@@ -16,7 +17,7 @@ func paidOrder(t *testing.T, s *shop) string {
 	t.Helper()
 	order := placeOrder(t, s, "S", 2)
 	callback(t, s.srv, "fake", payment.FakeCallbackBody(order.ID, "1089250", "paid", order.TotalCents))
-	s.handler.ProcessMail(t.Context())
+	outboxtest.Drain(t, s.handler.MailQueue())
 	return order.ID
 }
 

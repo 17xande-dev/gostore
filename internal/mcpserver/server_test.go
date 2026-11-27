@@ -18,8 +18,11 @@ import (
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
+	"github.com/17xande-dev/outbox"
+	"github.com/17xande-dev/outbox/outboxtest"
+	"github.com/17xande-dev/outbox/pgxstore"
 	"github.com/17xande-dev/password"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -52,7 +55,11 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 	t.Helper()
 	pool := dbtest.Pool(t)
 	cat := catalog.NewStore(pool)
-	queue, err := outbox.New(pool, strings.Repeat("ab", 32))
+	// The two kinds the store registers, with handlers that do nothing: these
+	// tests read and retry jobs and never deliver them.
+	noop := outbox.Kind[pgx.Tx]{Run: func(context.Context, outbox.Job) error { return nil }}
+	queue, err := outbox.New(pgxstore.New(pool), map[string]outbox.Kind[pgx.Tx]{"confirmation": noop, "owner": noop},
+		outbox.Options{Sealer: outboxtest.Sealer(t, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}

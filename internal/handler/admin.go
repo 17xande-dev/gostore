@@ -20,14 +20,15 @@ import (
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/validate"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/outbox"
 	"github.com/17xande-dev/payment"
 	"github.com/17xande-dev/ratelimit"
 	"github.com/17xande-dev/ratelimit/clientip"
 	"github.com/17xande-dev/websec/cookie"
 	"github.com/17xande-dev/websec/csrf"
+	"github.com/jackc/pgx/v5"
 )
 
 // Handler holds everything the HTTP layer needs. It is created once at startup
@@ -46,7 +47,7 @@ type Handler struct {
 	// resolve a name to the provider that can prove a notification genuine.
 	gateways payment.Registry
 	mail     mailer.Sender
-	outbox   *outbox.Store
+	outbox   *outbox.Queue[pgx.Tx]
 	// blob is the PUBLIC image store and files is the PRIVATE download store.
 	// They are never interchangeable: putting a purchased file through blob would
 	// publish it, and it is worth the two fields being named differently enough
@@ -148,10 +149,13 @@ type Deps struct {
 	Grants   *downloads.Store
 	Gateways payment.Registry
 	Mail     mailer.Sender
-	Outbox   *outbox.Store
-	Images   blob.Storage
-	Files    blob.Downloads
-	Users    *auth.Store
+	// OutboxStore and OutboxOptions build the email queue, whose handlers are
+	// this Handler's methods. A nil store leaves the handler without a queue.
+	OutboxStore   outbox.Store[pgx.Tx]
+	OutboxOptions outbox.Options
+	Images        blob.Storage
+	Files         blob.Downloads
+	Users         *auth.Store
 }
 
 // New builds the handler. A configuration the kit cannot run with (a BASE_URL
@@ -163,7 +167,6 @@ func New(d Deps) (*Handler, error) {
 		cfg: cfg, log: log, tmpl: d.Tmpl, cat: d.Catalog, cart: d.Carts,
 		orders: d.Orders, grants: d.Grants, gateways: d.Gateways, mail: d.Mail,
 		blob: d.Images, files: d.Files, users: d.Users,
-		outbox: d.Outbox,
 	}
 	if d.Users != nil {
 		h.authenticateLogin = d.Users.Authenticate
@@ -190,6 +193,12 @@ func New(d Deps) (*Handler, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("BASE_URL %q cannot be the CSRF origin: %w", cfg.BaseURL, err)
+	}
+	if d.OutboxStore != nil {
+		h.outbox, err = h.newMailQueue(d.OutboxStore, d.OutboxOptions)
+		if err != nil {
+			return nil, fmt.Errorf("initialize email queue: %w", err)
+		}
 	}
 	loginByEmail, err := ratelimit.New(ratelimit.Config{
 		Rate: 1.0 / 60, Burst: 5, IdleTTL: 30 * time.Minute,
@@ -363,6 +372,10 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	admin("GET /admin/orders", auth.PermRead, h.adminOrderList)
 	admin("GET /admin/orders/{id}", auth.PermRead, h.adminOrderShow)
 	admin("POST /admin/orders/{id}/email/retry", auth.PermOrdersWrite, h.adminOrderEmailRetry)
+	// The email queue's dead letters. See admin_mail.go. Viewing is read; the
+	// retry is orders.write, like the per-order retry it shares a meaning with.
+	admin("GET "+mailPath, auth.PermRead, h.adminMail)
+	admin("POST "+mailPath+"/{id}/retry", auth.PermOrdersWrite, h.adminMailRetry)
 	admin("POST /admin/orders/{id}/fulfillment", auth.PermOrdersWrite, h.adminOrderFulfillment)
 	// Access changes do not change the payment record.
 	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", auth.PermOrdersWrite, h.adminEntitlementRevoke)

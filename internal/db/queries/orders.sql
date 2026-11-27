@@ -60,8 +60,10 @@ WHERE (sqlc.arg(search)::text = ''
        OR strpos(lower(o.customer_name), lower(sqlc.arg(search))) > 0)
   AND (sqlc.arg(filter)::text = ''
        OR (sqlc.arg(filter) = 'oversold' AND o.oversold)
-       OR (sqlc.arg(filter) = 'email' AND EXISTS
-           (SELECT 1 FROM email_jobs e WHERE e.order_id = o.id AND e.sent_at IS NULL))
+       -- The confirmation not yet sent. The queue's own table is the outbox
+       -- module's and not part of this schema, so this reads the flag the
+       -- confirmation's completion sets in its own transaction.
+       OR (sqlc.arg(filter) = 'email' AND o.status = 'paid' AND NOT o.emailed)
        OR (sqlc.arg(filter) = 'unfulfilled' AND o.status = 'paid' AND o.fulfilled_at IS NULL
            AND EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = o.id AND i.kind = 'physical')))
 ORDER BY o.created_at DESC, o.id DESC

@@ -20,8 +20,10 @@ import (
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/outbox"
+	"github.com/17xande-dev/outbox/outboxtest"
+	"github.com/17xande-dev/outbox/pgxstore"
 	"github.com/17xande-dev/password"
 	"github.com/17xande-dev/payment"
 	"github.com/17xande-dev/websec/webtest"
@@ -191,24 +193,21 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	mail := mailer.NewFake()
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
-	queue, err := outbox.New(pool, strings.Repeat("ab", 32))
-	if err != nil {
-		t.Fatal(err)
-	}
 	h := mustNew(t, Deps{
-		Config:   cfg,
-		Log:      log,
-		Tmpl:     tmpl,
-		Catalog:  store,
-		Carts:    cart.NewStore(pool),
-		Orders:   orderStore,
-		Grants:   grants,
-		Gateways: registryOf(t, append([]payment.Gateway{gateway}, extraGateways...)...),
-		Mail:     mail,
-		Outbox:   queue,
-		Images:   images,
-		Files:    files,
-		Users:    users,
+		Config:        cfg,
+		Log:           log,
+		Tmpl:          tmpl,
+		Catalog:       store,
+		Carts:         cart.NewStore(pool),
+		Orders:        orderStore,
+		Grants:        grants,
+		Gateways:      registryOf(t, append([]payment.Gateway{gateway}, extraGateways...)...),
+		Mail:          mail,
+		OutboxStore:   pgxstore.New(pool),
+		OutboxOptions: outbox.Options{Sealer: outboxtest.Sealer(t, 1), Logger: log},
+		Images:        images,
+		Files:         files,
+		Users:         users,
 	})
 
 	mux := http.NewServeMux()

@@ -184,7 +184,7 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	// unpaid notification's.
 	paid := order
 	paid.GatewayRef = cb.Ref
-	result, err := h.orders.MarkPaidWithMail(r.Context(), order.ID, p, h.prepareOrderEmails(paid))
+	result, err := h.orders.MarkPaidWithMail(r.Context(), order.ID, p, h.prepareOrderEmails(paid), h.enqueueOrderMail)
 	if err != nil {
 		// The money is taken and this store failed to record it. Nothing here can
 		// fix that, so it is logged at the level someone is paged for; the gateway's
@@ -210,7 +210,9 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 		"downloads", len(result.Grants))
 
 	// The durable worker owns delivery. The provider can stop retrying now that
-	// the payment and its email jobs have committed together.
+	// the payment and its email jobs have committed together; wake the worker
+	// so the receipt does not wait for its next poll.
+	h.outbox.Wake()
 	return nil
 }
 

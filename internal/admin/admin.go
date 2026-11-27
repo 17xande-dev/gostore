@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,8 +26,9 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/downloads"
 	"github.com/17xande-dev/gostore/internal/orders"
-	"github.com/17xande-dev/gostore/internal/outbox"
 	"github.com/17xande-dev/gostore/internal/validate"
+	"github.com/17xande-dev/outbox"
+	"github.com/jackc/pgx/v5"
 )
 
 // PrepareProduct normalises a product and validates it, resolving categoryIDs
@@ -186,14 +188,14 @@ type OrderDetail struct {
 	// Entitlements are the download grants the order created. Empty for an order
 	// of physical goods only.
 	Entitlements []downloads.OrderEntitlement
-	Emails       []outbox.Status
+	Emails       []outbox.Info
 	// PendingEmails is whether any of Emails is still unsent.
 	PendingEmails bool
 }
 
 // LoadOrderDetail reads an order with its entitlements and email jobs. mail may be
 // nil, for a deployment wired without an outbox.
-func LoadOrderDetail(ctx context.Context, store *orders.Store, grants *downloads.Store, mail *outbox.Store, id string) (OrderDetail, error) {
+func LoadOrderDetail(ctx context.Context, store *orders.Store, grants *downloads.Store, mail *outbox.Queue[pgx.Tx], id string) (OrderDetail, error) {
 	order, err := store.Get(ctx, id)
 	if err != nil {
 		return OrderDetail{}, err
@@ -208,12 +210,15 @@ func LoadOrderDetail(ctx context.Context, store *orders.Store, grants *downloads
 	}
 	d := OrderDetail{Order: order, Entitlements: ents}
 	if mail != nil {
-		d.Emails, err = mail.ForOrder(ctx, order.ID)
+		// Every job of the order, with no page cap: an order has two at most
+		// (the confirmation and the owner's copy), and an old failure must stay
+		// visible.
+		d.Emails, err = mail.List(ctx, outbox.Filter{Subject: orders.MailSubject(order.ID), Limit: math.MaxInt32})
 		if err != nil {
 			return OrderDetail{}, err
 		}
 		for _, email := range d.Emails {
-			if email.SentAt == nil {
+			if email.State != outbox.StateDone {
 				d.PendingEmails = true
 			}
 		}
