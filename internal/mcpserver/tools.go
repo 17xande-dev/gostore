@@ -693,15 +693,23 @@ type queued struct {
 }
 
 func (s *Server) retryOrderEmail(ctx context.Context, caller auth.User, in byID) (queued, error) {
-	if _, err := s.d.Orders.Get(ctx, in.ID); err != nil {
+	order, err := s.d.Orders.Get(ctx, in.ID)
+	if err != nil {
 		return queued{}, err
 	}
 	if s.d.Outbox == nil {
 		return queued{}, refuse("this store has no email queue")
 	}
+	// The lookup accepts any spelling of a UUID, but a job's subject is an exact
+	// string, so it is built from the id the order carries, not the one typed.
 	// The audit names the API token's owner, as the admin page names the signed-in one.
-	if _, err := s.d.Outbox.RetrySubject(ctx, orders.MailSubject(in.ID), caller.ID); err != nil {
+	n, err := s.d.Outbox.RetrySubject(ctx, orders.MailSubject(order.ID), caller.ID)
+	if err != nil {
 		return queued{}, errors.New("could not queue the order's emails")
+	}
+	if n == 0 {
+		// Nothing was dead or waiting: the emails were delivered, or never queued.
+		return queued{}, refuse("this order has no undelivered emails to retry")
 	}
 	return queued{Queued: true}, nil
 }

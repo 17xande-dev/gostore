@@ -37,6 +37,7 @@ type fixture struct {
 	orders  *orders.Store
 	carts   *cart.Store
 	images  *blob.Fake
+	queue   *outbox.Queue[pgx.Tx]
 }
 
 func TestMain(m *testing.M) {
@@ -66,7 +67,7 @@ func newFixtureWith(t *testing.T, verify func(*Server) mcpauth.TokenVerifier) *f
 	f := &fixture{
 		pool: pool, users: auth.NewStore(pool), catalog: cat,
 		orders: orders.NewStore(pool), carts: cart.NewStore(pool),
-		images: blob.NewFake(),
+		images: blob.NewFake(), queue: queue,
 	}
 	f.server = New(Deps{
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
