@@ -101,6 +101,10 @@ type shop struct {
 	// User on a shop from newUnclaimedStore, which has no accounts at all.
 	owner auth.User
 
+	// clock is the email queue's clock, so a test can move past a retry's
+	// backoff without sleeping.
+	clock *outboxtest.Clock
+
 	// variants is the stocked catalog, by size, for the tests that put things in
 	// a cart. Empty until stockCart has run.
 	variants map[string]catalog.Variant
@@ -193,6 +197,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 	mail := mailer.NewFake()
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
+	clock := outboxtest.NewClock(time.Time{})
 	h := mustNew(t, Deps{
 		Config:        cfg,
 		Log:           log,
@@ -204,7 +209,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 		Gateways:      registryOf(t, append([]payment.Gateway{gateway}, extraGateways...)...),
 		Mail:          mail,
 		OutboxStore:   pgxstore.New(pool),
-		OutboxOptions: outbox.Options{Sealer: outboxtest.Sealer(t, 1), Logger: log},
+		OutboxOptions: outbox.Options{Sealer: outboxtest.Sealer(t, 1), Logger: log, Now: clock.Now},
 		Images:        images,
 		Files:         files,
 		Users:         users,
@@ -229,7 +234,7 @@ func newUnclaimedStoreWith(t *testing.T, extraGateways []payment.Gateway, edit .
 		srv:     &testServer{srv, webtest.NewServer(t, srv, browserFormHeaders)},
 		handler: h, catalog: store, orders: orderStore, gateway: gateway,
 		mail: mail, images: images, files: files, grants: grants,
-		users: users, pool: pool,
+		users: users, pool: pool, clock: clock,
 	}
 }
 

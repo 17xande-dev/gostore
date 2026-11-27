@@ -126,7 +126,7 @@ func TestOrderMail_EncryptedQueueSurvivesFailureAndRestart(t *testing.T) {
 	}
 	// A fresh queue instance has no memory of the callback's plaintext tokens.
 	var err2 error
-	d.handler.outbox, err2 = d.handler.newMailQueue(pgxstore.New(d.pool), outbox.Options{Sealer: outboxtest.Sealer(t, 1)})
+	d.handler.outbox, err2 = d.handler.newMailQueue(pgxstore.New(d.pool), outbox.Options{Sealer: outboxtest.Sealer(t, 1), Now: d.clock.Now})
 	if err2 != nil {
 		t.Fatal(err2)
 	}
