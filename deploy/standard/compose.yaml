@@ -31,6 +31,9 @@ services:
   server:
     image: ghcr.io/17xande-dev/gostore:${GOSTORE_VERSION:?set GOSTORE_VERSION in .env}
     restart: unless-stopped
+    # The server waits for a running email send when it stops (up to 30 s plus
+    # the 5 s settle), and Docker's default of 10 s would kill it mid-send.
+    stop_grace_period: 40s
     env_file: .env
     # Derived here rather than asked for in .env, so the values that have to
     # agree cannot disagree.

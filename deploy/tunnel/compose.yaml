@@ -21,6 +21,9 @@ services:
   server:
     image: ghcr.io/17xande-dev/gostore:${GOSTORE_VERSION:?set GOSTORE_VERSION in .env}
     restart: unless-stopped
+    # The server waits for a running email send when it stops (up to 30 s plus
+    # the 5 s settle), and Docker's default of 10 s would kill it mid-send.
+    stop_grace_period: 40s
     env_file: .env
     environment:
       DATABASE_URL: postgres://gostore:${POSTGRES_PASSWORD}@postgres:5432/gostore?sslmode=disable
