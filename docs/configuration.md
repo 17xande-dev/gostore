@@ -64,7 +64,7 @@ path or the contents, since a path can itself hold a pasted credential.
 | `SHUTDOWN_TIMEOUT_SECONDS` | no | `15` | Grace period for in-flight requests |
 | `SMTP_HOST` | **yes**¹ | — | Mail relay |
 | `EMAIL_FROM` | **yes**¹ | — | Sender address |
-| `EMAIL_QUEUE_KEY` | **yes** | — | 32 random bytes encoded as 64 hex characters; encrypts pending email payloads. Generate with `openssl rand -hex 32` and retain with backups |
+| `EMAIL_QUEUE_KEY` | **yes** | — | 32 random bytes encoded as 64 hex characters; the AES-256-GCM key (key ID `1`) that seals pending email payloads, used as given. Generate with `openssl rand -hex 32` and retain with backups |
 | `SMTP_PORT` | no | `587` | `465` with `SMTP_TLS=tls`, `1025` for mailpit |
 | `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
@@ -102,7 +102,8 @@ store with neither refuses to start, because the alternative is a shop that serv
 catalog perfectly and fails at the one moment that matters.
 
 ¹ **Mail is required**, through SMTP or Graph. Receipts and download links are queued
-transactionally, encrypted with `EMAIL_QUEUE_KEY`, and retried by the in-process worker.
+transactionally, sealed with `EMAIL_QUEUE_KEY`, and retried by the in-process worker; an
+email that fails six times is dead until retried at `/admin/mail`.
 See [Email](email.md) for recovery, key retention and at-least-once delivery semantics.
 
 ² The `BLOB_*` set is all-or-nothing for the same reason: `BLOB_ENDPOINT` with any of the

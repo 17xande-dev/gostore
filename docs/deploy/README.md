@@ -95,7 +95,10 @@ takes a single `DATABASE_URL`, logs JSON to stdout, and serves `GET /healthz`.
 Migrations run on boot, before the server accepts traffic, guarded by a Postgres advisory
 lock so several instances starting at once cannot race. Where you would rather migrate as
 its own deploy step, run the same image with `-migrate` first and start the server after
-it exits; `-migrate-status` prints what has been applied.
+it exits; `-migrate-status` prints what has been applied: the application's migrations, then
+one line marked `outbox outbox_goose_version` for the email queue module's own history.
+The queue's migrations run after the application's, under their own lock, and the pool
+needs at least two connections (the default has more).
 
 `-migrate` and `-migrate-status` read `DATABASE_URL` and nothing else. A schema change has
 no payment gateway and no session, so a migration job — a CI step, an init container, a

@@ -6,9 +6,10 @@ Two order views:
 |---|---|
 | `GET /admin/orders` | Recent orders, newest first |
 | `GET /admin/orders/{id}` | What to pack, where it goes, and what the gateway said |
+| `GET /admin/mail` | The email queue: counts, and every email that failed for good (the newest 100), with a retry button each |
 
 Only authenticated gateway callbacks can mark an order paid. Administrators with
-`orders.write` can update fulfillment, retry pending email delivery and revoke or restore download access;
+`orders.write` can update fulfillment, retry email delivery and revoke or restore download access;
 neither action changes the payment record.
 
 The order page shows the **snapshot** — the title, options and unit price as they were when
@@ -43,18 +44,54 @@ order say different things, and one of them failing should not suppress the othe
 
 Mail configuration and `EMAIL_QUEUE_KEY` are required. Generate the key with
 `openssl rand -hex 32`, or supply it through `EMAIL_QUEUE_KEY_FILE`. Jobs use AES-256-GCM
-with a random nonce and authenticated order/kind metadata. Only encrypted pending
+with a random nonce and authenticated kind, order and unique-key metadata. Only encrypted pending
 payloads retain download tokens; successful delivery erases the payload and leaves
 delivery status. Backups can retain older ciphertext, so protect the key separately.
 
-Failures retry with exponential backoff from 30 seconds to one hour. The order detail
-page shows attempts and failures; **Retry pending emails** makes unsent jobs due now.
-It does not resend successful messages or regenerate download credentials. Restarting
-the server resumes the queue with the same key and the same links.
+The queue is the shared [`outbox`](https://github.com/17xande-dev/outbox) module, in its
+own tables (`outbox_jobs`, history in `outbox_goose_version`). A job's subject is
+`order:<id>` and its kinds are `confirmation` and `owner`; each is unique per order, so a
+replayed gateway notification cannot queue a second receipt.
+
+A failed send retries after about 1 minute, then 5 minutes, 30 minutes, 2 hours and 6
+hours (each with up to 10% jitter either way). After **six attempts** (about 8.6 hours) the
+email is **dead**: it stays dead until someone retries it, and a retry gives it a fresh set
+of attempts. Dead emails are listed at `/admin/mail` (the newest 100, with the total),
+announced on the order list and linked to their order. The order detail page shows each
+job's state and attempts; **Retry pending emails** revives that order's dead emails and
+makes pending ones due now. It does not resend successful messages or regenerate download
+credentials, and each retry records the administrator. Restarting the server resumes the
+queue with the same key and the same links.
 
 Delivery is **at least once**, not exactly once: if SMTP accepts a message and the
 process dies before recording success, the worker may send it again. Payment and
-stock changes remain idempotent. Multiple workers coordinate with Postgres row locks.
+stock changes remain idempotent. A worker claims a job under a two-minute lease committed
+before the send, so no database row is locked while the mail is sent and several
+instances never send one job at once.
+
+### What changed from the queue this replaced
+
+- A failing email used to retry forever (30 seconds doubling to one hour). It now goes dead
+  after six attempts, so after a long mail outage somebody has to retry the dead ones
+  from `/admin/mail`.
+- A payload that cannot be opened (wrong key, tampering, a row moved to another order or
+  kind) goes dead at once with "cannot open payload: check the key" and never reaches the
+  mail transport. It used to retry forever and named `EMAIL_QUEUE_KEY`.
+- A panic in a send or a template is contained and logged without its value. It used to
+  take the server down.
+- Queuing the same email for the same order twice is now a silent no-op. It used to be a
+  unique violation that rolled the payment back.
+- An order's emails are listed newest first with their state and attempts out of six (they
+  were listed by id). The order list's "pending email delivery" filter now means a paid
+  order whose confirmation has not been sent yet.
+- One 30-second timeout covers rendering and the send (there were 35 and 30). The server
+  waits for a running send when it stops, so give the container a stop wait of about 35
+  seconds or more.
+- There is no foreign key from a job to its order any more; orders are never deleted.
+- Sealed payloads have a new format (version byte, key ID, then the nonce). The key is the
+  same `EMAIL_QUEUE_KEY`, used directly as key ID 1, but the migration that drops the old
+  `email_jobs` table does not carry rows over: **a development database loses its pending
+  jobs**. Nothing has been deployed with the old rows.
 
 Keep `EMAIL_QUEUE_KEY` unchanged while jobs are pending. To rotate it, pause checkout,
 drain the queue, change the key, then resume. Restoring an older backup requires its

@@ -57,7 +57,9 @@ Three things worth knowing before touching `sqlc.yaml`:
 ### Migrations
 
 `0001_init.sql` is the baseline schema: checkout attempts, the email outbox and
-fulfillment tracking included. Every migration after it (`0002_admin_api_tokens.sql`,
+fulfillment tracking included. (The baseline's `email_jobs` table was dropped by
+`0005_drop_email_jobs.sql`: the email queue is the shared `outbox` module's, in its own tables
+and migration history, which `db.Migrate` applies after these.) Every migration after it (`0002_admin_api_tokens.sql`,
 `0003_admin_image_uploads.sql`, ...) is an incremental upgrade, so a schema change is a
 new numbered file. The baseline itself is no longer edited either; it may already be applied
 somewhere, and the rules below apply to it as to any other migration.
@@ -205,7 +207,7 @@ Recorded here so they are decided deliberately rather than by default:
 | Keyset pagination | a cursor on the ranking and title | When a catalog is deep enough that discarding rows to reach a late page is measurable |
 | Tuned trigram thresholds | `AfterConnect` on the pgx pool | When the defaults visibly over- or under-match; they are session settings, so they belong on the connection, not in a query |
 | Storage defaults | Local directories for development, R2 for production | **Closed** (2026-09-27). Replaces the planned local S3-server migration. Development uses `.local/images` and `.local/downloads`; both production templates use separate public/private R2 buckets. No local object-storage service is required. |
-| Durable email delivery | Encrypted Postgres outbox and in-process worker | **Closed** (2026-09-27). AES-256-GCM uses the Go standard library and `EMAIL_QUEUE_KEY`. No broker or additional runtime dependency. Jobs commit with payment, retry after restart, and erase their payload after delivery. |
+| Durable email delivery | Encrypted Postgres outbox and in-process worker | **Closed** (2026-09-27), now the shared `outbox` module. Its AES-256-GCM sealer uses `EMAIL_QUEUE_KEY`. No broker. Jobs commit with payment, retry after restart, and erase their payload after delivery. |
 | Scarce-stock reservations | Expiring reservations versus payment-time decrement | Keep payment-time decrement and oversell reporting until the shop requires exclusive stock holds. Reservations need a policy for late payment and expiry. |
 | Purchased digital-file membership | Purchase-time file snapshot versus ongoing access to the variant's current files | Current behavior is ongoing access. Change only when the product promise requires an immutable purchased edition; this also determines archival/deletion policy. |
 
