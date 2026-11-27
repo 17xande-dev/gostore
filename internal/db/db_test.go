@@ -9,6 +9,7 @@ import (
 
 	"github.com/17xande-dev/gostore/internal/db"
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 )
@@ -46,7 +47,8 @@ func TestMigrate_BaselineAndRestart(t *testing.T) {
 		t.Fatal("restart erased store data")
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_catalog.pg_tables
-		WHERE schemaname = current_schema() AND tablename <> 'goose_db_version'`).Scan(&count); err != nil {
+		WHERE schemaname = current_schema()
+		AND tablename NOT IN ('goose_db_version', 'outbox_goose_version', 'outbox_jobs')`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count < 16 {
@@ -141,8 +143,87 @@ func TestMigrate_ConcurrentFirstBoots(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(t.Context(), "SELECT count(*) FROM email_jobs"); err != nil {
+	if _, err := pool.Exec(t.Context(), "SELECT count(*) FROM orders"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), "SELECT count(*) FROM outbox_jobs"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMigrate_OutboxWaitsForApplicationSchema(t *testing.T) {
+	pool := dbtest.EmptyPool(t)
+	ctx, log := t.Context(), slog.New(slog.DiscardHandler)
+	// A conflicting application table makes the baseline fail. The outbox must
+	// still be untouched, including its independent migration history.
+	if _, err := pool.Exec(ctx, "CREATE TABLE products (id INT)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, pool, log); err == nil {
+		t.Fatal("conflicting application baseline succeeded")
+	}
+	var installed bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('outbox_goose_version') IS NOT NULL").Scan(&installed); err != nil {
+		t.Fatal(err)
+	}
+	if installed {
+		t.Fatal("outbox migration ran before the application migration succeeded")
+	}
+}
+
+func TestMigrate_RefusesAPoolOfOneConnection(t *testing.T) {
+	pool := dbtest.EmptyPool(t)
+	cfg := pool.Config()
+	cfg.MaxConns = 1
+	one, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer one.Close()
+	if err := db.Migrate(t.Context(), one, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("a one-connection pool was accepted; the outbox migrator would deadlock on it")
+	}
+}
+
+func TestOutboxStatus_ReportsTheLibrariesOwnMigrationAndCreatesNothing(t *testing.T) {
+	pool := dbtest.EmptyPool(t)
+	ctx, log := t.Context(), slog.New(slog.DiscardHandler)
+
+	before, err := db.OutboxStatus(ctx, pool)
+	if err != nil || len(before) != 1 || before[0].Version != 1 || before[0].Applied {
+		t.Fatalf("fresh database: %+v %v", before, err)
+	}
+	var created bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('outbox_goose_version') IS NOT NULL").Scan(&created); err != nil || created {
+		t.Fatalf("asking for the status created the history table: %v %v", created, err)
+	}
+
+	if err := db.Migrate(ctx, pool, log); err != nil {
+		t.Fatal(err)
+	}
+	// What the library really installed, read from its own table: this fails
+	// when an outbox upgrade ships a migration the status code does not know.
+	var latest int64
+	if err := pool.QueryRow(ctx, "SELECT max(version_id) FROM outbox_goose_version").Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.OutboxStatus(ctx, pool)
+	if err != nil || len(after) != 1 || !after[0].Applied || after[0].AppliedAt.IsZero() || after[0].Version != latest {
+		t.Fatalf("after migrate (library latest %d): %+v %v", latest, after, err)
+	}
+}
+
+func TestOutboxStatus_RefusesAHistoryNewerThanTheBuild(t *testing.T) {
+	pool := dbtest.EmptyPool(t)
+	ctx, log := t.Context(), slog.New(slog.DiscardHandler)
+	if err := db.Migrate(ctx, pool, log); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO outbox_goose_version (version_id, is_applied) VALUES (2, true)"); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := db.OutboxStatus(ctx, pool); err == nil {
+		t.Fatalf("a newer outbox history was reported as %+v", s)
 	}
 }
 
