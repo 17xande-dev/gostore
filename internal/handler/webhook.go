@@ -212,7 +212,7 @@ func (h *Handler) applyCallback(r *http.Request, gateway payment.Gateway, cb pay
 	// The durable worker owns delivery. The provider can stop retrying now that
 	// the payment and its email jobs have committed together; wake the worker
 	// so the receipt does not wait for its next poll.
-	h.outbox.Wake()
+	h.wakeMail()
 	return nil
 }
 

@@ -145,3 +145,12 @@ func (h *Handler) deliverOrderEmail(ctx context.Context, job outbox.Job) error {
 	return h.mail.Send(ctx, mailer.Message{To: []string{data.Order.Customer.Email},
 		Subject: data.StoreName + " order " + data.Order.Reference() + " — payment received", Text: text, HTML: html})
 }
+
+// wakeMail nudges the worker after a payment commits. The queue is optional
+// (Deps without an OutboxStore leave h.outbox nil, and prepareOrderEmails copes),
+// and Wake on a nil queue panics, so this is the one place the webhook asks.
+func (h *Handler) wakeMail() {
+	if h.outbox != nil {
+		h.outbox.Wake()
+	}
+}
