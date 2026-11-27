@@ -60,7 +60,7 @@ of attempts. Dead emails are listed at `/admin/mail` (the newest 100, with the t
 announced on the order list and linked to their order. The order detail page shows each
 job's state and attempts; **Retry pending emails** revives that order's dead emails and
 makes pending ones due now. It does not resend successful messages or regenerate download
-credentials, and each retry records the administrator. Restarting the server resumes the
+credentials, and a retry of a dead email records the administrator. Restarting the server resumes the
 queue with the same key and the same links.
 
 Delivery is **at least once**, not exactly once: if SMTP accepts a message and the
@@ -86,7 +86,7 @@ instances never send one job at once.
   order whose confirmation has not been sent yet.
 - One 30-second timeout covers rendering and the send (there were 35 and 30). The server
   waits for a running send when it stops, so give the container a stop wait of about 35
-  seconds or more.
+  seconds or more (the shipped `deploy/` compose files set `stop_grace_period: 40s`).
 - There is no foreign key from a job to its order any more; orders are never deleted.
 - Sealed payloads have a new format (version byte, key ID, then the nonce). The key is the
   same `EMAIL_QUEUE_KEY`, used directly as key ID 1, but the migration that drops the old
